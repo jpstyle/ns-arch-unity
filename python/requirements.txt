@@ -1,0 +1,9 @@
+-r itl/memory/requirements.txt
+-r itl/vision/requirements.txt
+-r itl/lang/requirements.txt
+-r itl/symbolic_reasoning/requirements.txt
+-r itl/practical_reasoning/requirements.txt
+-r itl/lpmln/requirements.txt
+
+python-dotenv
+mlagents==0.30.0

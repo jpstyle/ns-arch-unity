@@ -1,0 +1,21 @@
+opencv-python
+torch
+torchvision
+torchmetrics
+transformers
+timm
+scipy
+matplotlib
+pytorch-lightning
+wandb
+hydra-core
+omegaconf
+nltk
+ijson
+
+# For visual analysis of exemplar vectors in low-dim space
+umap-learn
+pandas
+datashader
+bokeh
+holoviews

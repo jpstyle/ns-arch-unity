@@ -1,0 +1,10 @@
+#objectPointer {
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+}
+
+#objectPointer:hover {
+    background-color: rgba(255, 160, 0, 0.59);
+}

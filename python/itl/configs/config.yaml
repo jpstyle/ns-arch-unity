@@ -1,0 +1,19 @@
+hydra:
+    run:
+        dir: "outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-${randid:}"
+
+defaults:
+    - vision: base
+    - lang: base
+    - exp1: easy
+
+paths:
+    root_dir: "${hydra:runtime.cwd}"
+    data_dir: "${paths.root_dir}/datasets"
+    assets_dir: "${paths.root_dir}/assets"
+    outputs_dir: "${hydra:runtime.output_dir}"
+
+agent:
+    strat_generic: "semOnly"    # Options: "semOnly", "semNeg", "semNegScal"
+
+seed: 42
