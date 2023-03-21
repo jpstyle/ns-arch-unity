@@ -12,18 +12,18 @@ public class PointerUI : MonoBehaviour
     public DialogueUI dialogueUI;
 
     // Int id of display this pointer UI is associated with
-    int displayId;
+    int _displayId;
 
     // List of EnvEntity instances
-    List<EnvEntity> boxExtractors;
+    List<EnvEntity> _boxExtractors;
 
     // 'Currently' focused EnvEntity instance (hence the associated GameObject)
-    EnvEntity currentFocus;
+    EnvEntity _currentFocus;
 
     // UI element references
-    VisualElement screenCover;
-    VisualElement pointerRect;
-    Label targetNameLabel;
+    VisualElement _screenCover;
+    VisualElement _pointerRect;
+    Label _targetNameLabel;
 
     void OnEnable()
     {
@@ -31,40 +31,40 @@ public class PointerUI : MonoBehaviour
         UIDocument uiDocument = GetComponent<UIDocument>();
         VisualElement root = uiDocument.rootVisualElement;
 
-        displayId = uiDocument.panelSettings.targetDisplay;
+        _displayId = uiDocument.panelSettings.targetDisplay;
 
         // VisualElement for detecting mouse movements
-        screenCover = root.Q<VisualElement>("ScreenCover");
+        _screenCover = root.Q<VisualElement>("ScreenCover");
 
         // VisualElement for indicating current focus
-        pointerRect = root.Q<VisualElement>("PointerRect");
+        _pointerRect = root.Q<VisualElement>("PointerRect");
 
         // Label indicating current focus object by name
-        targetNameLabel = pointerRect.Q<Label>("TargetName");
+        _targetNameLabel = _pointerRect.Q<Label>("TargetName");
 
         // Find and store all existing GameObjects attached with a EnvEntity
         // component (and thus tasked to compute their own per-display screen AABBs)
-        boxExtractors = Object.FindObjectsByType<EnvEntity>(FindObjectsSortMode.None).ToList();
+        _boxExtractors = Object.FindObjectsByType<EnvEntity>(FindObjectsSortMode.None).ToList();
 
-        currentFocus = null;
+        _currentFocus = null;
 
         // Register mousemove event callback to both screenCover and pointerRect (latter
         // needed since it lies on top of screenCover when active)
-        screenCover.RegisterCallback<MouseMoveEvent>(HighlightObjectOnHover);
-        pointerRect.RegisterCallback<MouseMoveEvent>(HighlightObjectOnHover);
+        _screenCover.RegisterCallback<MouseMoveEvent>(HighlightObjectOnHover);
+        _pointerRect.RegisterCallback<MouseMoveEvent>(HighlightObjectOnHover);
 
         // Register click event callback to pointerRect
-        pointerRect.RegisterCallback<ClickEvent>(PointWithDemonstrative);
+        _pointerRect.RegisterCallback<ClickEvent>(PointWithDemonstrative);
     }
 
-    public void HighlightObjectOnHover(MouseMoveEvent evt)
+    private void HighlightObjectOnHover(MouseMoveEvent evt)
     {
         // Current mouse position in screen coordinate
         Vector2 currentPosition = evt.mousePosition;
 
         // Find boxes that the mouse is currently hovering over
-        List<EnvEntity> boxExtractorsHovering = boxExtractors.FindAll(
-            extr => extr.boxes[displayId].Contains(currentPosition)
+        List<EnvEntity> boxExtractorsHovering = _boxExtractors.FindAll(
+            ent => ent.Boxes[_displayId].Contains(currentPosition)
         );
 
         EnvEntity newFocus = null;
@@ -75,7 +75,7 @@ public class PointerUI : MonoBehaviour
 
             foreach (EnvEntity ent in boxExtractorsHovering)
             {
-                Rect box = ent.boxes[displayId];
+                Rect box = ent.Boxes[_displayId];
                 float boxArea = box.width * box.height;
 
                 if (boxArea < minArea)
@@ -86,43 +86,39 @@ public class PointerUI : MonoBehaviour
                 }
             }
         }
-        else
-        {
-            newFocus = null;
-        }
 
         // Update focus -- only if required
-        if (!ReferenceEquals(newFocus, currentFocus))
+        if (!ReferenceEquals(newFocus, _currentFocus))
         {
-            currentFocus = newFocus;
+            _currentFocus = newFocus;
 
             // Update UI rendering
-            if (currentFocus is null)
+            if (_currentFocus is null)
             {
                 // Set display of pointerRect to None
-                pointerRect.style.display = DisplayStyle.None;
+                _pointerRect.style.display = DisplayStyle.None;
             }
             else
             {
                 // Highlight the current focus by setting display to Flex and changing style
-                pointerRect.style.display = DisplayStyle.Flex;
+                _pointerRect.style.display = DisplayStyle.Flex;
 
-                Rect highlightBox = currentFocus.boxes[displayId];
-                pointerRect.style.left = new StyleLength(highlightBox.x);
-                pointerRect.style.top = new StyleLength(highlightBox.y);
-                pointerRect.style.width = new StyleLength(highlightBox.width);
-                pointerRect.style.height = new StyleLength(highlightBox.height);
+                Rect highlightBox = _currentFocus.Boxes[_displayId];
+                _pointerRect.style.left = new StyleLength(highlightBox.x);
+                _pointerRect.style.top = new StyleLength(highlightBox.y);
+                _pointerRect.style.width = new StyleLength(highlightBox.width);
+                _pointerRect.style.height = new StyleLength(highlightBox.height);
 
-                targetNameLabel.text = currentFocus.gameObject.name;
+                _targetNameLabel.text = _currentFocus.gameObject.name;
             }
         }
     }
 
-    public void PointWithDemonstrative(ClickEvent evt)
+    private void PointWithDemonstrative(ClickEvent evt)
     {
         // 'Point' at an object by associating it with a demonstrative newly added
         // to the input text field in dialogue UI
-        if (currentFocus is not null)
-            Debug.Log(currentFocus.gameObject.name);
+        if (_currentFocus is not null)
+            Debug.Log(_currentFocus.gameObject.name);
     }
 }

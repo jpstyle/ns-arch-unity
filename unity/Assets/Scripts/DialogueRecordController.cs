@@ -4,16 +4,16 @@ using UnityEngine.UIElements.Experimental;
 
 public class DialogueRecordController
 {
-    Label RecordContent;
+    Label _recordContent;
 
     // This function retrieves a reference to the label element inside
     // the UI element
     public void SetVisualElement(VisualElement visualElement)
     {
-        RecordContent = visualElement.Q<Label>("record");
+        _recordContent = visualElement.Q<Label>("record");
 
         // Register LinkTagEvent listener
-        RecordContent.RegisterCallback<PointerDownLinkTagEvent>(FooMethod);
+        _recordContent.RegisterCallback<PointerDownLinkTagEvent>(FooMethod);
     }
 
     // This function receives data of a single dialogue record consisting
@@ -27,17 +27,17 @@ public class DialogueRecordController
         {
             case "Teacher":
             {
-                RecordContent.text = $"<color=#FFB6C1>{recordData.speaker}</color>> {recordData.utterance}";
+                _recordContent.text = $"<color=#FFB6C1>{recordData.speaker}</color>> {recordData.utterance}";
                 break;
             }
             case "Student":
             {
-                RecordContent.text = $"<color=#ADD8E6>{recordData.speaker}</color>> {recordData.utterance}";
+                _recordContent.text = $"<color=#ADD8E6>{recordData.speaker}</color>> {recordData.utterance}";
                 break;
             }
             case "System":
             {
-                RecordContent.text = $"<color=#808080>{recordData.speaker}> {recordData.utterance}</color>";
+                _recordContent.text = $"<color=#808080>{recordData.speaker}> {recordData.utterance}</color>";
                 break;
             }
             default:

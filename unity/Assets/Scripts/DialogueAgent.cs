@@ -15,23 +15,21 @@ public class DialogueAgent : Agent
     public DialogueUI dialogueUI;
 
     // Message communication buffer queues
-    [HideInInspector]
-    public Queue<RecordData> incomingMsgBuffer = new Queue<RecordData>();
-    [HideInInspector]
-    public Queue<string> outgoingMsgBuffer = new Queue<string>();
+    public readonly Queue<RecordData> IncomingMsgBuffer = new Queue<RecordData>();
+    public readonly Queue<string> OutgoingMsgBuffer = new Queue<string>();
 
     // Communication side channel to Python backend for requesting decisions
-    protected string channelUuid;
-    protected StringMsgSideChannel backendMsgChannel;
+    protected string ChannelUuid;
+    protected StringMsgSideChannel BackendMsgChannel;
 
     // Only for use by non-Heuristics agents (i.e. connected to Python backend);
     // boolean flag for checking whether the agent has some unresolved goal to
     // achieve and thus needs RequestDecision() call
-    protected bool hasGoalToResolve = false;
+    // protected bool HasGoalToResolve = false;
 
     // For controlling minimal update interval, to allow visual inspection during runs
     float _time;
-    float _interval = 0.1f;
+    readonly float _tInterval = 0.1f;
 
     public void Start()
     {
@@ -43,24 +41,24 @@ public class DialogueAgent : Agent
         if (GetComponent<BehaviorParameters>().BehaviorType == BehaviorType.HeuristicOnly)
         {
             // Always empty incoming message buffer and call RequestDecision
-            incomingMsgBuffer.Clear();
+            IncomingMsgBuffer.Clear();
             RequestDecision();
         }
         else
         {
             if (Time.time > _time)
             {
-                _time += _interval;
+                _time += _tInterval;
 
                 // Trying to consult backend for requesting decision only when needed, in order
                 // to minimize communication of visual observation data
-                if (incomingMsgBuffer.Count > 0 || outgoingMsgBuffer.Count > 0 || hasGoalToResolve)
+                if (IncomingMsgBuffer.Count > 0 || OutgoingMsgBuffer.Count > 0) //|| HasGoalToResolve)
                 {
-                    while (incomingMsgBuffer.Count > 0)
+                    while (IncomingMsgBuffer.Count > 0)
                     {
-                        RecordData incomingMessage = incomingMsgBuffer.Dequeue();
-                        backendMsgChannel.SendMessageToBackend(incomingMessage.speaker);
-                        backendMsgChannel.SendMessageToBackend(incomingMessage.utterance);
+                        RecordData incomingMessage = IncomingMsgBuffer.Dequeue();
+                        BackendMsgChannel.SendMessageToBackend(incomingMessage.speaker);
+                        BackendMsgChannel.SendMessageToBackend(incomingMessage.utterance);
                     }
 
                     RequestDecision();
@@ -69,10 +67,10 @@ public class DialogueAgent : Agent
         }
     }
 
-    public void Utter()
+    protected void Utter()
     {
-        while (outgoingMsgBuffer.Count > 0) {
-            string outgoingMessage = outgoingMsgBuffer.Dequeue();
+        while (OutgoingMsgBuffer.Count > 0) {
+            string outgoingMessage = OutgoingMsgBuffer.Dequeue();
             dialogueUI.CommitUtterance(dialogueParticipantID, outgoingMessage);
         }
     }

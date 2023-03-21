@@ -10,7 +10,7 @@ public class EnvEntity : MonoBehaviour
     // whenever needed
 
     // Storage of AABBs, maintained as dictionary from Camera target display id to Rect
-    public Dictionary<int, Rect> boxes;
+    public Dictionary<int, Rect> Boxes;
 
     // List of cameras for each of which AABBs should be computed and stored for
     // the object this component is attached to
@@ -25,7 +25,7 @@ public class EnvEntity : MonoBehaviour
     void Start()
     {
         // Initialize the dictionary for storing AABBs
-        boxes = new Dictionary<int, Rect>();
+        Boxes = new Dictionary<int, Rect>();
 
         // Register existing cameras
         cameras = new List<Camera>();
@@ -106,7 +106,7 @@ public class EnvEntity : MonoBehaviour
                 {
                     // Recursively call for the child extractor to ensure its AABB is computed
                     cEnt.ComputeBoxes();
-                    Rect cBox = cEnt.boxes[cam.targetDisplay];
+                    Rect cBox = cEnt.Boxes[cam.targetDisplay];
 
                     // Update extremities
                     xMin = Math.Min(xMin, cBox.x);
@@ -117,7 +117,7 @@ public class EnvEntity : MonoBehaviour
             }
 
             // Create and assign a new rect representing the box
-            boxes[cam.targetDisplay] = new Rect(xMin, yMin, xMax - xMin, yMax - yMin);
+            Boxes[cam.targetDisplay] = new Rect(xMin, yMin, xMax - xMin, yMax - yMin);
         }
 
         // Reset this flag to false after computing AABBs, so that they are not computed
