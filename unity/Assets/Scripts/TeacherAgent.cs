@@ -10,7 +10,7 @@ public class TeacherAgent : DialogueAgent
         // in the scene ever, but ideally we would want 1 channel per instance,
         // with UUIDs generated on the fly each time an instance is created...)
         channelUuid = "da85d4e0-1b60-4c8a-877d-03af30c446f2";
-        backendMsgChannel = new StringMsgSideChannel(channelUuid, this);
+        backendMsgChannel = new MessageSideChannel(channelUuid, this);
         SideChannelManager.RegisterSideChannel(backendMsgChannel);
     }
 

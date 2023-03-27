@@ -136,4 +136,41 @@ public class EnvEntity : MonoBehaviour
 
         return null;
     }
+
+    public static EnvEntity FindByBox(Rect box, int displayId)
+    {
+        // Fetch EnvEntity with highest box IoU on specified provided display (if exists)
+        EnvEntity refEnt = null;
+        var maxIoU = 0f;
+
+        var allEnts = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
+        foreach (var ent in allEnts)
+        {
+            var entBox = ent.boxes[displayId];
+            if (!entBox.Overlaps(box)) continue;
+
+            // Compute box intersection then IoU
+            var intersectionX1 = Math.Max(entBox.x, box.x);
+            var intersectionY1 = Math.Max(entBox.y, box.y);
+            var intersectionX2 = Math.Min(entBox.x+entBox.width, box.x+box.width);
+            var intersectionY2 = Math.Min(entBox.y+entBox.height, box.y+box.height);
+            var intersection = new Rect(
+                intersectionX1, intersectionY1,
+                intersectionX2 - intersectionX1, intersectionY2 - intersectionY1
+            );
+
+            var entBoxArea = entBox.width * entBox.height;
+            var boxArea = box.width * box.height;
+            var intersectionArea = intersection.width * intersection.height;
+
+            var boxIoU = intersectionArea / (entBoxArea+boxArea-intersectionArea);
+            if (boxIoU > maxIoU)
+            {
+                maxIoU = boxIoU;
+                refEnt = ent;
+            }
+        }
+
+        return refEnt;
+    }
 }

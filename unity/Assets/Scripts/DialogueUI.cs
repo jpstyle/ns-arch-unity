@@ -145,7 +145,7 @@ public class DialogueUI : MonoBehaviour
         foreach (var agt in dialogueParticipants)
         {
             if (agt.dialogueParticipantID == currentSpeaker)
-                agt.outgoingMsgBuffer.Enqueue(currentInput);
+                agt.outgoingMsgBuffer.Enqueue((currentInput, null));
         }
         
         // Clear input field and demRefs view
@@ -163,7 +163,7 @@ public class DialogueUI : MonoBehaviour
         foreach (var agt in dialogueParticipants)
         {
             if (agt.dialogueParticipantID == currentSpeaker)
-                agt.outgoingMsgBuffer.Enqueue(currentInput);
+                agt.outgoingMsgBuffer.Enqueue((currentInput, null));
         }
         
         // Clear input field and demRefs view
@@ -329,16 +329,28 @@ public class DialogueUI : MonoBehaviour
         UpdateDemRefView();
     }
 
-    public void CommitUtterance(string speaker, string inputString)
+    public void CommitUtterance(
+        string speaker, string inputString, Dictionary<(int, int), string> optionalDemRefs = null
+    )
     {
         // Create a new record and add to list, renew demRefs dictionary
         var inputRecord = ScriptableObject.CreateInstance<RecordData>();
         inputRecord.speaker = speaker;
         inputRecord.utterance = inputString;
-        inputRecord.demonstrativeReferences =
-            new ReadOnlyDictionary<(int, int), string>(_demonstrativeReferences);
+        if (optionalDemRefs is null)
+        {
+            // Use current demRefs in dialogue UI
+            inputRecord.demonstrativeReferences =
+                new ReadOnlyDictionary<(int, int), string>(_demonstrativeReferences);
+            _demonstrativeReferences = new Dictionary<(int, int), string>();
+        }
+        else
+        {
+            // Use provided demRefs, without refreshing current one in dialogue UI
+            inputRecord.demonstrativeReferences =
+                new ReadOnlyDictionary<(int, int), string>(optionalDemRefs);
+        }
         _dialogueRecords.Add(inputRecord);
-        _demonstrativeReferences = new Dictionary<(int, int), string>();
 
         // Broadcast the record to all audience members
         if (speaker != "System")

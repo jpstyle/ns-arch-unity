@@ -11,7 +11,7 @@ sys.path.insert(
 import uuid
 import warnings
 warnings.filterwarnings("ignore")
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import hydra
 import numpy as np
@@ -38,7 +38,8 @@ if __name__ == "__main__":
     teacher_channel = StringMsgChannel("da85d4e0-1b60-4c8a-877d-03af30c446f2")
 
     # Start communication with Unity
-    env = UnityEnvironment("unity/Builds/table_domain.x86_64", side_channels=[student_channel, teacher_channel])
+    # env = UnityEnvironment("unity/Builds/table_domain.x86_64", side_channels=[student_channel, teacher_channel])
+    env = UnityEnvironment(side_channels=[student_channel, teacher_channel], timeout_wait=600)
 
     # Set teacher's initial message to prompt 'chain reactions'
     # teacher_channel.send_string("Foo")
@@ -60,26 +61,31 @@ if __name__ == "__main__":
                     # Obtain agent's visual observation from camera sensor
                     vis_obs = dec_step.obs[0]
                     vis_obs = (vis_obs * 255).astype(np.uint8)
+                    i_h, i_w, _ = vis_obs.shape
                     image = Image.fromarray(vis_obs, mode="RGB")
-                    # image.show()
 
                     # Read messages stored in string message channel buffer
                     incoming_msgs = student_channel.incoming_message_buffer
-                    assert len(incoming_msgs) % 2 == 0
 
                     if len(incoming_msgs) > 0:
                         while len(incoming_msgs) > 0:
                             # Each message consists of two consecutive buffer items;
                             # speaker and string content
-                            speaker = incoming_msgs.pop(0)
-                            utterance = incoming_msgs.pop(0)
+                            speaker, utterance, demRefs = incoming_msgs.pop(0)
 
-                            # Handling messages; generate appropriate string responses
-                            # and queue to side channel
-                            if utterance == "Foo":
-                                student_channel.send_string("Bar")
-                            else:
-                                student_channel.send_string("Baz")
+                            # Drawing any demonstrative references on vis obs image
+                            drawer = ImageDraw.Draw(image)
+                            for (start, end), bbox in demRefs.items():
+                                # Rectangle from box coordinates
+                                x, y, w, h = bbox
+                                drawer.rectangle([x*i_w, y*i_h, (x+w)*i_w, (y+h)*i_h])
+
+                                # Corresponding demonstrative pronoun
+                                drawer.text((x*i_w, y*i_h), utterance[start:end])
+                            # image.show()
+
+                            # Handling messages; echo utterance content & demRefs
+                            student_channel.send_string(utterance, demRefs)
 
                         # Set agent action to 'utter'
                         action = b_spec.action_spec.empty_action(1)
@@ -90,21 +96,15 @@ if __name__ == "__main__":
                 if b_name.startswith("TeacherBehavior"):
                     # Read messages stored in string message channel buffer
                     incoming_msgs = teacher_channel.incoming_message_buffer
-                    assert len(incoming_msgs) % 2 == 0
 
                     if len(incoming_msgs) > 0:
                         while len(incoming_msgs) > 0:
                             # Each message consists of two consecutive buffer items;
                             # speaker and string content
-                            speaker = incoming_msgs.pop(0)
-                            utterance = incoming_msgs.pop(0)
+                            speaker, utterance, demRefs = incoming_msgs.pop(0)
 
-                            # Handling messages; generate appropriate string responses
-                            # and queue to side channel
-                            if utterance == "Bar":
-                                teacher_channel.send_string("Qux")
-                            else:
-                                teacher_channel.send_string("Foo")
+                            # Handling messages; echo utterance content & demRefs
+                            teacher_channel.send_string(utterance, demRefs)
 
                         # Set agent action to 'utter'
                         action = b_spec.action_spec.empty_action(1)
