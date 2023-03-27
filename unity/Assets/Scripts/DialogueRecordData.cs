@@ -1,9 +1,9 @@
-using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using UnityEngine;
 
 public class RecordData : ScriptableObject
 {
     public string speaker;
     public string utterance;
-    public Dictionary<(int, int), string> DemonstrativeReferences;
+    public ReadOnlyDictionary<(int, int), string> demonstrativeReferences;
 }

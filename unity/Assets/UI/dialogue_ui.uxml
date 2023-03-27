@@ -1,7 +1,7 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="False">
     <Style src="project://database/Assets/UI/foldHover.uss?fileID=7433441132597879392&amp;guid=5d3d7edd1a668a62b95b054addfb8b66&amp;type=3#foldHover" />
-    <Style src="project://database/Assets/Scripts/disableListViewDefault.uss?fileID=7433441132597879392&amp;guid=88c8857d57670197b9d31321b86f1f91&amp;type=3#disableListViewDefault" />
-    <ui:VisualElement name="Container" style="justify-content: flex-start; align-items: stretch; flex-direction: column; position: absolute; height: 330px; width: 550px; right: 0;">
+    <Style src="project://database/Assets/UI/disableListViewDefault.uss?fileID=7433441132597879392&amp;guid=88c8857d57670197b9d31321b86f1f91&amp;type=3#disableListViewDefault" />
+    <ui:VisualElement name="Container" style="justify-content: flex-start; align-items: stretch; flex-direction: column; position: absolute; width: 550px; right: 0;">
         <ui:VisualElement name="FoldHandle" style="height: 30px; justify-content: center;">
             <ui:Label text="Fold ▲" display-tooltip-when-elided="true" style="-unity-text-align: middle-center; -unity-font-style: bold; color: rgb(210, 210, 210);" />
         </ui:VisualElement>
@@ -11,5 +11,7 @@
             <ui:TextField picking-mode="Ignore" name="TextField" style="flex-shrink: 0; flex-grow: 1; width: 0; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0;" />
             <ui:Button text="Say" display-tooltip-when-elided="true" style="width: 10%; -unity-font-style: bold; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0;" />
         </ui:VisualElement>
+        <ui:Label display-tooltip-when-elided="true" name="InputDemRefs" style="background-color: rgba(0, 0, 0, 0.39); -unity-font-style: bold; color: rgb(200, 200, 200); padding-left: 10px; padding-top: 6px; padding-bottom: 6px; white-space: normal; display: none;" />
     </ui:VisualElement>
+    <ui:VisualElement name="HighlightRect" style="background-color: rgba(255, 150, 0, 0.39); position: absolute; display: none; border-top-left-radius: 5px; border-bottom-left-radius: 5px; border-top-right-radius: 5px; border-bottom-right-radius: 5px;" />
 </ui:UXML>

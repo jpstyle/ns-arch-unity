@@ -1,0 +1,322 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>spkl.Diffs</name>
+    </assembly>
+    <members>
+        <member name="T:spkl.Diffs.ArrayView`1">
+            <summary>
+            A (worse-performing) .NET standard 2.0 / .NET Full Framework alternative to the Span&lt;T&gt;/Memory&lt;T&gt; type.
+            This struct gives you the ability to encapsulate a segment of an array into an object that gives array-like read and write access to the original array.
+            For example: new ArrayView&lt;int&gt;(new int[]{0, 1, 2, 3}, 1, 2) gives you access to indexes 1 and 2 from the original array,
+            where ArrayView index 0 corresponds to original array index 1.
+            </summary>
+            <typeparam name="T">The array element type.</typeparam>
+        </member>
+        <member name="P:spkl.Diffs.ArrayView`1.StartOffset">
+            <summary>
+            The start offset/index of this <see cref="T:spkl.Diffs.ArrayView`1"/> in relation to the original array.
+            Index 0 of the <see cref="T:spkl.Diffs.ArrayView`1"/> corresponds to index <see cref="P:spkl.Diffs.ArrayView`1.StartOffset"/> of the original array.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.ArrayView`1.Length">
+            <summary>
+            Gets the number of elements of the <see cref="T:spkl.Diffs.ArrayView`1"/>.
+            </summary>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.#ctor(`0[])">
+            <summary>
+            Creates a new instance granting access to all of the array.
+            </summary>
+            <param name="array">The array.</param>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.#ctor(`0[],System.Int32)">
+            <summary>
+            Creates a new instance granting access to the array elements from <paramref name="startIndex"/> to the end of the array.
+            </summary>
+            <param name="array">The array.</param>
+            <param name="startIndex">The start index.</param>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.#ctor(`0[],System.Int32,System.Int32)">
+            <summary>
+            Creates a new instance granting access to <paramref name="length"/> array elements, beginning from <paramref name="startIndex"/>.
+            </summary>
+            <param name="array">The array.</param>
+            <param name="startIndex">The start index.</param>
+            <param name="length">The length of the <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.#ctor(spkl.Diffs.ArrayView{`0},System.Int32)">
+            <summary>
+            Creates a new instance granting access to the <see cref="T:spkl.Diffs.ArrayView`1"/> elements from <paramref name="startIndex"/> to the end of the <see cref="T:spkl.Diffs.ArrayView`1"/>.
+            </summary>
+            <param name="source">The source <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+            <param name="startIndex">The start index.</param>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.#ctor(spkl.Diffs.ArrayView{`0},System.Int32,System.Int32)">
+            <summary>
+            Creates a new instance granting access to <paramref name="length"/> array elements,
+            beginning from <paramref name="startIndex"/> (in relation to the <paramref name="source"/> indexes).
+            </summary>
+            <param name="source">The source <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+            <param name="startIndex">The start index.</param>
+            <param name="length">The length of the <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.TrimStart(System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.ArrayView`1"/> from this instance, skipping the first <paramref name="count"/> elements.
+            </summary>
+            <param name="count">The number of elements to skip from the start of this <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+            <returns>A new <see cref="T:spkl.Diffs.ArrayView`1"/> with a smaller number of elements.</returns>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.TrimEnd(System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.ArrayView`1"/> from this instance, skipping the last <paramref name="count"/> elements.
+            </summary>
+            <param name="count">The number of elements to skip from the end of this <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+            <returns>A new <see cref="T:spkl.Diffs.ArrayView`1"/> with a smaller number of elements.</returns>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.Range(System.Int32,System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.ArrayView`1"/> from this instance,
+            granting access to element indexes [<paramref name="startIndex"/>..<paramref name="endIndexExclusive"/>] (in relation to this instances indexes).
+            </summary>
+            <param name="startIndex">The start index.</param>
+            <param name="endIndexExclusive">The index of the first element not included in the new <see cref="T:spkl.Diffs.ArrayView`1"/>.</param>
+            <returns>A new <see cref="T:spkl.Diffs.ArrayView`1"/> with a smaller number of elements.</returns>
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.Range(System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.ArrayView`1"/> from this instance,
+            granting access to the <see cref="T:spkl.Diffs.ArrayView`1"/> elements from <paramref name="startIndex"/> to the end of the <see cref="T:spkl.Diffs.ArrayView`1"/>.
+            </summary>
+            <remarks>
+            This is essentially the same as calling <see cref="M:spkl.Diffs.ArrayView`1.TrimStart(System.Int32)"/>.
+            </remarks>
+            <param name="startIndex">The start index.</param>
+            <returns>A new <see cref="T:spkl.Diffs.ArrayView`1"/> with a smaller number of elements.</returns>
+        </member>
+        <member name="P:spkl.Diffs.ArrayView`1.Item(System.Int32)">
+            <summary>
+            Gets or sets the element at the specified index.
+            The operation is performed on the original array; indexes are translated accordingly.
+            </summary>
+            <param name="index">The zero-based index of the element to get or set.</param>
+        </member>
+        <member name="P:spkl.Diffs.ArrayView`1.Count">
+            <inheritdoc />
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.GetEnumerator">
+            <inheritdoc />
+        </member>
+        <member name="M:spkl.Diffs.ArrayView`1.System#Collections#IEnumerable#GetEnumerator">
+            <inheritdoc />
+        </member>
+        <member name="T:spkl.Diffs.IndexRange">
+            <summary>
+            Encapsulates a range of indexes that can be enumerated.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.IndexRange.Start">
+            <summary>
+            The start of the range, i.e. the first index.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.IndexRange.Length">
+            <summary>
+            The length of the range, i.e. the number of indexes in the range.
+            </summary>
+        </member>
+        <member name="M:spkl.Diffs.IndexRange.#ctor(System.Int32,System.Int32)">
+            <summary>
+            Creates a new instance with the specified <paramref name="start"/> and <paramref name="length"/>.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.IndexRange.Item(System.Int32)">
+            <summary>
+            Gets the index at the specified offset.
+            Offset '0' equals <see cref="P:spkl.Diffs.IndexRange.Start"/>.
+            </summary>
+            <returns>The offset of the index to get.</returns>
+        </member>
+        <member name="M:spkl.Diffs.IndexRange.TrimStart(System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.IndexRange"/> by trimming <paramref name="count"/> number of indexes from the start of this instance.
+            </summary>
+            <param name="count">Number of indexes to trim from the start.</param>
+            <returns>A new instance with a smaller range.</returns>
+        </member>
+        <member name="M:spkl.Diffs.IndexRange.TrimEnd(System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.IndexRange"/> by trimming <paramref name="count"/> number of indexes from the end of this instance.
+            </summary>
+            <param name="count">Number of indexes to trim from the end.</param>
+            <returns>A new instance with a smaller range.</returns>
+        </member>
+        <member name="M:spkl.Diffs.IndexRange.Range(System.Int32,System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.IndexRange"/> by specifying the indexes of the indexes to start and end with.
+            </summary>
+            <param name="startIndex">The index of the index in this range to start the new range with.</param>
+            <param name="endIndexExclusive">The index of the index in this range that is the first one not contained in the new range.</param>
+            <returns>A new instance with a smaller range.</returns>
+        </member>
+        <member name="M:spkl.Diffs.IndexRange.Range(System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.IndexRange"/> that starts with the index that is at index <paramref name="startIndex"/> of this instance.
+            The last index of the new instance is the same as in this instance.
+            This is equal to calling <see cref="M:spkl.Diffs.IndexRange.TrimStart(System.Int32)"/>.
+            </summary>
+            <param name="startIndex">The index of the index in this range to start the new range with.</param>
+            <returns>A new instance with a smaller range.</returns>
+        </member>
+        <member name="M:spkl.Diffs.IndexRange.GetEnumerator">
+            <inheritdoc cref="M:System.Collections.Generic.IEnumerable`1.GetEnumerator"/>
+        </member>
+        <member name="T:spkl.Diffs.MyersDiff`1">
+            <summary>
+            Provides the diff result or shortest edit script for two sequences A and B using Eugene Myers diff algorithm.
+            </summary>
+            <typeparam name="T">The sequence item type.</typeparam>
+        </member>
+        <member name="M:spkl.Diffs.MyersDiff`1.#ctor(`0[],`0[])">
+            <summary>
+            Creates a new instance of the <see cref="T:spkl.Diffs.MyersDiff`1"/> class
+            and calculates the diff result of sequences A and B
+            using the <see cref="M:System.Object.Equals(System.Object)"/> method to determine item equality.
+            </summary>
+            <param name="aValues">Item sequence A.</param>
+            <param name="bValues">Item sequence B.</param>
+        </member>
+        <member name="M:spkl.Diffs.MyersDiff`1.#ctor(`0[],`0[],System.Collections.Generic.IEqualityComparer{`0})">
+            <summary>
+            Creates a new instance of the <see cref="T:spkl.Diffs.MyersDiff`1"/> class
+            and calculates the diff result of sequences A and B
+            using the provided <see cref="T:System.Collections.Generic.IEqualityComparer`1"/> to determine item equality.
+            </summary>
+            <param name="aValues">Item sequence A.</param>
+            <param name="bValues">Item sequence B.</param>
+            <param name="comparer">The implementation to determine item equality.</param>
+        </member>
+        <member name="M:spkl.Diffs.MyersDiff`1.GetResult">
+            <summary>
+            Gets the calculated diff result in the form of matched items/lines:
+            ResultType: Specifies whether the line includes only an item from A, from B or from both sequences.
+            AItem: The item from sequence A; this is the default value/null if resultType is <see cref="F:spkl.Diffs.ResultType.B"/>.
+            BItem: The item from sequence B, this is the default value/null if resultType is <see cref="F:spkl.Diffs.ResultType.A"/>.
+            </summary>
+            <returns>An enumerable of diff lines containing one unmatched or two matched items.</returns>
+            <remarks>This is this equal to calling <see cref="M:spkl.Diffs.MyersDiff`1.GetResult(spkl.Diffs.ResultOrder)"/> with <see cref="F:spkl.Diffs.ResultOrder.AABB"/>.</remarks>
+        </member>
+        <member name="M:spkl.Diffs.MyersDiff`1.GetResult(spkl.Diffs.ResultOrder)">
+            <summary>
+            Gets the calculated diff result in the form of matched items/lines:
+            ResultType: Specifies whether the line includes only an item from A, from B or from both sequences.
+            AItem: The item from sequence A; this is the default value/null if resultType is <see cref="F:spkl.Diffs.ResultType.B"/>.
+            BItem: The item from sequence B, this is the default value/null if resultType is <see cref="F:spkl.Diffs.ResultType.A"/>.
+            </summary>
+            <param name="order">The order in which unmatched items/lines are returned.</param>
+            <returns>An enumerable of diff lines containing one unmatched or two matched items.</returns>
+        </member>
+        <member name="M:spkl.Diffs.MyersDiff`1.GetEditScript">
+            <summary>
+            Gets the edit script that results from the comparison of the two sequences.
+            Every item of the enumerable equals one edit instruction. Read this as follows:
+            LineA, CountA: Starting at index LineA in sequence A, remove CountA items.
+            LineB, CountB: Starting at index LineB in sequence B, insert CountB items.
+            Line numbers start with 0 and correspond to the sequences that were put into the constructor.
+            </summary>
+            <returns>An enumerable of edit instructions.</returns>
+        </member>
+        <member name="T:spkl.Diffs.ResultOrder">
+            <summary>
+            Determines in which order the <see cref="M:spkl.Diffs.MyersDiff`1.GetResult(spkl.Diffs.ResultOrder)"/> method returns items.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultOrder.AABB">
+            <summary>
+            Items are ordered in alternating sections, first A, then B.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultOrder.BBAA">
+            <summary>
+            Items are ordered in alternating sections, first B, then A.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultOrder.ABAB">
+            <summary>
+            Items are ordered in alternating lines, first A, then B.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultOrder.BABA">
+            <summary>
+            Items are ordered in alternating lines, first B, then A.
+            </summary>
+        </member>
+        <member name="T:spkl.Diffs.ResultType">
+            <summary>
+            Describes the contents of a result item.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultType.A">
+            <summary>
+            The result only contains an item from sequence A.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultType.B">
+            <summary>
+            The result only contains an item from sequence B.
+            </summary>
+        </member>
+        <member name="F:spkl.Diffs.ResultType.Both">
+            <summary>
+            The result contains an item from both sequence A and B.
+            </summary>
+        </member>
+        <member name="T:spkl.Diffs.VArray`1">
+            <summary>
+            An array wrapper enabling arbitrary (including negative) element indexes.
+            </summary>
+            <typeparam name="T">The array element type.</typeparam>
+        </member>
+        <member name="M:spkl.Diffs.VArray`1.CreateFromTo(System.Int32,System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.VArray`1"/> with indexes ranging from <paramref name="firstIndex"/> to <paramref name="lastIndex"/>.
+            </summary>
+        </member>
+        <member name="M:spkl.Diffs.VArray`1.CreateByLength(System.Int32,System.Int32)">
+            <summary>
+            Creates a new <see cref="T:spkl.Diffs.VArray`1"/> with indexes starting at <paramref name="firstIndex"/> and the specified <paramref name="length"/>.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.VArray`1.DebugView">
+            <summary>
+            Provides a debugging view combining all indexes with their corresponding elements.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.VArray`1.Item(System.Int32)">
+            <summary>
+            Gets or sets the element at the specified index.
+            </summary>
+            <param name="index">The index of the element to get or set.</param>
+        </member>
+        <member name="P:spkl.Diffs.VArray`1.LowerBoundInclusive">
+            <summary>
+            The smallest index of this instance.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.VArray`1.UpperBoundExclusive">
+            <summary>
+            The first index that is not part of the instance.
+            </summary>
+        </member>
+        <member name="P:spkl.Diffs.VArray`1.Count">
+            <inheritdoc cref="P:System.Collections.Generic.ICollection`1.Count"/>
+        </member>
+        <member name="M:spkl.Diffs.VArray`1.GetEnumerator">
+            <inheritdoc />
+        </member>
+        <member name="M:spkl.Diffs.VArray`1.System#Collections#IEnumerable#GetEnumerator">
+            <inheritdoc />
+        </member>
+    </members>
+</doc>

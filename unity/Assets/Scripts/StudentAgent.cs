@@ -14,9 +14,9 @@ public class StudentAgent : DialogueAgent
         // (Note: This works because we will have only one instance of the agent
         // in the scene ever, but ideally we would want 1 channel per instance,
         // with UUIDs generated on the fly each time an instance is created...)
-        ChannelUuid = "a1a6b269-0dd3-442c-99c6-9c735ebe43e1";
-        BackendMsgChannel = new StringMsgSideChannel(ChannelUuid, this);
-        SideChannelManager.RegisterSideChannel(BackendMsgChannel);
+        channelUuid = "a1a6b269-0dd3-442c-99c6-9c735ebe43e1";
+        backendMsgChannel = new StringMsgSideChannel(channelUuid, this);
+        SideChannelManager.RegisterSideChannel(backendMsgChannel);
     }
 
     public override void OnActionReceived(ActionBuffers actionBuffers)
@@ -31,9 +31,9 @@ public class StudentAgent : DialogueAgent
     public override void Heuristic(in ActionBuffers actionBuffers)
     {
         // 'Utter' any outgoing messages
-        if (OutgoingMsgBuffer.Count > 0)
+        if (outgoingMsgBuffer.Count > 0)
         {
-            ActionSegment<int> discreteActionBuffers = actionBuffers.DiscreteActions;
+            var discreteActionBuffers = actionBuffers.DiscreteActions;
             discreteActionBuffers[0] = 1;      // 'Utter'
         }
     }
