@@ -80,23 +80,27 @@ public class EnvEntity : MonoBehaviour
 
             if (isAtomic)
             {
-                // Iterate through all vertices in the mesh filter to obtain the
-                // tightest enclosing 2D box aligned w.r.t. screen
-                var vertices = gameObject.GetComponent<MeshFilter>().mesh.vertices;
-                foreach (var v in vertices)
+                // Iterate through all vertices in the mesh colliders of self and children
+                // to obtain the tightest enclosing 2D box aligned w.r.t. screen
+                var meshes = gameObject.GetComponentsInChildren<MeshCollider>();
+                foreach (var mf in meshes)
                 {
-                    // From position in local to world coordinate, then to screen coordinate
-                    var worldPoint = gameObject.transform.TransformPoint(v);
-                    var screenPoint = cam.WorldToScreenPoint(worldPoint);
+                    var vertices = mf.sharedMesh.vertices;
+                    foreach (var v in vertices)
+                    {
+                        // From position in local to world coordinate, then to screen coordinate
+                        var worldPoint = gameObject.transform.TransformPoint(v);
+                        var screenPoint = cam.WorldToScreenPoint(worldPoint);
 
-                    // Need to flip y position in screen coordinate to comply with MouseMoveEvent
-                    screenPoint.y = Screen.height - screenPoint.y;
+                        // Need to flip y position in screen coordinate to comply with MouseMoveEvent
+                        screenPoint.y = Screen.height - screenPoint.y;
 
-                    // Update extremities
-                    xMin = Math.Min(xMin, screenPoint.x);
-                    yMin = Math.Min(yMin, screenPoint.y);
-                    xMax = Math.Max(xMax, screenPoint.x);
-                    yMax = Math.Max(yMax, screenPoint.y);
+                        // Update extremities
+                        xMin = Math.Min(xMin, screenPoint.x);
+                        yMin = Math.Min(yMin, screenPoint.y);
+                        xMax = Math.Max(xMax, screenPoint.x);
+                        yMax = Math.Max(yMax, screenPoint.y);
+                    }
                 }
             }
             else

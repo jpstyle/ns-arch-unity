@@ -45,6 +45,11 @@ public class DialogueAgent : Agent
         _nextTimeToAct = Time.time;
     }
 
+    public override void OnEpisodeBegin()
+    {
+        outgoingMsgBuffer.Clear();
+    }
+
     public void Update()
     {
         if (Time.time < _nextTimeToAct) return;

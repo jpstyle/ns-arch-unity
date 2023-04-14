@@ -38,83 +38,87 @@ if __name__ == "__main__":
     teacher_channel = StringMsgChannel("da85d4e0-1b60-4c8a-877d-03af30c446f2")
 
     # Start communication with Unity
-    # env = UnityEnvironment("unity/Builds/table_domain.x86_64", side_channels=[student_channel, teacher_channel])
-    env = UnityEnvironment(side_channels=[student_channel, teacher_channel], timeout_wait=600)
+    env = UnityEnvironment("unity/Builds/table_domain.x86_64", side_channels=[student_channel, teacher_channel])
+    # env = UnityEnvironment(side_channels=[student_channel, teacher_channel], timeout_wait=600)
 
     # Set teacher's initial message to prompt 'chain reactions'
     # teacher_channel.send_string("Foo")
 
     while True:
-        env.step()
+        env.reset()
 
-        for b_name, b_spec in env.behavior_specs.items():
-            # Decision steps (agents requiring decisions) and terminal steps
-            # (agents terminated)
-            dec_steps, ter_steps = env.get_steps(b_name)
+        for i in range(2):
 
-            # Handle each decision request
-            for di in dec_steps:
-                dec_step = dec_steps[di]
+            for b_name, b_spec in env.behavior_specs.items():
+                # Decision steps (agents requiring decisions) and terminal steps
+                # (agents terminated)
+                dec_steps, ter_steps = env.get_steps(b_name)
 
-                # Handle student's decision request
-                if b_name.startswith("StudentBehavior"):
-                    # Obtain agent's visual observation from camera sensor
-                    vis_obs = dec_step.obs[0]
-                    vis_obs = (vis_obs * 255).astype(np.uint8)
-                    i_h, i_w, _ = vis_obs.shape
-                    image = Image.fromarray(vis_obs, mode="RGB")
+                # Handle each decision request
+                for di in dec_steps:
+                    dec_step = dec_steps[di]
 
-                    # Read messages stored in string message channel buffer
-                    incoming_msgs = student_channel.incoming_message_buffer
+                    # Handle student's decision request
+                    if b_name.startswith("StudentBehavior"):
+                        # Obtain agent's visual observation from camera sensor
+                        vis_obs = dec_step.obs[0]
+                        vis_obs = (vis_obs * 255).astype(np.uint8)
+                        i_h, i_w, _ = vis_obs.shape
+                        image = Image.fromarray(vis_obs, mode="RGB")
 
-                    if len(incoming_msgs) > 0:
-                        while len(incoming_msgs) > 0:
-                            # Each message consists of two consecutive buffer items;
-                            # speaker and string content
-                            speaker, utterance, demRefs = incoming_msgs.pop(0)
+                        # Read messages stored in string message channel buffer
+                        incoming_msgs = student_channel.incoming_message_buffer
 
-                            # Drawing any demonstrative references on vis obs image
-                            drawer = ImageDraw.Draw(image)
-                            for (start, end), bbox in demRefs.items():
-                                # Rectangle from box coordinates
-                                x, y, w, h = bbox
-                                drawer.rectangle([x*i_w, y*i_h, (x+w)*i_w, (y+h)*i_h])
+                        if len(incoming_msgs) > 0:
+                            while len(incoming_msgs) > 0:
+                                # Each message consists of two consecutive buffer items;
+                                # speaker and string content
+                                speaker, utterance, demRefs = incoming_msgs.pop(0)
 
-                                # Corresponding demonstrative pronoun
-                                drawer.text((x*i_w, y*i_h), utterance[start:end])
-                            # image.show()
+                                # Drawing any demonstrative references on vis obs image
+                                drawer = ImageDraw.Draw(image)
+                                for (start, end), bbox in demRefs.items():
+                                    # Rectangle from box coordinates
+                                    x, y, w, h = bbox
+                                    drawer.rectangle([x*i_w, y*i_h, (x+w)*i_w, (y+h)*i_h])
 
-                            # Handling messages; echo utterance content & demRefs
-                            student_channel.send_string(utterance, demRefs)
+                                    # Corresponding demonstrative pronoun
+                                    drawer.text((x*i_w, y*i_h), utterance[start:end])
+                                # image.save("foo.jpg")
 
-                        # Set agent action to 'utter'
-                        action = b_spec.action_spec.empty_action(1)
-                        action.discrete[0][0] = 1
-                        env.set_action_for_agent(b_name, dec_step.agent_id, action)
+                                # Handling messages; echo utterance content & demRefs
+                                student_channel.send_string(utterance, demRefs)
 
-                # Handle teacher's decision request
-                if b_name.startswith("TeacherBehavior"):
-                    # Read messages stored in string message channel buffer
-                    incoming_msgs = teacher_channel.incoming_message_buffer
+                            # Set agent action to 'utter'
+                            action = b_spec.action_spec.empty_action(1)
+                            action.discrete[0][0] = 1
+                            env.set_action_for_agent(b_name, dec_step.agent_id, action)
 
-                    if len(incoming_msgs) > 0:
-                        while len(incoming_msgs) > 0:
-                            # Each message consists of two consecutive buffer items;
-                            # speaker and string content
-                            speaker, utterance, demRefs = incoming_msgs.pop(0)
+                    # Handle teacher's decision request
+                    if b_name.startswith("TeacherBehavior"):
+                        # Read messages stored in string message channel buffer
+                        incoming_msgs = teacher_channel.incoming_message_buffer
 
-                            # Handling messages; echo utterance content & demRefs
-                            teacher_channel.send_string(utterance, demRefs)
+                        if len(incoming_msgs) > 0:
+                            while len(incoming_msgs) > 0:
+                                # Each message consists of two consecutive buffer items;
+                                # speaker and string content
+                                speaker, utterance, demRefs = incoming_msgs.pop(0)
 
-                        # Set agent action to 'utter'
-                        action = b_spec.action_spec.empty_action(1)
-                        action.discrete[0][0] = 1
-                        env.set_action_for_agent(b_name, dec_step.agent_id, action)
-                    else:
-                        # Episode-initial; set agent action to 'utter' still, as message
-                        # strings will already have been sent
-                        action = b_spec.action_spec.empty_action(1)
-                        action.discrete[0][0] = 1
-                        env.set_action_for_agent(b_name, dec_step.agent_id, action)
+                                # Handling messages; echo utterance content & demRefs
+                                teacher_channel.send_string(utterance, demRefs)
+
+                            # Set agent action to 'utter'
+                            action = b_spec.action_spec.empty_action(1)
+                            action.discrete[0][0] = 1
+                            env.set_action_for_agent(b_name, dec_step.agent_id, action)
+                        else:
+                            # Episode-initial; set agent action to 'utter' still, as message
+                            # strings will already have been sent
+                            action = b_spec.action_spec.empty_action(1)
+                            action.discrete[0][0] = 1
+                            env.set_action_for_agent(b_name, dec_step.agent_id, action)
+
+            if i<1: env.step()
 
     env.close()
