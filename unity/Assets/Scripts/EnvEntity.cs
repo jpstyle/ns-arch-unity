@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class EnvEntity : MonoBehaviour
@@ -21,8 +22,7 @@ public class EnvEntity : MonoBehaviour
     [HideInInspector]
     public string uid;
 
-    // Start is called before the first frame update
-    private void Start()
+    private void Awake()
     {
         // Initialize the dictionary for storing AABBs
         boxes = new Dictionary<int, Rect>();
@@ -38,38 +38,35 @@ public class EnvEntity : MonoBehaviour
         uid = Guid.NewGuid().ToString()[..8];
     }
 
-    // Update is called once per frame
-    private void Update()
+    private void Start()
     {
-        ComputeBoxes();
+        // ComputeBoxes();
+        var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
+        foreach (var pUI in pointerUIs)
+            pUI.AddEnvEntity(this);
+    }
+
+    private void OnDestroy()
+    {
+        var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
+        foreach (var pUI in pointerUIs)
+            pUI.DelEnvEntity(this);
     }
 
     // Call to update the storage of Camera->Rect mapping; may be recursively evoked
     // by a parent EnvEntity, make sure AABB is computed once and only once
     // for the frame!
-    private void ComputeBoxes()
+    public void ComputeBoxes()
     {
         // Can skip if gameObject hasn't moved since
         if (!gameObject.transform.hasChanged) return;
 
-        // Checking if the associated GameObject is an 'atomic' one with MeshFilter.
+        // Checking if the associated GameObject is an 'atomic' one with no further
+        // EnvEntity components on descendants.
         // If so, enumerate over vertices to compute AABB from screen coordinates
         // of the extremities; otherwise, compute from children's AABBs.
-        var childrenExtractors = new List<EnvEntity>();
-
-        // A Unity peculiarity exploited here is that Transform component of a GameObject
-        // implements IEnumerable interface to enumerate its immediate children
-        // (Unity doesn't have a built-in method for enumerating immediate children of
-        // a GameObject, just (recursive) one for all descendants)
-        foreach (Transform tr in gameObject.transform)
-        {
-            var childExtractor = tr.gameObject.GetComponent<EnvEntity>();
-
-            // Add to list if exists
-            if (childExtractor is not null)
-                childrenExtractors.Add(childExtractor);
-        }
-        var isAtomic = childrenExtractors.Count == 0;
+        var childrenEntities = ClosestChildren(gameObject);
+        var isAtomic = childrenEntities.Count == 0;
 
         // Compute and update AABBs for each camera
         foreach (var cam in cameras)
@@ -106,9 +103,9 @@ public class EnvEntity : MonoBehaviour
             else
             {
                 // Compute from children's boxes
-                foreach (var cEnt in childrenExtractors)
+                foreach (var cEnt in childrenEntities)
                 {
-                    // Recursively call for the child extractor to ensure its AABB is computed
+                    // Recursively call for the child entity to ensure its AABB is computed
                     cEnt.ComputeBoxes();
                     var cBox = cEnt.boxes[cam.targetDisplay];
 
@@ -129,11 +126,40 @@ public class EnvEntity : MonoBehaviour
         gameObject.transform.hasChanged = false;
     }
 
+    private static List<EnvEntity> ClosestChildren(GameObject gObj)
+    {
+        // Find 'closest' children EnvEntity instances, in the sense that the recursive
+        // search frontier stops expanding as soon as another EnvEntity instance is
+        // encountered; result may be empty
+        var closestChildren = new List<EnvEntity>();
+        
+        // A Unity peculiarity exploited here is that Transform component of a GameObject
+        // implements IEnumerable interface to enumerate its immediate children
+        // (Unity doesn't have a built-in method for enumerating immediate children of
+        // a GameObject, just (recursive) one for all descendants)
+        foreach (Transform tr in gObj.transform)
+        {
+            var childEntity = tr.gameObject.GetComponent<EnvEntity>();
+
+            // If EnvEntity component not found, recurse on the child gameObject; otherwise,
+            // add to list and do not recurse further
+            if (childEntity is null)
+                closestChildren = closestChildren.Concat(ClosestChildren(tr.gameObject)).ToList();
+            else
+            {
+                // If EnvEntity component disabled, disregard (gameObject likely to be destroyed)
+                if (childEntity.enabled) closestChildren.Add(childEntity);
+            }
+        }
+
+        return closestChildren;
+    }
+
     public static EnvEntity FindByUid(string uid)
     {
         // Fetch EnvEntity with matching uid (if exists)
-        var allEnts = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
-        foreach (var ent in allEnts)
+        var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
+        foreach (var ent in allEntities)
         {
             if (ent.uid == uid) return ent;
         }
@@ -147,9 +173,11 @@ public class EnvEntity : MonoBehaviour
         EnvEntity refEnt = null;
         var maxIoU = 0f;
 
-        var allEnts = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
-        foreach (var ent in allEnts)
+        var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
+        foreach (var ent in allEntities)
         {
+            if (!ent.enabled) continue;
+
             var entBox = ent.boxes[displayId];
             if (!entBox.Overlaps(box)) continue;
 

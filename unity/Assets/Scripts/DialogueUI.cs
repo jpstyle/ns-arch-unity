@@ -91,9 +91,6 @@ public class DialogueUI : MonoBehaviour
         // Register participants to UI
         foreach (var agt in dialogueParticipants)
             RegisterParticipant(agt);
-
-        // Add dialogue history header record
-        CommitUtterance("System", "Start episode");
     }
 
     private void RegisterParticipant(DialogueAgent agent)
@@ -365,5 +362,11 @@ public class DialogueUI : MonoBehaviour
         // Refresh view
         _dialogueHistoryView.Rebuild();
         _dialogueHistoryView.ScrollToItemById(-1);
+    }
+
+    public void ClearHistory()
+    {
+        _dialogueRecords.Clear();
+        UpdateDemRefView();
     }
 }

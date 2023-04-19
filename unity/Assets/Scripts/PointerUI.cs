@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using NUnit;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -63,17 +64,17 @@ public class PointerUI : MonoBehaviour
         var currentPosition = evt.mousePosition;
 
         // Find boxes that the mouse is currently hovering over
-        var boxExtractorsHovering = _envEntities.FindAll(
+        var entitiesHovering = _envEntities.FindAll(
             ent => ent.boxes[_displayId].Contains(currentPosition)
         );
 
         EnvEntity newFocus = null;
-        if (boxExtractorsHovering.Count > 0)
+        if (entitiesHovering.Count > 0)
         {
             // Select the box with the smallest area on which the mouse is hovering
             var minArea = float.MaxValue;
 
-            foreach (var ent in boxExtractorsHovering)
+            foreach (var ent in entitiesHovering)
             {
                 var box = ent.boxes[_displayId];
                 var boxArea = box.width * box.height;
@@ -98,6 +99,16 @@ public class PointerUI : MonoBehaviour
             else
                 HighlightBox(_currentFocus);
         }
+    }
+
+    public void AddEnvEntity(EnvEntity ent)
+    {
+        _envEntities.Add(ent);
+    }
+
+    public void DelEnvEntity(EnvEntity ent)
+    {
+        _envEntities.Remove(ent);
     }
 
     public void HighlightBox(EnvEntity ent)

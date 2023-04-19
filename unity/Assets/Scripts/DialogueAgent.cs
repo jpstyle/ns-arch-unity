@@ -22,13 +22,13 @@ public class DialogueAgent : Agent
     // Communication side channel to Python backend for requesting decisions
     protected string channelUuid;
     protected MessageSideChannel backendMsgChannel;
+    
+    // Camera sensor component
+    protected CameraSensorComponent cameraSensor;
 
     // Behavior type as MLAgent
     private BehaviorType _behaviorType;
-    
-    // Camera sensor component
-    private CameraSensorComponent _cameraSensor;
-    
+
     // // Only for use by non-Heuristics agents (i.e. connected to Python backend);
     // // boolean flag for checking whether the agent has some unresolved goal to
     // // achieve and thus needs RequestDecision() call
@@ -36,18 +36,24 @@ public class DialogueAgent : Agent
 
     // For controlling minimal update interval, to allow visual inspection during runs
     private float _nextTimeToAct;
-    private const float TimeInterval = 0.2f;
+    private const float TimeInterval = 2f;
 
     public void Start()
     {
+        cameraSensor = GetComponent<CameraSensorComponent>();
         _behaviorType = GetComponent<BehaviorParameters>().BehaviorType;
-        _cameraSensor = GetComponent<CameraSensorComponent>();
         _nextTimeToAct = Time.time;
     }
 
     public override void OnEpisodeBegin()
     {
-        outgoingMsgBuffer.Clear();
+        // Flush outgoing message buffer until server-side request to initiate interaction
+        while (outgoingMsgBuffer.Count > 0)
+        {
+            var outgoingMessage = outgoingMsgBuffer.Dequeue();
+            if (outgoingMessage.Item1 == "[EP_START]")
+                InitiateInteraction();
+        }
     }
 
     public void Update()
@@ -65,8 +71,9 @@ public class DialogueAgent : Agent
         {
             // Trying to consult backend for requesting decision only when needed, in order
             // to minimize communication of visual observation data
-            if (incomingMsgBuffer.Count == 0 && outgoingMsgBuffer.Count == 0) return;
+            if (incomingMsgBuffer.Count == 0) return;
 
+            // Unprocessed incoming messages exist; process and consult backend 
             while (incomingMsgBuffer.Count > 0)
             {
                 // Fetch single message record from queue
@@ -80,7 +87,7 @@ public class DialogueAgent : Agent
                     // Retrieve referenced EnvEntity and fetch absolute box coordinates w.r.t.
                     // this agent's camera's target display screen
                     var refEnt = EnvEntity.FindByUid(entUid);
-                    var screenAbsRect = refEnt.boxes[_cameraSensor.Camera.targetDisplay];
+                    var screenAbsRect = refEnt.boxes[cameraSensor.Camera.targetDisplay];
                     demRefs[range] = ScreenAbsRectToSensorRelRect(screenAbsRect);
                 }
 
@@ -103,7 +110,7 @@ public class DialogueAgent : Agent
             {
                 // Need to resolve demonstrative reference boxes to corresponding EnvEntity (uid)
                 var demRefs = new Dictionary<(int, int), string>();
-                var targetDisplay = _cameraSensor.Camera.targetDisplay;
+                var targetDisplay = cameraSensor.Camera.targetDisplay;
                 
                 foreach (var (range, sensorRelRect) in demRefBoxes)
                 {
@@ -119,9 +126,12 @@ public class DialogueAgent : Agent
         }
     }
 
-    private Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
+    // To be overridden by children classes, do nothing
+    protected virtual void InitiateInteraction() {}
+
+    protected Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
     {
-        var targetDisplay = _cameraSensor.Camera.targetDisplay;
+        var targetDisplay = cameraSensor.Camera.targetDisplay;
         var screenWidth = Display.displays[targetDisplay].systemWidth;
         var screenHeight = Display.displays[targetDisplay].systemHeight;
 
@@ -134,7 +144,7 @@ public class DialogueAgent : Agent
         // To CameraSensor-relative coordinates; transform x-coordinates according to
         // ratio of aspect ratios, while leaving y-coordinates untouched
         var screenAspectRatio = (float)screenWidth / screenHeight;
-        var sensorAspectRatio = (float)_cameraSensor.Width / _cameraSensor.Height;
+        var sensorAspectRatio = (float)cameraSensor.Width / cameraSensor.Height;
         var arRatio = screenAspectRatio / sensorAspectRatio;
         var sensorRelRectX = (screenRelRectX - 0.5f) * arRatio + 0.5f;
         var sensorRelRectWidth = screenRelRectWidth * arRatio;
@@ -144,14 +154,14 @@ public class DialogueAgent : Agent
     
     private Rect SensorRelRectToScreenAbsRect(Rect sensorRelRect)
     {
-        var targetDisplay = _cameraSensor.Camera.targetDisplay;
+        var targetDisplay = cameraSensor.Camera.targetDisplay;
         var screenWidth = Display.displays[targetDisplay].systemWidth;
         var screenHeight = Display.displays[targetDisplay].systemHeight;
 
         // To screen-relative coordinates; transform x-coordinates according to
         // ratio of aspect ratios, while leaving y-coordinates untouched
         var screenAspectRatio = (float)screenWidth / screenHeight;
-        var sensorAspectRatio = (float)_cameraSensor.Width / _cameraSensor.Height;
+        var sensorAspectRatio = (float)cameraSensor.Width / cameraSensor.Height;
         var arRatio = screenAspectRatio / sensorAspectRatio;
         var screenRelRectX = (sensorRelRect.x - 0.5f) / arRatio + 0.5f;
         var screenRelRectY = sensorRelRect.y;
