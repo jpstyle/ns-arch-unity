@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
     # Start communication with Unity
     env = UnityEnvironment(
-        "unity/Builds/table_domain.x86_64",       # Uncomment when running with Unity linux build
+        # "unity/Builds/table_domain.x86_64",       # Uncomment when running with Unity linux build
         side_channels=[env_par_channel, student_channel, teacher_channel],
         timeout_wait=600, seed=42
     )

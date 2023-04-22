@@ -19,6 +19,8 @@ public class TeacherAgent : DialogueAgent
     [SerializeField]
     private List<Material> colors;
 
+    private Dictionary<string, EnvEntity> _envEntitiesCache;
+
     protected override void Awake()
     {
         // Register Python-Agent string communication side channel
@@ -39,12 +41,15 @@ public class TeacherAgent : DialogueAgent
 
         // Destroy any existing truck object
         var existingTruck = GameObject.Find($"truck_ep{Academy.Instance.EpisodeCount-1}");
-        if (existingTruck is not null) Destroy(existingTruck);
+        if (existingTruck is not null)
+            Destroy(existingTruck);
         // Disable all existing EnvEntity components; needed because the Destroy call
         // above is delayed
-        var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
-        foreach (var ent in allEntities)
+        foreach (var ent in FindObjectsByType<EnvEntity>(FindObjectsSortMode.None))
             ent.enabled = false;
+        // Disable all existing RigidBody components; ditto
+        foreach (var rb in FindObjectsByType<Rigidbody>(FindObjectsSortMode.None))
+            rb.detectCollisions = false;
         
         // Sample truck configs
         var truckType = truckTypes[Random.Range(0, truckTypes.Count)];
@@ -116,22 +121,30 @@ public class TeacherAgent : DialogueAgent
 
         // Random initialization of truck pose
         truck.transform.position = new Vector3(
-            Random.Range(-0.25f, 0.25f), 0.8f, Random.Range(0.3f, 0.35f)
+            Random.Range(-0.25f, 0.25f), 0.85f, Random.Range(0.3f, 0.35f)
         );
         truck.transform.eulerAngles = new Vector3(
             0f, Random.Range(0f, 359.9f), 0f
         );
-        
+
         // Fast-forward physics simulation until truck rests on the desktop
         Physics.simulationMode = SimulationMode.Script;
-        while (!truck.GetComponent<Rigidbody>().IsSleeping())
+        for (var i=0; i<2000; i++)
         {
             Physics.Simulate(Time.fixedDeltaTime);
         }
+        Debug.Log(truck.transform.position);
+        // Physics.simulationMode = SimulationMode.FixedUpdate;
 
         // Clean dialogue history and add new episode header record
         dialogueUI.ClearHistory();
         dialogueUI.CommitUtterance("System", $"Start episode {Academy.Instance.EpisodeCount}");
+
+        // Clear cache of env entities and register new ones
+        _envEntitiesCache = new Dictionary<string, EnvEntity>
+        {
+            [truck.name] = truck.GetComponent<EnvEntity>()
+        };
     }
 
     public override void OnActionReceived(ActionBuffers actionBuffers)
@@ -157,7 +170,7 @@ public class TeacherAgent : DialogueAgent
     {
         // Teacher-side episode initiation; current version: find truck and say
         // "This is a X."
-        
+
         // Temp: Arbitrary single-token names for truck types by load; this list is
         // kept in sync with python
         var tempAliases = new List<string> { "foo", "bar", "baz", "qux" };
@@ -168,8 +181,7 @@ public class TeacherAgent : DialogueAgent
 
         // This needs to be called explicitly since EnvEntity.Start() calls are
         // not made yet
-        var truck = GameObject.Find($"truck_ep{Academy.Instance.EpisodeCount}");
-        var truckEnt = truck.GetComponent<EnvEntity>();
+        var truckEnt = _envEntitiesCache[$"truck_ep{Academy.Instance.EpisodeCount}"];
         truckEnt.ComputeBoxes();
 
         // Push the episode-initial utterance to queue, then utter
