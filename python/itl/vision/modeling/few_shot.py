@@ -284,7 +284,7 @@ def few_shot_search_img(model, enc_out, conds_lists):
 
         # Iterative bounding box refinement
         tmp = model.detr.model.decoder.bbox_embed[li](hidden_states)
-        new_reference_points = torch.special.logit(reference_points, eps=1e-6)
+        new_reference_points = torch.logit(reference_points, eps=1e-6)
         new_reference_points = tmp + new_reference_points
         new_reference_points = new_reference_points.sigmoid()
         reference_points = new_reference_points.detach()
@@ -340,7 +340,7 @@ def few_shot_search_img(model, enc_out, conds_lists):
     # Obtain (conditioned) bbox estimates
     delta_bbox = model.fs_search_bbox(embs_concat)
     cand_coords_logits = delta_bbox + \
-        torch.special.logit(last_reference_points[0,:,None,:])
+        torch.logit(last_reference_points[0,:,None,:])
 
     # Search compatibility scores based on support vs. candidate embeddings
     cand_scores = model.fs_search_match_dec(embs_concat)[..., 0]

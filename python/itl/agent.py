@@ -6,9 +6,8 @@ import copy
 import math
 import pickle
 import logging
+from PIL import ImageChops
 from collections import defaultdict
-# import readline
-# import rlcompleter
 
 import torch
 import numpy as np
@@ -23,7 +22,6 @@ from .practical_reasoning import PracticalReasonerModule
 from .actions import AgentCompositeActions
 from .lpmln import Literal, Polynomial
 from .lpmln.utils import wrap_args
-# from .utils.completer import DatasetImgsCompleter
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +46,8 @@ class ITLAgent:
         self.practical = PracticalReasonerModule()
         self.lt_mem = LongTermMemoryModule()
 
-        # Register 'composite' agent actions that require more than one modules to
-        # interact
+        # Register 'composite' agent actions that require more than one modules
+        # to interact
         self.comp_actions = AgentCompositeActions(self)
 
         # Load agent model from specified path
@@ -61,10 +59,6 @@ class ITLAgent:
 
         # Show visual UI and plots
         self.vis_ui_on = True
-
-        # Image file selection CUI
-        # self.dcompleter = DatasetImgsCompleter(cfg.paths.data_dir)
-        # readline.parse_and_bind("tab: complete")
 
         # (Fields below would categorize as 'working memory' in conventional
         # cognitive architectures...)
@@ -85,13 +79,6 @@ class ITLAgent:
         # (Temporary) Episodic memory; may be bumped up into proper long-term memory
         # component if KB maintenance with episodic memory works well
         self.episodic_memory = []
-
-    def __call__(self):
-        """Main function: Kickstart infinite ITL agent loop with user interface"""
-        logger.info("Sys> At any point, enter 'exit' to quit")
-
-        while True:
-            self.loop()
 
     def loop(self, v_usr_in=None, l_usr_in=None, pointing=None):
         """
@@ -132,7 +119,7 @@ class ITLAgent:
         )
 
         # Inform the language module of the visual context
-        self.lang.situate(self.vision.last_input, self.vision.scene)
+        self.lang.situate(self.vision.scene)
         self.symbolic.refresh()
 
         # Sensemaking from vision input only
@@ -224,7 +211,7 @@ class ITLAgent:
         """
         # Resolve path to checkpoint
         if ckpt_path.startswith(WB_PREFIX):
-            # Storing agent models in W&B; not implemented yet
+            # Loading agent models stored in W&B; not implemented yet
             raise NotImplementedError
 
             # wb_entity = os.environ.get("WANDB_ENTITY")
@@ -276,100 +263,45 @@ class ITLAgent:
                         
                         self.vision.load_weights()
 
-    def _vis_inp(self, usr_in=None):
-        """Image input prompt (Choosing from dataset for now)"""
-        self.vision.new_input = None
-        input_provided = usr_in is not None
+    def _vis_inp(self, usr_in):
+        """ Handle provided visual input """
+        # Test if new input is 'equal' to last input (if any)
+        if self.vision.last_input is None:
+            self.vision.new_input = True
+        else:
+            # Compare absolute pixel-by-pixel difference
+            image_diff = ImageChops.difference(usr_in, self.vision.last_input)
+            self.vision.new_input = image_diff.getbbox() is not None
 
-        # Register autocompleter for REPL
-        # readline.set_completer(self.dcompleter.complete)
+        if self.vision.new_input:
+            self.vision.last_input = usr_in
 
-        while True:
+    def _lang_inp(self, usr_in):
+        """ Handle provided language input (from user) """
+        if usr_in is None:
+            usr_in = []
+        elif not isinstance(usr_in, list):
+            assert isinstance(usr_in, str)
+            usr_in = [usr_in]
 
-            logger.debug("Sys> Choose an image to process")
-            if input_provided:
-                logger.debug(f"U> {usr_in}")
-            else:
-                logger.debug("Sys> Enter 'r' for random selection, 'n' for skipping new image input")
-                usr_in = input("U> ")
+        if len(usr_in) == 0:
+            self.lang.new_input = False
+        else:
+            self.lang.new_input = True
 
+            parsed_input = None
             try:
-                if usr_in == "n":
-                    logger.debug("Sys> Skipped image selection")
-                    break
-                elif usr_in == "r":
-                    raise NotImplementedError       # Let's disable this for a while...
-                    self.vision.new_input = self.dcompleter.sample()
-                elif usr_in == "exit":
-                    logger.debug("Sys> Terminating...")
-                    quit()
-                else:
-                    # if usr_in not in self.dcompleter:
-                    if not os.path.exists(usr_in):
-                        raise ValueError(f"Image file {usr_in} does not exist")
-                    self.vision.new_input = usr_in
-
-            except ValueError as e:
-                if input_provided:
-                    raise e
-                else:
-                    logger.info(f"Sys> {e}, try again")
-
-            else:
-                self.vision.last_input = self.vision.new_input
-                logger.info(f"Sys> Selected image file: {self.vision.new_input}")
-                break
-
-        # Restore default completer
-        # readline.set_completer(rlcompleter.Completer().complete)
-    
-    def _lang_inp(self, usr_in=None):
-        """Language input prompt (from user)"""
-        self.lang.new_input = None
-        input_provided = usr_in is not None
-
-        logger.debug("Sys> Awaiting user input...")
-        logger.debug("Sys> Enter 'n' for skipping language input")
-
-        while True:
-            if input_provided:
-                # User input may be a single string or list of strings; if a single
-                # string, wrap it into a singleton list. In current design, each usr_in
-                # list represents a sequence of utterances in a single dialogue turn.
-                if isinstance(usr_in, str):
-                    usr_in = [usr_in]
-                logger.info(f"U> {' '.join(usr_in)}")
-            else:
-                usr_in = input("U> ")
-
-            try:
-                if usr_in == "n":
-                    logger.debug("Sys> Skipped language input")
-                    break
-                elif usr_in == "exit":
-                    logger.debug("Sys> Terminating...")
-                    quit()
-                else:
-                    self.lang.new_input = self.lang.semantic.nl_parse(usr_in)
-                    break
-
+                parsed_input = self.lang.semantic.nl_parse(usr_in)
             except IndexError as e:
-                if input_provided:
-                    raise e
-                else:
-                    logger.info(f"Sys> Ungrammatical input or IndexError: {e.args}")
-            except ValueError as e:
-                if input_provided:
-                    raise e
-                else:
-                    logger.info(f"Sys> {e.args[0]}")
+                logger.info(str(e))
+            else:
+                self.lang.last_input = parsed_input
 
-    def _update_belief(self, pointing=None):
+    def _update_belief(self, pointing):
         """ Form beliefs based on visual and/or language input """
 
         if not (self.vision.new_input or self.lang.new_input):
             # No information whatsoever to make any belief updates
-            logger.debug("A> (Idling the moment away...)")
             return
 
         # Lasting storage of pointing info
@@ -402,11 +334,11 @@ class ITLAgent:
             ##                  Processing perceived inputs                  ##
             ###################################################################
 
-            if self.vision.new_input is not None or xb_updated:
+            if self.vision.new_input or xb_updated:
                 # Prior to resetting visual context, store current one into the
                 # episodic memory (visual perceptions & user language inputs),
                 # in the form of LP^MLN program fragments
-                if self.vision.new_input is not None:
+                if self.vision.new_input:
                     if (self.vision.scene is not None and
                         len(self.vision.scene) > 1 and
                         self.symbolic.concl_vis_lang is not None):
@@ -421,20 +353,18 @@ class ITLAgent:
                 )
                 vis_ui_on = False
 
-            if self.vision.new_input is not None:
+            if self.vision.new_input:
                 # Inform the language module of the visual context
-                self.lang.situate(self.vision.last_input, self.vision.scene)
+                self.lang.situate(self.vision.scene)
                 self.symbolic.refresh()
 
                 # Reset below on episode-basis
                 self.kb_snap = copy.deepcopy(self.lt_mem.kb)
 
             # Understand the user input in the context of the dialogue
-            if self.lang.new_input is not None and self.lang.new_input[0]["raw"] != "Correct.":
+            if self.lang.new_input and self.lang.last_input[0]["raw"] != "Correct.":
                 self.lang.dialogue.record = self.lang.dialogue.record[:ti_last]
-                self.lang.understand(
-                    self.lang.new_input, self.vision.last_input, pointing=pointing
-                )
+                self.lang.understand(self.lang.last_input, pointing=pointing)
 
             if self.vision.scene is not None:
                 # If a new entity is registered as a result of understanding the latest
@@ -460,12 +390,12 @@ class ITLAgent:
 
             dialogue_state = self.lang.dialogue.export_as_dict()
 
-            if self.vision.new_input is not None or xb_updated or kb_updated:
+            if self.vision.new_input or xb_updated or kb_updated:
                 # Sensemaking from vision input only
                 exported_kb = self.lt_mem.kb.export_reasoning_program()
                 self.symbolic.sensemake_vis(self.vision.scene, exported_kb)
 
-            if self.lang.new_input is not None:
+            if self.lang.new_input:
                 # Reference & word sense resolution to connect vision & discourse
                 self.symbolic.resolve_symbol_semantics(
                     dialogue_state, self.lt_mem.lexicon
@@ -907,8 +837,8 @@ class ITLAgent:
 
             if len(resolved_items) == 0:
                 # No resolvable agenda item any more
-                if (len(return_val) == 0 and self.lang.new_input is not None and
-                    self.lang.new_input[0]["raw"] != "Correct."):
+                if (len(return_val) == 0 and self.lang.new_input and
+                    self.lang.last_input[0]["raw"] != "Correct."):
                     # Nothing to add, acknowledge any user input
                     self.practical.agenda.append(("acknowledge", None))
                 else:
@@ -919,10 +849,5 @@ class ITLAgent:
                 resolved_items.reverse()
                 for i in resolved_items:
                     del self.practical.agenda[i]
-
-        # Act; in our scope only available actions are dialogue utterance generation
-        for act_type, act_data in return_val:
-            if act_type == "generate":
-                logger.info(f"A> {act_data}")
 
         return return_val

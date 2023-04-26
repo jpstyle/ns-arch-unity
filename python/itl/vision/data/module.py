@@ -10,7 +10,8 @@ import nltk
 import torch
 import networkx as nx
 import pytorch_lightning as pl
-from torch.utils.data import Dataset, DataLoader, default_collate
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data._utils.collate import default_collate
 
 from .vg_prepare import (
     download_and_unzip,

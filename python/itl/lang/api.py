@@ -22,14 +22,9 @@ class LanguageModule:
         )
         self.dialogue = DialogueManager()
 
-        self.vis_raw = None
-
         self.unresolved_neologisms = set()
 
-        # New language input buffer
-        self.new_input = None
-
-    def situate(self, vis_raw, vis_scene):
+    def situate(self, vis_scene):
         """
         Put entities in the physical environment into domain of discourse
         """
@@ -39,9 +34,6 @@ class LanguageModule:
 
         # Start a dialogue information state anew
         self.dialogue.refresh()
-
-        # Store raw visual perception so that it can be used during 'pointing' gesture
-        self.vis_raw = vis_raw
 
         # Incorporate parsed scene graph into dialogue context
         for oi, obj in vis_scene.items():
@@ -55,7 +47,7 @@ class LanguageModule:
         # Register these indices as names, for starters
         self.dialogue.referent_names = {i: i for i in self.dialogue.referents["env"]}
 
-    def understand(self, parses, vis_raw, pointing=None):
+    def understand(self, parses, pointing=None):
         """
         Parse language input into MRS, process into ASP-compatible form, and then
         update dialogue state.
@@ -132,39 +124,18 @@ class LanguageModule:
                 if rel["pos"] == "q":
                     # Demonstratives need pointing
                     if "sense" in rel and rel["sense"] == "dem":
-                        rels_with_pred = sorted([
-                            r for r in parse["relations"]["by_id"].values()
-                            if r["predicate"]==rel["predicate"]
-                        ], key=lambda r: r["crange"][0])
+                        matching_bboxes = [
+                            bbox for crange, bbox in pointing[si].items()
+                            if crange[0]>=rel["crange"][0] and crange[1]<=rel["crange"][1]
+                            # ERG parser includes punctuations in crange, test inclusion
+                        ] if pointing is not None else []
 
-                        point_target_ind = [
-                            r["handle"] for r in rels_with_pred
-                        ].index(rel["handle"])
-
-                        pointing_not_provided = pointing is None \
-                            or (rel["predicate"] not in pointing) \
-                            or (pointing[rel["predicate"]] is None) \
-                            or (pointing[rel["predicate"]][point_target_ind] is None)
-
-                        if pointing_not_provided:
-                            dem_bbox = None
+                        if len(matching_bboxes) > 0:
+                            dem_bbox = matching_bboxes[0]
                         else:
-                            dem_bbox = pointing[rel["predicate"]][point_target_ind]
+                            dem_bbox = None
 
-                        pointed = self.dialogue.dem_point(
-                            vis_raw, rel["predicate"], dem_bbox=dem_bbox
-                        )
-
-                        if pointing is not None:
-                            # Update token-to-bbox map of pointing if needed
-                            if rel["predicate"] in pointing:
-                                bboxes = pointing[rel["predicate"]]
-                            else:
-                                bboxes = [None] * len(rels_with_pred)
-
-                            bboxes[point_target_ind] = \
-                                self.dialogue.referents["env"][pointed]["bbox"]
-                            pointing[rel["predicate"]] = bboxes
+                        pointed = self.dialogue.dem_point(dem_bbox)
 
                         ri = r2i[rel["args"][0]]
                         clause_tag = se2i[(si, ref_map[rel["args"][0]]["source_ind"])]
@@ -174,40 +145,8 @@ class LanguageModule:
                     # Provided symbolic name
                     if rel["carg"] not in self.dialogue.referent_names:
                         # Couldn't resolve the name; explicitly ask again for name resolution
-                        rels_with_pred = sorted([
-                            r for r in parse["relations"]["by_id"].values()
-                            if r["predicate"]=="named" and r["carg"]==rel['carg']
-                        ], key=lambda r: r["crange"][0])
-
-                        point_target_ind = [
-                            r["handle"] for r in rels_with_pred
-                        ].index(rel["handle"])
-
-                        pointing_not_provided = pointing is None \
-                            or (rel["predicate"] not in pointing) \
-                            or (pointing[rel["predicate"]] is None) \
-                            or (pointing[rel["predicate"]][point_target_ind] is None)
-
-                        if pointing_not_provided:
-                            dem_bbox = None
-                        else:
-                            dem_bbox = pointing[rel["carg"]][point_target_ind]
-
-                        pointed = self.dialogue.dem_point(
-                            vis_raw, rel["carg"], dem_bbox=dem_bbox
-                        )
-                        self.dialogue.referent_names[rel["carg"]] = pointed
-
-                        if pointing is not None:
-                            # Update token-to-bbox map of pointing if needed
-                            if rel["carg"] in pointing:
-                                bboxes = pointing[rel["carg"]]
-                            else:
-                                bboxes = [None] * len(rels_with_pred)
-
-                            bboxes[point_target_ind] = \
-                                self.dialogue.referents["env"][pointed]["bbox"]
-                            pointing[rel["carg"]] = bboxes
+                        # TODO: Update to comply with recent changes
+                        raise NotImplementedError
 
                     ri = r2i[rel["args"][0]]
                     clause_tag = se2i[(si, ref_map[rel["args"][0]]["source_ind"])]
@@ -324,7 +263,7 @@ class LanguageModule:
 
     def acknowledge(self):
         """ Push an acknowledging utterance to generation buffer """
-        self.dialogue.to_generate.append((None, "OK."))
+        self.dialogue.to_generate.append((None, "OK.", {}))
 
     def generate(self):
         """ Flush the buffer of utterances prepared """
@@ -332,14 +271,14 @@ class LanguageModule:
             return_val = []
 
             new_record = []
-            for logical_forms, surface_form in self.dialogue.to_generate:
+            for logical_forms, surface_form, dem_refs in self.dialogue.to_generate:
                 if logical_forms is None:
                     logical_forms = (None, None)
 
                 new_record.append((logical_forms, surface_form))
 
                 # NL utterance to log/print
-                return_val.append(("generate", surface_form))
+                return_val.append(("generate", (surface_form, dem_refs)))
 
             self.dialogue.record.append(("A", new_record))
 

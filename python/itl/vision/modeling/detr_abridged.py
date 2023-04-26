@@ -120,21 +120,28 @@ def detr_dec_outputs(
     # 3-layer FFN to predict bounding boxes coordinates (bbox regression branch)
     delta_bbox = detr_model.model.decoder.bbox_embed[-1](object_query_embedding)
     enc_outputs_coord_logits = delta_bbox + output_proposals
+    enc_outputs_objectness_logits = enc_outputs_class[..., 0]
 
     # only keep top scoring `config.two_stage_num_proposals` proposals
     topk = detr_cfg.two_stage_num_proposals
-    topk_proposals = torch.topk(enc_outputs_class[..., 0], topk, dim=1)[1]
+    topk_proposals = torch.topk(enc_outputs_objectness_logits, topk, dim=1)[1]
     topk_coords_logits = torch.gather(
         enc_outputs_coord_logits, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4)
+    )
+    topk_coords_objectness_logits = torch.gather(
+        enc_outputs_objectness_logits, 1, topk_proposals
     )
 
     topk_coords_logits = topk_coords_logits.detach()
     reference_points = topk_coords_logits.sigmoid()
 
+    topk_coords_objectness_logits = topk_coords_objectness_logits.detach()
+    topk_objectness_scores = topk_coords_objectness_logits.sigmoid()
+
     # Add proposals from provided bboxes
     reference_points = torch.cat([bboxes[None], reference_points], dim=1)
     reference_points_logits = torch.cat([
-        torch.special.logit(bboxes[None], eps=1e-6), topk_coords_logits
+        torch.logit(bboxes[None], eps=1e-6), topk_coords_logits
     ], dim=1)
 
     pos_trans_out = detr_model.model.get_proposal_pos_embed(reference_points_logits)
@@ -164,7 +171,7 @@ def detr_dec_outputs(
 
         # Iterative bounding box refinement
         tmp = detr_model.model.decoder.bbox_embed[i](hidden_states)
-        new_reference_points = torch.special.logit(reference_points, eps=1e-6)
+        new_reference_points = torch.logit(reference_points, eps=1e-6)
         if lock_provided_boxes:
             # ... except for proposals with bboxes provided
             new_reference_points[:,bboxes.shape[0]:] = \
@@ -176,6 +183,7 @@ def detr_dec_outputs(
         reference_points = new_reference_points.detach()
 
     # Return parts of final decoder layer output corresponding to the provided
-    # bboxes, and last layer's reference point output (needed for final bounding
-    # box computation in ensemble prediction)
-    return hidden_states, reference_points
+    # bboxes, last layer's reference point output (needed for final bounding
+    # box computation in ensemble prediction) and the encoder objectness score
+    # outputs as default fallback for cases where class inventory is empty
+    return hidden_states, reference_points, topk_objectness_scores

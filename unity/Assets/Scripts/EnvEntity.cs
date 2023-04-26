@@ -155,6 +155,18 @@ public class EnvEntity : MonoBehaviour
         return closestChildren;
     }
 
+    public static EnvEntity FindByObjectName(string name)
+    {
+        // Fetch EnvEntity with matching uid (if exists)
+        var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
+        foreach (var ent in allEntities)
+        {
+            if (ent.gameObject.name == name) return ent;
+        }
+
+        return null;
+    }
+    
     public static EnvEntity FindByUid(string uid)
     {
         // Fetch EnvEntity with matching uid (if exists)

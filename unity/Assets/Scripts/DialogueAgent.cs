@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.MLAgents;
@@ -17,14 +18,14 @@ public class DialogueAgent : Agent
 
     // Message communication buffer queues
     public readonly Queue<RecordData> incomingMsgBuffer = new();
-    public readonly Queue<(string, Dictionary<(int, int), Rect>)> outgoingMsgBuffer = new();
+    public readonly Queue<(string, Dictionary<(int, int), EntityRef>)> outgoingMsgBuffer = new();
 
     // Communication side channel to Python backend for requesting decisions
     protected string channelUuid;
     protected MessageSideChannel backendMsgChannel;
     
     // Camera sensor component
-    protected CameraSensorComponent cameraSensor;
+    private CameraSensorComponent _cameraSensor;
 
     // Behavior type as MLAgent
     private BehaviorType _behaviorType;
@@ -40,20 +41,14 @@ public class DialogueAgent : Agent
 
     public void Start()
     {
-        cameraSensor = GetComponent<CameraSensorComponent>();
+        _cameraSensor = GetComponent<CameraSensorComponent>();
         _behaviorType = GetComponent<BehaviorParameters>().BehaviorType;
         _nextTimeToAct = Time.time;
     }
 
     public override void OnEpisodeBegin()
     {
-        // Flush outgoing message buffer until server-side request to initiate interaction
-        while (outgoingMsgBuffer.Count > 0)
-        {
-            var outgoingMessage = outgoingMsgBuffer.Dequeue();
-            if (outgoingMessage.Item1 == "[EP_START]")
-                InitiateInteraction();
-        }
+        Utter();
     }
 
     public void Update()
@@ -73,7 +68,11 @@ public class DialogueAgent : Agent
             // to minimize communication of visual observation data
             if (incomingMsgBuffer.Count == 0) return;
 
-            // Unprocessed incoming messages exist; process and consult backend 
+            // Unprocessed incoming messages exist; process and consult backend
+            var speakers = new List<string>();
+            var utterances = new List<string>();
+            var demRefs = new List<Dictionary<(int, int), EntityRef>>();
+
             while (incomingMsgBuffer.Count > 0)
             {
                 // Fetch single message record from queue
@@ -81,22 +80,23 @@ public class DialogueAgent : Agent
                 
                 // (If any) Translate EnvEntity reference by UID to box coordinates w.r.t.
                 // this agent's camera sensor
-                var demRefs = new Dictionary<(int, int), Rect>();
+                var demRefsForUtt = new Dictionary<(int, int), EntityRef>();
                 foreach (var (range, entUid) in incomingMessage.demonstrativeReferences)
                 {
                     // Retrieve referenced EnvEntity and fetch absolute box coordinates w.r.t.
                     // this agent's camera's target display screen
                     var refEnt = EnvEntity.FindByUid(entUid);
-                    var screenAbsRect = refEnt.boxes[cameraSensor.Camera.targetDisplay];
-                    demRefs[range] = ScreenAbsRectToSensorRelRect(screenAbsRect);
+                    var screenAbsRect = refEnt.boxes[_cameraSensor.Camera.targetDisplay];
+                    demRefsForUtt[range] = new EntityRef(ScreenAbsRectToSensorRelRect(screenAbsRect));
                 }
 
-                // Now send message via side channel
-                backendMsgChannel.SendMessageToBackend(
-                    incomingMessage.speaker, incomingMessage.utterance, demRefs
-                );
+                speakers.Add(incomingMessage.speaker);
+                utterances.Add(incomingMessage.utterance);
+                demRefs.Add(demRefsForUtt);
             }
 
+            // Now send message via side channel and wait for decision
+            backendMsgChannel.SendMessageToBackend(speakers, utterances, demRefs);
             RequestDecision();
         }
     }
@@ -104,21 +104,32 @@ public class DialogueAgent : Agent
     protected void Utter()
     {
         while (outgoingMsgBuffer.Count > 0) {
-            var (utterance, demRefBoxes) = outgoingMsgBuffer.Dequeue();
+            var (utterance, demRefs) = outgoingMsgBuffer.Dequeue();
 
-            if (demRefBoxes is not null && demRefBoxes.Count > 0)
+            if (demRefs is not null && demRefs.Count > 0)
             {
                 // Need to resolve demonstrative reference boxes to corresponding EnvEntity (uid)
-                var demRefs = new Dictionary<(int, int), string>();
-                var targetDisplay = cameraSensor.Camera.targetDisplay;
-                
-                foreach (var (range, sensorRelRect) in demRefBoxes)
+                var demRefsResolved = new Dictionary<(int, int), string>();
+                var targetDisplay = _cameraSensor.Camera.targetDisplay;
+
+                foreach (var (range, demRef) in demRefs)
                 {
-                    var screenAbsRect = SensorRelRectToScreenAbsRect(sensorRelRect);
-                    demRefs[range] = EnvEntity.FindByBox(screenAbsRect, targetDisplay).uid;
+                    switch (demRef.refType)
+                    {
+                        case EntityRefType.BBox:
+                            var screenAbsRect = SensorRelRectToScreenAbsRect(demRef.bboxRef);
+                            demRefsResolved[range] = EnvEntity.FindByBox(screenAbsRect, targetDisplay).uid;
+                            break;
+                        case EntityRefType.String:
+                            demRefsResolved[range] = EnvEntity.FindByObjectName(demRef.stringRef).uid;
+                            break;
+                        default:
+                            // Shouldn't reach here but anyways
+                            throw new Exception("Invalid reference data type?");
+                    }
                 }
 
-                dialogueUI.CommitUtterance(dialogueParticipantID, utterance, demRefs);
+                dialogueUI.CommitUtterance(dialogueParticipantID, utterance, demRefsResolved);
             }
             else
                 // No demonstrative references to process and resolve
@@ -129,9 +140,9 @@ public class DialogueAgent : Agent
     // To be overridden by children classes, do nothing
     protected virtual void InitiateInteraction() {}
 
-    protected Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
+    private Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
     {
-        var targetDisplay = cameraSensor.Camera.targetDisplay;
+        var targetDisplay = _cameraSensor.Camera.targetDisplay;
         var screenWidth = Display.displays[targetDisplay].systemWidth;
         var screenHeight = Display.displays[targetDisplay].systemHeight;
 
@@ -144,7 +155,7 @@ public class DialogueAgent : Agent
         // To CameraSensor-relative coordinates; transform x-coordinates according to
         // ratio of aspect ratios, while leaving y-coordinates untouched
         var screenAspectRatio = (float)screenWidth / screenHeight;
-        var sensorAspectRatio = (float)cameraSensor.Width / cameraSensor.Height;
+        var sensorAspectRatio = (float)_cameraSensor.Width / _cameraSensor.Height;
         var arRatio = screenAspectRatio / sensorAspectRatio;
         var sensorRelRectX = (screenRelRectX - 0.5f) * arRatio + 0.5f;
         var sensorRelRectWidth = screenRelRectWidth * arRatio;
@@ -154,14 +165,14 @@ public class DialogueAgent : Agent
     
     private Rect SensorRelRectToScreenAbsRect(Rect sensorRelRect)
     {
-        var targetDisplay = cameraSensor.Camera.targetDisplay;
+        var targetDisplay = _cameraSensor.Camera.targetDisplay;
         var screenWidth = Display.displays[targetDisplay].systemWidth;
         var screenHeight = Display.displays[targetDisplay].systemHeight;
 
         // To screen-relative coordinates; transform x-coordinates according to
         // ratio of aspect ratios, while leaving y-coordinates untouched
         var screenAspectRatio = (float)screenWidth / screenHeight;
-        var sensorAspectRatio = (float)cameraSensor.Width / cameraSensor.Height;
+        var sensorAspectRatio = (float)_cameraSensor.Width / _cameraSensor.Height;
         var arRatio = screenAspectRatio / sensorAspectRatio;
         var screenRelRectX = (sensorRelRect.x - 0.5f) / arRatio + 0.5f;
         var screenRelRectY = sensorRelRect.y;

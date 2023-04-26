@@ -17,19 +17,19 @@ def visualize_sg_predictions(img, scene, lexicon=None):
 
     # Prepare labels for class/attribute/relation predictions; show only the categories
     # with the highest scores
-    cls_argmaxs = [obj["pred_classes"].argmax(axis=-1) for obj in scene.values()]
-    cls_maxs = [obj["pred_classes"].max(axis=-1) for obj in scene.values()]
-    cls_labels = {
-        oi: (lexicon["cls"].get(i, f"cls_{i}"), v)
-        for oi, i, v in zip(scene, cls_argmaxs, cls_maxs)
-    }
+    # cls_argmaxs = [obj["pred_classes"].argmax(axis=-1) for obj in scene.values()]
+    # cls_maxs = [obj["pred_classes"].max(axis=-1) for obj in scene.values()]
+    # cls_labels = {
+    #     oi: (lexicon["cls"].get(i, f"cls_{i}"), v)
+    #     for oi, i, v in zip(scene, cls_argmaxs, cls_maxs)
+    # }
 
-    att_argmaxs = [obj["pred_attributes"].argmax(axis=-1) for obj in scene.values()]
-    att_maxs = [obj["pred_attributes"].max(axis=-1) for obj in scene.values()]
-    att_labels = {
-        oi: (lexicon["att"].get(i, f"att_{i}"), v)
-        for oi, i, v in zip(scene, att_argmaxs, att_maxs)
-    }
+    # att_argmaxs = [obj["pred_attributes"].argmax(axis=-1) for obj in scene.values()]
+    # att_maxs = [obj["pred_attributes"].max(axis=-1) for obj in scene.values()]
+    # att_labels = {
+    #     oi: (lexicon["att"].get(i, f"att_{i}"), v)
+    #     for oi, i, v in zip(scene, att_argmaxs, att_maxs)
+    # }
 
     # rel_argmaxs = [
     #     { obj2: rels.argmax(axis=-1) for obj2, rels in obj["pred_relations"].items() }
@@ -79,11 +79,11 @@ def visualize_sg_predictions(img, scene, lexicon=None):
             ax.add_patch(r)
 
             # text_label = f"{oi}: {float(scene[oi]['pred_objectness']):.2f}:"
-            text_label = f"{oi}:"
-            text_label += f" {cls_labels[oi][0]} ({float(cls_labels[oi][1]):.2f})"
-            text_label += f" / {att_labels[oi][0]} ({float(att_labels[oi][1]):.2f})"
-            text_label = ax.text(x1, y1, text_label, color="w")
-            text_label.set_bbox({ "facecolor": "r", "alpha": 0.5, "edgecolor": "r" })
+            # text_label = f"{oi}:"
+            # text_label += f" {cls_labels[oi][0]} ({float(cls_labels[oi][1]):.2f})"
+            # text_label += f" / {att_labels[oi][0]} ({float(att_labels[oi][1]):.2f})"
+            # text_label = ax.text(x1, y1, text_label, color="w")
+            # text_label.set_bbox({ "facecolor": "r", "alpha": 0.5, "edgecolor": "r" })
 
         # # Relations; show only those between objects with high objectness scores
         # occurred_rels = []

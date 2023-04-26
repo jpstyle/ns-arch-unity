@@ -135,7 +135,7 @@ class AgentCompositeActions:
         ques_translated = f"How are {conc_names[0]} and {conc_names[1]} different?"
 
         self.agent.lang.dialogue.to_generate.append(
-            ((None, ques_logical_form), ques_translated)
+            ((None, ques_logical_form), ques_translated, {})
         )
 
         # No need to request concept differences again for this particular case
@@ -228,14 +228,6 @@ class AgentCompositeActions:
         # Compute raw answer candidates by appropriately querying compiled BJT
         answers_raw = self.agent.symbolic.query(bjt_v, *question)
 
-        if q_vars is not None:
-            # (Temporary) Enforce non-part concept as answer. This may be enforced in a more
-            # elegant way in the future...
-            answers_raw = {
-                ans: score for ans, score in answers_raw.items()
-                if ans[0].split("_")[0] == "cls" and int(ans[0].split("_")[1]) >= 11
-            }
-
         # Pick out an answer to deliver; maximum confidence
         if len(answers_raw) > 0:
             max_score = max(answers_raw.values())
@@ -261,18 +253,12 @@ class AgentCompositeActions:
                 ...
         else:
             # Wh- question
-
-            # NL tokens to replace and values with which to replace them
-            replace_targets = []
-            replace_values = []
-
             for (qv, is_pred), ans in zip(q_vars, answer_selected):
                 # Referent index in the new answer utterance
                 ri = qv_to_dis_ref[qv]
 
-                # Char range in original utterance, referring to expression to be replaced
-                tgt = dialogue_state["referents"]["dis"][qv]["provenance"]
-                replace_targets.append(tgt)
+                # # Char range in original utterance, referring to expression to be replaced
+                # tgt = dialogue_state["referents"]["dis"][qv]["provenance"]
 
                 # Value to replace the designated wh-quantified referent with
                 if is_pred:
@@ -282,14 +268,13 @@ class AgentCompositeActions:
                         # "I am not sure" as answer for these cases
                         self.agent.lang.dialogue.to_generate.append(
                             # Will just pass None as "logical form" for this...
-                            (None, "I am not sure.")
+                            (None, "I am not sure.", {})
                         )
                         return
                     else:
                         ans = ans.split("_")
                         ans = (int(ans[1]), ans[0])
 
-                        is_named = False
                         nl_val = self.agent.lt_mem.lexicon.d2s[ans][0][0]
 
                         # Update cognitive state w.r.t. value assignment and word sense
@@ -304,23 +289,28 @@ class AgentCompositeActions:
                         )
                 else:
                     # Entity by their constant name handle
-                    is_named = True
                     nl_val = ans
 
                     # TODO?: Logical form for this case
                     raise NotImplementedError
-
-                replace_values.append((nl_val, is_named))
 
             # Split camelCased predicate name
             splits = re.findall(r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", nl_val)
             splits = [w[0].lower()+w[1:] for w in splits]
             answer_translated = f"This is a {' '.join(splits)}."
 
+        # Obtain relative bbox coordinates for demonstrative reference (xywh)
+        i_w, i_h = self.agent.vision.last_input.size
+        dem_bbox = dialogue_state["referents"]["env"][pred_var_to_ent_ref[qv]]["bbox"]
+        dem_bbox = [
+            dem_bbox[0] / i_w, dem_bbox[1] / i_h,
+            (dem_bbox[2]-dem_bbox[0]) / i_w, (dem_bbox[3]-dem_bbox[1]) / i_h,
+        ]
+
         # Push the translated answer to buffer of utterances to generate
-        self.agent.lang.dialogue.to_generate.append(
-            ((answer_logical_form, None), answer_translated)
-        )
+        self.agent.lang.dialogue.to_generate.append((
+            (answer_logical_form, None), answer_translated, { (0, 4): dem_bbox }
+        ))
 
     def _search_specs_from_kb(self, question, ref_bjt):
         """

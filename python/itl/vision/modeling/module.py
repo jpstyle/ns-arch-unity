@@ -292,10 +292,11 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
         encoder_outputs, valid_ratios, spatial_shapes, \
             level_start_index, mask_flatten = encoder_outputs_all
 
-        decoder_outputs, last_reference_points = detr_dec_outputs(
-            self.detr, encoder_outputs, bboxes, lock_provided_boxes,
-            valid_ratios, spatial_shapes, level_start_index, mask_flatten
-        )
+        decoder_outputs, last_reference_points, enc_objectness_scores = \
+            detr_dec_outputs(
+                self.detr, encoder_outputs, bboxes, lock_provided_boxes,
+                valid_ratios, spatial_shapes, level_start_index, mask_flatten
+            )
 
         # Class/attribute-centric feature vectors
         cls_embeddings = self.fs_embed_cls(decoder_outputs[0])
@@ -308,7 +309,7 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
         last_bbox_embed = self.detr.bbox_embed[dec_last_layer_ind-1]
         delta_bbox = last_bbox_embed(decoder_outputs[0])
 
-        final_bboxes = delta_bbox + torch.special.logit(last_reference_points[0])
+        final_bboxes = delta_bbox + torch.logit(last_reference_points[0])
         final_bboxes = final_bboxes.sigmoid()
         final_bboxes = torch.cat([bboxes, final_bboxes[bboxes.shape[0]:]])
 
@@ -319,7 +320,7 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
         ], dim=-1)
         final_bboxes = box_convert(final_bboxes, "cxcywh", "xywh")
 
-        return cls_embeddings, att_embeddings, final_bboxes
+        return cls_embeddings, att_embeddings, final_bboxes, enc_objectness_scores[0]
 
     def search(self, image, conds_lists, k=None):
         """
@@ -428,7 +429,7 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
         encoder_outputs, valid_ratios, spatial_shapes, \
             level_start_index, mask_flatten = encoder_outputs_all
 
-        decoder_outputs, _ = detr_dec_outputs(
+        decoder_outputs, _, _ = detr_dec_outputs(
             self.detr, encoder_outputs, bboxes, True,
             valid_ratios, spatial_shapes, level_start_index, mask_flatten
         )

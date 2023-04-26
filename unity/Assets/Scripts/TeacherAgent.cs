@@ -133,8 +133,7 @@ public class TeacherAgent : DialogueAgent
         {
             Physics.Simulate(Time.fixedDeltaTime);
         }
-        Debug.Log(truck.transform.position);
-        // Physics.simulationMode = SimulationMode.FixedUpdate;
+        Physics.simulationMode = SimulationMode.FixedUpdate;
 
         // Clean dialogue history and add new episode header record
         dialogueUI.ClearHistory();
@@ -145,6 +144,7 @@ public class TeacherAgent : DialogueAgent
         {
             [truck.name] = truck.GetComponent<EnvEntity>()
         };
+        _envEntitiesCache[truck.name].ComputeBoxes();
     }
 
     public override void OnActionReceived(ActionBuffers actionBuffers)
@@ -164,34 +164,5 @@ public class TeacherAgent : DialogueAgent
             var discreteActionBuffers = actionBuffers.DiscreteActions;
             discreteActionBuffers[0] = 1;      // 'Utter'
         }
-    }
-
-    protected override void InitiateInteraction()
-    {
-        // Teacher-side episode initiation; current version: find truck and say
-        // "This is a X."
-
-        // Temp: Arbitrary single-token names for truck types by load; this list is
-        // kept in sync with python
-        var tempAliases = new List<string> { "foo", "bar", "baz", "qux" };
-
-        var envParams = Academy.Instance.EnvironmentParameters;
-        var loadTypeIdx = (int)envParams.GetWithDefault("load_type", 0f);
-        var alias = tempAliases[loadTypeIdx];
-
-        // This needs to be called explicitly since EnvEntity.Start() calls are
-        // not made yet
-        var truckEnt = _envEntitiesCache[$"truck_ep{Academy.Instance.EpisodeCount}"];
-        truckEnt.ComputeBoxes();
-
-        // Push the episode-initial utterance to queue, then utter
-        var utterance = $"This is a {alias}.";
-        var screenAbsRect = truckEnt.boxes[cameraSensor.Camera.targetDisplay];
-        var demRefs = new Dictionary<(int, int), Rect>
-        {
-            [(10, 13)] = ScreenAbsRectToSensorRelRect(screenAbsRect)
-        };
-        outgoingMsgBuffer.Enqueue((utterance, demRefs));
-        Utter();
     }
 }

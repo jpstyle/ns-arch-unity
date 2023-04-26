@@ -12,6 +12,7 @@ from itertools import product
 
 import tqdm
 import torch
+import wandb
 import numpy as np
 import pytorch_lightning as pl
 from dotenv import find_dotenv, load_dotenv
@@ -88,9 +89,8 @@ class VisionModule:
                 wb_run_id, wb_alias = wb_path
 
             wb_full_path = f"{wb_entity}/{wb_project}/model-{wb_run_id}:{wb_alias}"
-            local_ckpt_path = WandbLogger.download_artifact(
-                artifact=wb_full_path,
-                save_dir=os.path.join(
+            local_ckpt_path = wandb.Api().artifact(wb_full_path).download(
+                root=os.path.join(
                     self.cfg.paths.assets_dir, "vision_models", "wandb", wb_run_id
                 )
             )
@@ -99,10 +99,10 @@ class VisionModule:
                 os.path.join(local_ckpt_path, f"model_{wb_alias}.ckpt")
             )
             local_ckpt_path = os.path.join(local_ckpt_path, f"model_{wb_alias}.ckpt")
-            logger.info(F"Loading few-shot component weights from {wb_full_path}")
+            logger.info(f"Loading few-shot component weights from {wb_full_path}")
         else:
             local_ckpt_path = self.fs_model_path
-            logger.info(F"Loading few-shot component weights from {local_ckpt_path}")
+            logger.info(f"Loading few-shot component weights from {local_ckpt_path}")
 
         ckpt = torch.load(local_ckpt_path)
         self.model.load_state_dict(ckpt["state_dict"], strict=False)
@@ -141,7 +141,8 @@ class VisionModule:
             # Prediction modes
             if bboxes is None and specs is None:
                 # Full (ensemble) prediction
-                cls_embeddings, att_embeddings, bboxes_out = self.model(image)
+                cls_embeddings, att_embeddings, bboxes_out, objectness_scores \
+                    = self.model(image)
                 cls_embeddings = cls_embeddings.cpu().numpy()
                 att_embeddings = att_embeddings.cpu().numpy()
                 bboxes_out = box_convert(bboxes_out, "xywh", "xyxy")
@@ -152,21 +153,29 @@ class VisionModule:
                 # making per-concept prediction on the returned embeddings, and taking
                 # max across class concepts. This essentially implements closed-set
                 # prediction... Later I could simply add objectness predictor head.
-                cls_probs = [None] * self.inventories.cls
-                for ci, clf in exemplars.binary_classifiers["cls"].items():
-                    if clf is not None:
-                        cls_probs[ci] = torch.tensor(
-                            clf.predict_proba(cls_embeddings)[:,1]
-                        )
-                    else:
-                        # If binary classifier is None, either positive or negative
-                        # exemplar set doesn't exist... Fall back to some default
-                        # confidence
-                        cls_probs[ci] = torch.full((cls_embeddings.shape[0],), DEF_CON) \
-                            if len(exemplars.exemplars_pos["cls"][ci]) > 0 \
-                            else torch.full((cls_embeddings.shape[0],), 1-DEF_CON)
-                cls_probs = torch.stack(cls_probs, dim=-1)
-                objectness_scores = cls_probs.max(dim=-1).values.to(self.model.device)
+                if self.inventories.cls > 0:
+                    cls_probs = [None] * self.inventories.cls
+                    for ci, clf in exemplars.binary_classifiers["cls"].items():
+                        if clf is not None:
+                            cls_probs[ci] = torch.tensor(
+                                clf.predict_proba(cls_embeddings)[:,1]
+                            )
+                        else:
+                            # If binary classifier is None, either positive or negative
+                            # exemplar set doesn't exist... Fall back to some default
+                            # confidence
+                            cls_probs[ci] = torch.full((cls_embeddings.shape[0],), DEF_CON) \
+                                if len(exemplars.exemplars_pos["cls"][ci]) > 0 \
+                                else torch.full((cls_embeddings.shape[0],), 1-DEF_CON)
+                    cls_probs = torch.stack(cls_probs, dim=-1)
+
+                    # Overwrite the intermediate objectness_scores from encoder with max values
+                    # of probabilities across classes
+                    objectness_scores = cls_probs.max(dim=-1).values.to(self.model.device)
+                else:
+                    # Quite rare edge case where class inventory is empty, for robustness' sake
+                    cls_probs = torch.empty(objectness_scores.shape[0], 0).to(self.model.device)
+                    # No need to overwrite objectness_scores here
 
                 # Run NMS and leave top k predictions
                 kept_indices = nms(bboxes_out, objectness_scores, self.NMS_THRES)
@@ -230,7 +239,7 @@ class VisionModule:
                         box_convert(torch.tensor(bb["bbox"]), bb["bbox_mode"], "xywh")
                         for bb in bboxes.values()
                     ]).to(self.model.device)
-                    cls_embeddings, att_embeddings, bboxes_out = self.model(
+                    cls_embeddings, att_embeddings, bboxes_out, _ = self.model(
                         self.last_input, bboxes_in
                     )
                     incr_cls_embeddings = cls_embeddings[:len(bboxes)].cpu().numpy()
@@ -273,7 +282,7 @@ class VisionModule:
                         proposals = box_convert(proposals[:,0,:], "xyxy", "xywh")
 
                         # Predict on the proposals
-                        cls_embeddings, att_embeddings, bboxes_out = self.model(
+                        cls_embeddings, att_embeddings, bboxes_out, _ = self.model(
                             self.last_input, proposals, lock_provided_boxes=False
                         )
                         cls_embeddings = cls_embeddings[:len(proposals)].cpu().numpy()
@@ -391,7 +400,7 @@ class VisionModule:
                     # Register new objects into the existing scene
                     self.scene[oi] = {
                         "pred_box": bb.cpu().numpy(),
-                        # "pred_objectness": det_data["score"],
+
                         "pred_classes": np.stack([
                             exemplars.binary_classifiers["cls"][ci].predict_proba(
                                 cls_emb[None]
@@ -403,7 +412,9 @@ class VisionModule:
                                 else np.array([DEF_CON, 1.0-DEF_CON])
                             )
                             for ci in range(self.inventories.cls)
-                        ])[:,1],
+                        ])[:,1]
+                        if self.inventories.cls > 0 else np.empty(0, dtype=np.float32),
+
                         "pred_attributes": np.stack([
                             exemplars.binary_classifiers["att"][ai].predict_proba(
                                 att_emb[None]
@@ -415,7 +426,9 @@ class VisionModule:
                                 else np.array([DEF_CON, 1.0-DEF_CON])
                             )
                             for ai in range(self.inventories.att)
-                        ])[:,1],
+                        ])[:,1]
+                        if self.inventories.att > 0 else np.empty(0, dtype=np.float32),
+
                         "pred_relations": {
                             **{
                                 oj: np.zeros(self.inventories.rel)
