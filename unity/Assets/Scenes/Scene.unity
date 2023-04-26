@@ -410,7 +410,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: 902a82e9aaf114d9188bc5d1adcaa170, type: 2}
+  - {fileID: 2100000, guid: 5eb08d5791a93e77e81117380f661c50, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -439,7 +439,7 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 720591710}
-  m_Mesh: {fileID: 8627667829549603236, guid: a24ba6bd4e196ff0b82d6c965ced56b4, type: 3}
+  m_Mesh: {fileID: 8627667829549603236, guid: 9c3b0b146b8e957d2915b76bbd3e45b5, type: 3}
 --- !u!4 &720591713
 Transform:
   m_ObjectHideFlags: 0
@@ -716,7 +716,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: 942ab92704367d60f8b56be4d9a5ebf0, type: 2}
+  - {fileID: 2100000, guid: 0e46d75fffafec85f88a15e3a25b5dc1, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -1056,22 +1056,22 @@ MonoBehaviour:
   dialogueParticipantID: Teacher
   dialogueUI: {fileID: 0}
   truckTypes:
-  - {fileID: 401681434111047772, guid: 523f552232fb6fcd8a1f93afe281e075, type: 3}
-  - {fileID: 1416825032301622858, guid: 9254e626e32dcac118082f4b7a63e8f0, type: 3}
-  - {fileID: 2267716036211848228, guid: cde94ff4d48deb36db49a4651282bce3, type: 3}
+  - {fileID: 5168060899807685673, guid: b3cb0b31f9d7dde948c6cc12a538432f, type: 3}
+  - {fileID: 145096244665647579, guid: 5a952843e69d8816dbe3b062a2831333, type: 3}
+  - {fileID: 5814628141197537436, guid: e465e6891841f3d8d9c4084b92d501be, type: 3}
   cabinTypes:
-  - {fileID: 8893213947901317307, guid: cdb8939adf31edc8e8e76e43cdf0dde8, type: 3}
-  - {fileID: 5196699978009161719, guid: a053795c4debdc455b00de96d0a0d67e, type: 3}
+  - {fileID: 2949065247790984902, guid: 12a27d7a213d6f8328a20020250dad82, type: 3}
+  - {fileID: 529572093487759519, guid: 006d10dbcd78f3490840087a3dbc7a6b, type: 3}
   loadTypes:
-  - {fileID: 6978100460265061143, guid: ea366623517e1c2da9a08299249505ad, type: 3}
-  - {fileID: 6597490042761249520, guid: 17a967fca21bd926c8d0cfc12c0e6ac7, type: 3}
-  - {fileID: 7324126339588020517, guid: 29fa40ad8b47653369a131073f657c8e, type: 3}
-  - {fileID: 6194311370607085127, guid: 637a92c89afe354c58e07dc60a87cc9a, type: 3}
+  - {fileID: 2778262593457678370, guid: db0b40214ced5f2469105789823aee6a, type: 3}
+  - {fileID: 290069892407523909, guid: e33de51125212cce5a5a9676441fbefa, type: 3}
+  - {fileID: 4265345477261016398, guid: ee3c5408a1f721115aff2900ea12189e, type: 3}
+  - {fileID: 2454849340552057947, guid: 113c5e9296d800d27b2b63939eee0473, type: 3}
   centerChassisTypes:
-  - {fileID: 482243327203288385, guid: 3314dab42bae757fb9c35f5963745a74, type: 3}
-  - {fileID: 4869122489112284051, guid: 8036bb11dfcf1137fb9db404c39422a8, type: 3}
-  - {fileID: 8009163723600880425, guid: 058aebee505d1f4bd9d7f020f67b290b, type: 3}
-  - {fileID: 584268039852840913, guid: 883b256f509011c78b79ce1404bd962a, type: 3}
+  - {fileID: 3057356756438121794, guid: f801c812d11786af9bad16bbf39c49ba, type: 3}
+  - {fileID: 1626345510092331421, guid: 840672daf7b7e11f48dd9726b9056588, type: 3}
+  - {fileID: 4531940676182110155, guid: fa607ee5ebcdd7cb791b1e2f241a0303, type: 3}
+  - {fileID: 3281324660702431920, guid: a13bd4a5eb3f7d238a7eb2097ec5c2d7, type: 3}
   colors:
   - {fileID: 2100000, guid: 80e65606f94dd9f5997dc5b6950c2ffd, type: 2}
   - {fileID: 2100000, guid: 718d5a7fce7d0bdf5ab93ce37c3a27d9, type: 2}

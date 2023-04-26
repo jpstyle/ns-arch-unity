@@ -24,7 +24,7 @@ wandb/
 /unity/[Mm]emoryCaptures/
 
 # Some assets may be unnecessary for commits or sensitive (license issue, etc.)
-/unity/[Aa]ssets/Models/
+# /unity/[Aa]ssets/Models/
 /unity/[Aa]ssets/ML-Agents/
 
 # Ignore all .meta files

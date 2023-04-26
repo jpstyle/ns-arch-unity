@@ -37,7 +37,7 @@ public class DialogueAgent : Agent
 
     // For controlling minimal update interval, to allow visual inspection during runs
     private float _nextTimeToAct;
-    private const float TimeInterval = 2f;
+    private const float TimeInterval = 1f;
 
     public void Start()
     {

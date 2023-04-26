@@ -58,7 +58,7 @@ class ITLAgent:
         self.strat_generic = cfg.agent.strat_generic
 
         # Show visual UI and plots
-        self.vis_ui_on = True
+        self.vis_ui_on = False
 
         # (Fields below would categorize as 'working memory' in conventional
         # cognitive architectures...)
