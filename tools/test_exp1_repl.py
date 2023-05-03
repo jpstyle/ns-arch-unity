@@ -50,7 +50,8 @@ def main(cfg):
 
     # Start communication with Unity
     env = UnityEnvironment(
-        # "unity/Builds/table_domain.x86_64",       # Uncomment when running with Unity linux build
+        # Uncomment next line when running with Unity linux build
+        f"{cfg.paths.root_dir}/unity/Builds/truck_domain.x86_64",
         side_channels=[student_channel, teacher_channel, env_par_channel],
         timeout_wait=600, seed=cfg.seed
     )
@@ -64,8 +65,9 @@ def main(cfg):
         for field, value in random_inits.items():
             env_par_channel.set_float_parameter(field, value)
 
-        # Send teacher's episode-initial output (thus user's episode-initial input)
-        teacher_channel.send_string(opening_output["utterances"], opening_output["pointing"])
+        # Send teacher's episode-initial output---thus user's episode-initial input
+        # (Comment out when testing in Heuristics mode)
+        # teacher_channel.send_string(opening_output["utterances"], opening_output["pointing"])
 
         # Let the settings take effect and begin the episode
         env.reset()

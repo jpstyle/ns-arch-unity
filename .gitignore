@@ -26,7 +26,7 @@ wandb/
 # Some assets may be unnecessary for commits or sensitive (license issue, etc.)
 # /unity/[Aa]ssets/[Mm]odels/
 /unity/[Aa]ssets/ML-Agents/
-# /unity/[Aa]ssets/[Rr]esources/
+/unity/[Aa]ssets/[Rr]esources/
 
 # Ignore all .meta files
 *.meta

@@ -1,6 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
+using UnityEngine.Perception.GroundTruth;
 using Unity.MLAgents;
 using Unity.MLAgents.Sensors;
 using Unity.MLAgents.Policies;
@@ -24,8 +27,9 @@ public class DialogueAgent : Agent
     protected string channelUuid;
     protected MessageSideChannel backendMsgChannel;
     
-    // Camera sensor component
+    // Camera sensor & annotating perception camera component
     private CameraSensorComponent _cameraSensor;
+    private PerceptionCamera _perCam;
 
     // Behavior type as MLAgent
     private BehaviorType _behaviorType;
@@ -35,6 +39,13 @@ public class DialogueAgent : Agent
     // // achieve and thus needs RequestDecision() call
     // protected bool HasGoalToResolve = false;
 
+    // Boolean flag indicating an Utter action is invoked as coroutine and currently
+    // running; for preventing multiple invocation of Utter coroutine 
+    private bool _uttering;
+    
+    // Analogous flag for CaptureBox method
+    private bool _boxCapturing;
+
     // For controlling minimal update interval, to allow visual inspection during runs
     private float _nextTimeToAct;
     private const float TimeInterval = 1f;
@@ -42,13 +53,20 @@ public class DialogueAgent : Agent
     public void Start()
     {
         _cameraSensor = GetComponent<CameraSensorComponent>();
+        _perCam = _cameraSensor.Camera.GetComponent<PerceptionCamera>();
+        if (_perCam is null)
+            throw new Exception(
+                "This agent's camera sensor doesn't have a PerceptionCamera component"
+            );
+
         _behaviorType = GetComponent<BehaviorParameters>().BehaviorType;
         _nextTimeToAct = Time.time;
     }
 
     public override void OnEpisodeBegin()
     {
-        Utter();
+        // Say anything this agent has to say
+        StartCoroutine(Utter());
     }
 
     public void Update()
@@ -101,11 +119,34 @@ public class DialogueAgent : Agent
         }
     }
 
-    protected void Utter()
+    protected IEnumerator Utter()
     {
-        while (outgoingMsgBuffer.Count > 0) {
-            var (utterance, demRefs) = outgoingMsgBuffer.Dequeue();
+        // If a coroutine invocation is still running, do not start another; else,
+        // set flag
+        if (_uttering) yield break;
+        _uttering = true;
 
+        // Dequeue all messages to utter
+        var messagesToUtter = new List<(string, Dictionary<(int, int), EntityRef>)>();
+        while (outgoingMsgBuffer.Count > 0)
+            messagesToUtter.Add(outgoingMsgBuffer.Dequeue());
+        
+        // If no outgoing message to utter, can terminate here
+        if (messagesToUtter.Count == 0) yield break;
+
+        // Check if any of the messages has non-empty demonstrative references and
+        // thus bounding boxes need to be captured
+        var boxesNeeded = messagesToUtter
+            .Select(m => m.Item2)
+            .Any(rfs => rfs is not null && rfs.Count > 0);
+
+        // If needed, synchronously wait until boxes are updated and captured
+        if (boxesNeeded)
+            yield return StartCoroutine(CaptureBoxes());
+
+        // Now utter individual messages
+        foreach (var (utterance, demRefs) in messagesToUtter)
+        {
             if (demRefs is not null && demRefs.Count > 0)
             {
                 // Need to resolve demonstrative reference boxes to corresponding EnvEntity (uid)
@@ -135,10 +176,32 @@ public class DialogueAgent : Agent
                 // No demonstrative references to process and resolve
                 dialogueUI.CommitUtterance(dialogueParticipantID, utterance);
         }
+
+        // Reset flag on exit
+        _uttering = false;
     }
 
-    // To be overridden by children classes, do nothing
-    protected virtual void InitiateInteraction() {}
+    protected IEnumerator CaptureBoxes()
+    {
+        // If a coroutine invocation is still running, do not start another; else,
+        // set flag
+        if (_boxCapturing) yield break;
+        _boxCapturing = true;
+
+        // First send a request for a capture to the PerceptionCamera component of the
+        // Camera to which the CameraSensorComponent is attached
+        _perCam.RequestCapture();
+
+        // Wait until annotations are ready in the storage endpoint for retrieval
+        yield return new WaitUntil(() => EnvEntity.annotationStorage.boxesUpToDate);
+
+        // Finally, update bounding boxes of all EnvEntity instances based on the data
+        // stored in the endpoint
+        EnvEntity.UpdateBoxesAll();
+
+        // Reset flag on exit
+        _boxCapturing = false;
+    }
 
     private Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
     {

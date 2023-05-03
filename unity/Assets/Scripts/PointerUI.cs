@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using NUnit;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -65,7 +64,7 @@ public class PointerUI : MonoBehaviour
 
         // Find boxes that the mouse is currently hovering over
         var entitiesHovering = _envEntities.FindAll(
-            ent => ent.boxes[_displayId].Contains(currentPosition)
+            ent => ent.boxes.Count > 0 && ent.boxes[_displayId].Contains(currentPosition)
         );
 
         EnvEntity newFocus = null;

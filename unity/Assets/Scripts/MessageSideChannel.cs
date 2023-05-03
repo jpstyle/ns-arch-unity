@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using NUnit.Framework;
 using UnityEngine;
 using Unity.MLAgents.SideChannels;
+using UnityEngine.Assertions;
 
 public class MessageSideChannel : SideChannel
 {
@@ -77,7 +76,7 @@ public class MessageSideChannel : SideChannel
             // Write speaker info & utterance content as string
             msgOut.WriteString(spk);
             msgOut.WriteString(utt);
-            
+
             // (If any) Encode demonstrative references as two consecutive ints (marking
             // start & end of corresponding demonstrative pronoun substring) and either
             // float[4] (marking box coordinates relative to visual obs) or string (direct

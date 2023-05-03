@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="39c0d0f9-8199-4ef6-9194-abfa718dee4c" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/../.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/../.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.idea.unity/.idea/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/metal.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/metal.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_black.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_black.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_blue.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_blue.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_gold.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_gold.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_green.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_green.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_grey.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_grey.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_lightblue.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_lightblue.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_olive.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_olive.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_red.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_red.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_white.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_white.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/plastic_yellow.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/plastic_yellow.mat" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/desk/wood.mat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/desk/wood.mat.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/floor/floor_tiles_06.mat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/floor/floor_tiles_06.mat.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/cabin/cabin_4seats.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/cabin/cabin_4seats.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/cabin/cabin_oshkosh.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/cabin/cabin_oshkosh.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/chassis_back/chassis_back.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/chassis_back/chassis_back.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_flat.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_flat.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_spares.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_spares.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_staircase_4seats.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_staircase_4seats.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_staircase_oshkosh.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/chassis_center/chassis_center_staircase_oshkosh.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/chassis_front/chassis_front.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/chassis_front/chassis_front.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_double_back_left.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_double_back_left.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_double_back_right.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_double_back_right.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_back_left.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_back_left.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_back_right.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_back_right.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_front_left.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_front_left.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_front_right.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_large_front_right.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_back_left.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_back_left.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_back_right.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_back_right.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_front_left.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_front_left.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_front_right.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/fender/fender_normal_front_right.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/load/load_dumper.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/load/load_dumper.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/load/load_empty.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/load/load_empty.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/load/load_ladder.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/load/load_ladder.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/load/load_rocketLauncher.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/load/load_rocketLauncher.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/misc/bolt.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/misc/bolt.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/truck_double.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/truck_double.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/truck_large.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/truck_large.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/truck_normal.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/truck_normal.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/wheel/wheel_large.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/wheel/wheel_large.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/truck/wheel/wheel_normal.prefab" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Models/truck/wheel/wheel_normal.prefab" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/wall/wall.mat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Models/wall/wall.mat.meta" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scenes/Scene.unity" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scenes/Scene.unity" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/DialogueAgent.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/DialogueAgent.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/EnvEntity.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/EnvEntity.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/MessageSideChannel.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/MessageSideChannel.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/PointerUI.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/PointerUI.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/StudentAgent.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/StudentAgent.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/TeacherAgent.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/TeacherAgent.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Packages/manifest.json" beforeDir="false" afterPath="$PROJECT_DIR$/Packages/manifest.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Packages/packages-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/Packages/packages-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/AudioManager.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/AudioManager.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/BurstAotSettings_StandaloneLinux64.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/CommonBurstAotSettings.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/DynamicsManager.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/DynamicsManager.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/EditorBuildSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/EditorBuildSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/EditorSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/EditorSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/GraphicsSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/GraphicsSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/InputManager.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/InputManager.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/PackageManagerSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/PackageManagerSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/Packages/com.unity.probuilder/Settings.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/Physics2DSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/Physics2DSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/ProjectSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/ProjectSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/QualitySettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/QualitySettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/TagManager.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/TagManager.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/VFXManager.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/VFXManager.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UIElements.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/Unity.Profiling.Editor.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/Unity.UI.Builder.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.Experimental.GraphView.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.Overlays.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.PackageManager.UI.Internal.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.Search.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.ShortcutManagement.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.UIElements.Debugger.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEditor.UIElements.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UIElementsSchema/UnityEngine.UIElements.xsd" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UserSettings/EditorUserSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/UserSettings/EditorUserSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/UserSettings/Layouts/CurrentMaximizeLayout.dwlt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UserSettings/Layouts/default-2021.dwlt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UserSettings/Layouts/default-2022.dwlt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/UserSettings/Layouts/default-2023.dwlt" beforeDir="false" afterPath="$PROJECT_DIR$/UserSettings/Layouts/default-2023.dwlt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/UserSettings/Search.settings" beforeDir="false" afterPath="$PROJECT_DIR$/UserSettings/Search.settings" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+  </component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="mock:///Dummy.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$APPLICATION_CONFIG_DIR$/resharper-host/DecompilerCache/decompiler/8d80f696dba049539b444c200fb50c471a0600/94/ea12da97/Object.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$APPLICATION_CONFIG_DIR$/resharper-host/DecompilerCache/decompiler/db323a23f1584b1aa9053e5e110c159c468c00/19/5990400f/ThrowHelper.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Library/PackageCache/com.unity.perception@1.0.0-preview.1/Runtime/GroundTruth/DataModel/Frame.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Library/PackageCache/com.unity.perception@1.0.0-preview.1/Runtime/GroundTruth/DatasetCapture.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Library/PackageCache/com.unity.perception@1.0.0-preview.1/Runtime/GroundTruth/IConsumerEndpoint.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Library/PackageCache/com.unity.perception@1.0.0-preview.1/Runtime/GroundTruth/LabelManagement/Labeling.cs" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Library/PackageCache/com.unity.perception@1.0.0-preview.1/Runtime/GroundTruth/SimulationState.cs" root0="SKIP_HIGHLIGHTING" />
+  </component>
+  <component name="ProjectId" id="2PCShmk4Y9Kb0xqKyusAIeFbElt" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_ADD_EXTERNAL_FILES": "true",
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "WebServerToolWindowFactoryState": "false",
+    "git-widget-placeholder": "main",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "vue.rearranger.settings.migration": "true"
+  },
+  "keyToStringList": {
+    "rider.external.source.directories": [
+      "/home/jayp/.config/JetBrains/Rider2023.1/resharper-host/DecompilerCache",
+      "/home/jayp/.config/JetBrains/Rider2023.1/resharper-host/SourcesCache",
+      "/home/jayp/.local/share/Symbols/src"
+    ]
+  }
+}]]></component>
+  <component name="RunManager" selected="Attach to Unity Editor.Attach to Unity Editor">
+    <configuration name="Start Unity" type="RunUnityExe" factoryName="Unity Executable">
+      <option name="EXE_PATH" value="$USER_HOME$/Unity/Hub/Editor/2023.1.0b8/Editor/Unity" />
+      <option name="PROGRAM_PARAMETERS" value="-projectPath $PROJECT_DIR$ -debugCodeOptimization" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="PASS_PARENT_ENVS" value="1" />
+      <option name="USE_EXTERNAL_CONSOLE" value="0" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Unit Tests (batch mode)" type="RunUnityExe" factoryName="Unity Executable">
+      <option name="EXE_PATH" value="$USER_HOME$/Unity/Hub/Editor/2023.1.0b8/Editor/Unity" />
+      <option name="PROGRAM_PARAMETERS" value="-runTests -batchmode -projectPath $PROJECT_DIR$ -testResults Logs/results.xml -testPlatform EditMode -debugCodeOptimization" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="PASS_PARENT_ENVS" value="1" />
+      <option name="USE_EXTERNAL_CONSOLE" value="0" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Attach to Unity Editor &amp; Play" type="UNITY_DEBUG_RUN_CONFIGURATION" factoryName="UNITY_ATTACH_AND_PLAY" show_console_on_std_err="false" show_console_on_std_out="false" port="50000" address="localhost">
+      <option name="allowRunningInParallel" value="false" />
+      <option name="listenPortForConnections" value="false" />
+      <option name="pid" />
+      <option name="projectPathOnTarget" />
+      <option name="selectedOptions">
+        <list />
+      </option>
+      <method v="2" />
+    </configuration>
+    <configuration name="Attach to Unity Editor" type="UNITY_DEBUG_RUN_CONFIGURATION" factoryName="Unity Debug" show_console_on_std_err="false" show_console_on_std_out="false" port="50000" address="localhost" ignored-value-for-modified-check="30289">
+      <option name="allowRunningInParallel" value="false" />
+      <option name="listenPortForConnections" value="false" />
+      <option name="pid" value="30289" />
+      <option name="projectPathOnTarget" />
+      <option name="selectedOptions">
+        <list />
+      </option>
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="39c0d0f9-8199-4ef6-9194-abfa718dee4c" name="Changes" comment="" />
+      <created>1682959695066</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1682959695066</updated>
+      <workItem from="1682959698255" duration="6837000" />
+      <workItem from="1683030439753" duration="599000" />
+      <workItem from="1683031437352" duration="21517000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="UnityProjectConfiguration" hasMinimizedUI="true" />
+  <component name="UnityUnitTestConfiguration" currentTestLauncher="Both" />
+  <component name="VcsManagerConfiguration">
+    <option name="ADD_EXTERNAL_FILES_SILENTLY" value="true" />
+    <option name="CLEAR_INITIAL_COMMIT_MESSAGE" value="true" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="DotNet Breakpoints">
+          <url>file://$PROJECT_DIR$/Assets/Scripts/TeacherAgent.cs</url>
+          <line>159</line>
+          <properties documentPath="$PROJECT_DIR$/Assets/Scripts/TeacherAgent.cs" initialLine="159" containingFunctionPresentation="Method 'Heuristic'">
+            <startOffsets>
+              <option value="6575" />
+            </startOffsets>
+            <endOffsets>
+              <option value="6622" />
+            </endOffsets>
+          </properties>
+          <option name="timeStamp" value="39" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+  </component>
+</project>

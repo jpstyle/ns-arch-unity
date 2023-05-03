@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Perception.GroundTruth;
+using UnityEngine.Perception.GroundTruth.LabelManagement;
 
 public class EnvEntity : MonoBehaviour
 {
@@ -10,37 +12,50 @@ public class EnvEntity : MonoBehaviour
     // a unique identifier, 2) computing 2D axis-aligned bounding boxes (AABBs)
     // whenever needed
 
-    // Storage of AABBs, maintained as dictionary from Camera target display id to Rect
+    // Storage of AABBs, maintained as dictionary from target display id to Rect
     public Dictionary<int, Rect> boxes;
-
-    // List of cameras for each of which AABBs should be computed and stored for
-    // the object this component is attached to
-    [HideInInspector]
-    public List<Camera> cameras;
 
     // Unique string identifier
     [HideInInspector]
     public string uid;
+
+    [HideInInspector]
+    // Whether this EnvEntity is 'atomic', having no further EnvEntities as descendants
+    public bool isAtomic;
+
+    // Storage endpoint registered as static field so that it can be accessed anywhere
+    public static StorageEndpoint annotationStorage;
+
+    // Storage of closest EnvEntity children; may be empty
+    private List<EnvEntity> _closestChildren;
+
+    // Boolean flag whether this entity has its up-to-date bounding boxes (per camera)
+    // computed and ready
+    private bool _boxesUpdated;
+    
+    // List of cameras for each of which AABBs should be computed and stored for
+    // the entity; dictionary mapping from PerceptionCamera ID to target display
+    private static Dictionary<string, int> _perCamIDToDisplay;
 
     private void Awake()
     {
         // Initialize the dictionary for storing AABBs
         boxes = new Dictionary<int, Rect>();
 
-        // Register existing cameras
-        cameras = new List<Camera>();
-        foreach (var cam in Camera.allCameras)
-        {
-            cameras.Add(cam);
-        }
-
-        // Assign uid by first generating a GUID and taking a prefix
-        uid = Guid.NewGuid().ToString()[..8];
+        UpdateClosestChildren();        // Invoked at awake
     }
 
     private void Start()
     {
-        // ComputeBoxes();
+        // Assign uid according to the Labeling component associated with the gameObject
+        var labeling = GetComponent<Labeling>();
+        if (labeling is null)
+            throw new Exception(
+                "Associated gameObject of an EnvEntity must have a Labeling component"
+            );
+        uid = $"ent_{labeling.instanceId}";
+
+        // Register this EnvEntity to existing pointer UI controllers
         var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)
             pUI.AddEnvEntity(this);
@@ -51,79 +66,6 @@ public class EnvEntity : MonoBehaviour
         var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)
             pUI.DelEnvEntity(this);
-    }
-
-    // Call to update the storage of Camera->Rect mapping; may be recursively evoked
-    // by a parent EnvEntity, make sure AABB is computed once and only once
-    // for the frame!
-    public void ComputeBoxes()
-    {
-        // Can skip if gameObject hasn't moved since
-        if (!gameObject.transform.hasChanged) return;
-
-        // Checking if the associated GameObject is an 'atomic' one with no further
-        // EnvEntity components on descendants.
-        // If so, enumerate over vertices to compute AABB from screen coordinates
-        // of the extremities; otherwise, compute from children's AABBs.
-        var childrenEntities = ClosestChildren(gameObject);
-        var isAtomic = childrenEntities.Count == 0;
-
-        // Compute and update AABBs for each camera
-        foreach (var cam in cameras)
-        {
-            // Initialize locations screen-aligned box extremities to be updated
-            var xMin = float.MaxValue; var xMax = float.MinValue;
-            var yMin = float.MaxValue; var yMax = float.MinValue;
-
-            if (isAtomic)
-            {
-                // Iterate through all vertices in the mesh colliders of self and children
-                // to obtain the tightest enclosing 2D box aligned w.r.t. screen
-                var meshes = gameObject.GetComponentsInChildren<MeshCollider>();
-                foreach (var mf in meshes)
-                {
-                    var vertices = mf.sharedMesh.vertices;
-                    foreach (var v in vertices)
-                    {
-                        // From position in local to world coordinate, then to screen coordinate
-                        var worldPoint = gameObject.transform.TransformPoint(v);
-                        var screenPoint = cam.WorldToScreenPoint(worldPoint);
-
-                        // Need to flip y position in screen coordinate to comply with MouseMoveEvent
-                        screenPoint.y = Screen.height - screenPoint.y;
-
-                        // Update extremities
-                        xMin = Math.Min(xMin, screenPoint.x);
-                        yMin = Math.Min(yMin, screenPoint.y);
-                        xMax = Math.Max(xMax, screenPoint.x);
-                        yMax = Math.Max(yMax, screenPoint.y);
-                    }
-                }
-            }
-            else
-            {
-                // Compute from children's boxes
-                foreach (var cEnt in childrenEntities)
-                {
-                    // Recursively call for the child entity to ensure its AABB is computed
-                    cEnt.ComputeBoxes();
-                    var cBox = cEnt.boxes[cam.targetDisplay];
-
-                    // Update extremities
-                    xMin = Math.Min(xMin, cBox.x);
-                    yMin = Math.Min(yMin, cBox.y);
-                    xMax = Math.Max(xMax, cBox.x+cBox.width);
-                    yMax = Math.Max(yMax, cBox.y+cBox.height);
-                }
-            }
-
-            // Create and assign a new rect representing the box
-            boxes[cam.targetDisplay] = new Rect(xMin, yMin, xMax - xMin, yMax - yMin);
-        }
-
-        // Reset this flag to false after computing AABBs, so that they are not computed
-        // again until gameObject moves again
-        gameObject.transform.hasChanged = false;
     }
 
     private static List<EnvEntity> ClosestChildren(GameObject gObj)
@@ -139,11 +81,13 @@ public class EnvEntity : MonoBehaviour
         // a GameObject, just (recursive) one for all descendants)
         foreach (Transform tr in gObj.transform)
         {
-            var childEntity = tr.gameObject.GetComponent<EnvEntity>();
+            var childGObj = tr.gameObject;
+            if (!childGObj.activeInHierarchy) continue;     // Disregard inactive gameObjects
 
-            // If EnvEntity component not found, recurse on the child gameObject; otherwise,
-            // add to list and do not recurse further
+            var childEntity = childGObj.GetComponent<EnvEntity>();
             if (childEntity is null)
+                // If EnvEntity component not found, recurse on the child gameObject; otherwise,
+                // add to list and do not recurse further
                 closestChildren = closestChildren.Concat(ClosestChildren(tr.gameObject)).ToList();
             else
             {
@@ -153,6 +97,101 @@ public class EnvEntity : MonoBehaviour
         }
 
         return closestChildren;
+    }
+    
+    // Call to update the storage of Camera->Rect mapping; may be recursively evoked
+    // by a parent EnvEntity, make sure AABB is computed once and only once for the frame!
+    private void UpdateBoxes()
+    {
+        if (_boxesUpdated) return;      // Already computed for this frame
+
+        if (isAtomic)
+        {
+            foreach (var (perCamID, perCamBoxes) in annotationStorage.boxStorage)
+            {
+                var targetDisplay = _perCamIDToDisplay[perCamID];
+
+                if (perCamBoxes.TryGetValue(uid, out var box))
+                {
+                    // Entity found, being visible from the PerceptionCamera
+                    boxes[targetDisplay] = new Rect(
+                        box.origin.x, box.origin.y,box.dimension.x, box.dimension.y
+                    );
+                }
+                // Not updated if entirely occluded by some other entity and thus not
+                // visible to the PerceptionCamera
+            }
+        }
+        else
+        {
+            // Iterate through closest children EnvEntity instances to compute the minimal
+            // bounding box enclosing all of them, per display
+            var extremitiesPerDisplay = new Dictionary<int, (float, float, float, float)>();
+            foreach (var cEnt in _closestChildren)
+            {
+                // Recursively call for the child entity to ensure its AABB is computed
+                cEnt.UpdateBoxes();
+
+                foreach (var (displayId, rect) in cEnt.boxes)
+                {
+                    if (extremitiesPerDisplay.ContainsKey(displayId))
+                    {
+                        // Compare with current extremities and take min/max to obtain
+                        // minimally enclosing rect
+                        var currentExtremities = extremitiesPerDisplay[displayId];
+                        extremitiesPerDisplay[displayId] = (
+                            Math.Min(currentExtremities.Item1, rect.x),
+                            Math.Min(currentExtremities.Item2, rect.y),
+                            Math.Max(currentExtremities.Item3, rect.x+rect.width),
+                            Math.Max(currentExtremities.Item4, rect.y+rect.height)
+                        );
+                    }
+                    else
+                    {
+                        // First entry, initialize extremity values with this 
+                        extremitiesPerDisplay[displayId] = (
+                            rect.x, rect.y, rect.x+rect.width, rect.y+rect.height
+                        ); 
+                    }
+                }
+            }
+
+            // Now register the discovered minimal bounding box
+            foreach (var (displayId, extremities) in extremitiesPerDisplay)
+            {
+                var (xMin, yMin, xMax, yMax) = extremities;
+                boxes[displayId] = new Rect(xMin, yMin, xMax - xMin, yMax - yMin);
+            }
+        }
+
+        // Set this flag to true after computing AABBs, so that this method is not invoked
+        // again when the boxes are already updated 
+        _boxesUpdated = true;
+    }
+
+    // Initialize static fields (in Unity, this is preferred rather than using the standard
+    // C# static constructors)
+    [RuntimeInitializeOnLoadMethod]
+    private static void StaticInitialize()
+    {
+        // Get reference to the consumer endpoint
+        annotationStorage = (StorageEndpoint) DatasetCapture.activateEndpoint;
+
+        // Find mapping from PerceptionCamera Ids to the camera's target display
+        _perCamIDToDisplay = new Dictionary<string, int>();
+        foreach (var cam in Camera.allCameras)
+        {
+            var perCam = cam.GetComponent<PerceptionCamera>();
+            if (perCam is not null)
+                _perCamIDToDisplay[perCam.id] = cam.targetDisplay;
+        }
+    }
+
+    public void UpdateClosestChildren()
+    {
+        // Find and store closest EnvEntity children at the time invoked
+        _closestChildren = ClosestChildren(gameObject);
+        isAtomic = _closestChildren.Count == 0;
     }
 
     public static EnvEntity FindByObjectName(string name)
@@ -216,5 +255,17 @@ public class EnvEntity : MonoBehaviour
         }
 
         return refEnt;
+    }
+
+    public static void UpdateBoxesAll()
+    {
+        // Static method for running UpdateBoxes for all existing EnvEntity instances
+
+        // Set flags for all instances that their boxes are currently being updated 
+        var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
+        Array.ForEach(allEntities, e => { e._boxesUpdated = false; });
+
+        foreach (var ent in allEntities)
+            ent.UpdateBoxes();
     }
 }

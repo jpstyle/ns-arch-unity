@@ -19,8 +19,6 @@ public class TeacherAgent : DialogueAgent
     [SerializeField]
     private List<Material> colors;
 
-    private Dictionary<string, EnvEntity> _envEntitiesCache;
-
     protected override void Awake()
     {
         // Register Python-Agent string communication side channel
@@ -50,7 +48,7 @@ public class TeacherAgent : DialogueAgent
         // Disable all existing RigidBody components; ditto
         foreach (var rb in FindObjectsByType<Rigidbody>(FindObjectsSortMode.None))
             rb.detectCollisions = false;
-        
+
         // Sample truck configs
         var truckType = truckTypes[Random.Range(0, truckTypes.Count)];
         var cabinType = cabinTypes[Random.Range(0, cabinTypes.Count)];
@@ -97,11 +95,15 @@ public class TeacherAgent : DialogueAgent
             var partSlotTf = truck.transform.Find(partType);
             foreach (Transform child in partSlotTf)
             {
-                Destroy(child.gameObject);
+                var replacedGObj = child.gameObject;
+                replacedGObj.SetActive(false);         // Needed for UpdateClosestChildren below
+                Destroy(replacedGObj);
             }
             var newPart = Instantiate(sampledPart, partSlotTf);
             newPart.name = sampledPart.name;        // Not like 'necessary' but just coz
         }
+        // Need to update closest children after the replacements
+        truck.GetComponent<EnvEntity>().UpdateClosestChildren();
 
         // Color parts if applicable
         foreach (Transform partSlotTf in truck.transform)
@@ -135,16 +137,12 @@ public class TeacherAgent : DialogueAgent
         }
         Physics.simulationMode = SimulationMode.FixedUpdate;
 
+        // Currently stored bounding box info is now obsolete
+        EnvEntity.annotationStorage.boxesUpToDate = false;
+
         // Clean dialogue history and add new episode header record
         dialogueUI.ClearHistory();
         dialogueUI.CommitUtterance("System", $"Start episode {Academy.Instance.EpisodeCount}");
-
-        // Clear cache of env entities and register new ones
-        _envEntitiesCache = new Dictionary<string, EnvEntity>
-        {
-            [truck.name] = truck.GetComponent<EnvEntity>()
-        };
-        _envEntitiesCache[truck.name].ComputeBoxes();
     }
 
     public override void OnActionReceived(ActionBuffers actionBuffers)
@@ -152,12 +150,16 @@ public class TeacherAgent : DialogueAgent
         if (actionBuffers.DiscreteActions[0] == 1)
         {
             // 'Utter' action
-            Utter();
+            StartCoroutine(Utter());
         }
     }
 
     public override void Heuristic(in ActionBuffers actionBuffers)
     {
+        // Update box info whenever needed
+        if (!EnvEntity.annotationStorage.boxesUpToDate)
+            StartCoroutine(CaptureBoxes());
+
         // 'Utter' any outgoing messages
         if (outgoingMsgBuffer.Count > 0)
         {

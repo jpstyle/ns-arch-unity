@@ -1,0 +1,92 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2f09f279848e42cea259348b13bce4c5, type: 3}
+  m_Name: TruckDomainLabelConfig
+  m_EditorClassIdentifier: 
+  m_LabelEntries:
+  - label: chassis_back
+    id: 0
+    hierarchyRelation: 0
+  - label: chassis_center
+    id: 1
+    hierarchyRelation: 0
+  - label: chassis_center_flat
+    id: 2
+    hierarchyRelation: 0
+  - label: chassis_center_staircase_oshkosh
+    id: 3
+    hierarchyRelation: 0
+  - label: chassis_center_staircase_4seats
+    id: 4
+    hierarchyRelation: 0
+  - label: chassis_center_spares
+    id: 5
+    hierarchyRelation: 0
+  - label: chassis_front
+    id: 6
+    hierarchyRelation: 0
+  - label: cabin
+    id: 7
+    hierarchyRelation: 0
+  - label: cabin_oshkosh
+    id: 8
+    hierarchyRelation: 0
+  - label: cabin_4seats
+    id: 9
+    hierarchyRelation: 0
+  - label: load
+    id: 10
+    hierarchyRelation: 0
+  - label: load_dumper
+    id: 11
+    hierarchyRelation: 0
+  - label: load_empty
+    id: 12
+    hierarchyRelation: 0
+  - label: load_ladder
+    id: 13
+    hierarchyRelation: 0
+  - label: load_rocketLauncher
+    id: 14
+    hierarchyRelation: 0
+  - label: fender
+    id: 15
+    hierarchyRelation: 0
+  - label: fender_normal
+    id: 16
+    hierarchyRelation: 0
+  - label: fender_large
+    id: 17
+    hierarchyRelation: 0
+  - label: fender_double
+    id: 18
+    hierarchyRelation: 0
+  - label: wheel
+    id: 19
+    hierarchyRelation: 0
+  - label: wheel_normal
+    id: 20
+    hierarchyRelation: 0
+  - label: wheel_large
+    id: 21
+    hierarchyRelation: 0
+  - label: bolt
+    id: 22
+    hierarchyRelation: 0
+  - label: subassembly
+    id: 23
+    hierarchyRelation: 0
+  - label: truck
+    id: 24
+    hierarchyRelation: 0
+  autoAssignIds: 1
+  startingLabelId: 0

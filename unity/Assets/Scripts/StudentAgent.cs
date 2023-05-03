@@ -24,12 +24,16 @@ public class StudentAgent : DialogueAgent
         if (actionBuffers.DiscreteActions[0] == 1)
         {
             // 'Utter' action
-            Utter();
+            StartCoroutine(Utter());
         }
     }
 
     public override void Heuristic(in ActionBuffers actionBuffers)
     {
+        // Update box info whenever needed
+        if (!EnvEntity.annotationStorage.boxesUpToDate)
+            StartCoroutine(CaptureBoxes());
+
         // 'Utter' any outgoing messages
         if (outgoingMsgBuffer.Count > 0)
         {
