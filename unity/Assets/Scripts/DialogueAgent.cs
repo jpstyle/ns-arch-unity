@@ -211,8 +211,8 @@ public class DialogueAgent : Agent
     private Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
     {
         var targetDisplay = _cameraSensor.Camera.targetDisplay;
-        var screenWidth = Display.displays[targetDisplay].systemWidth;
-        var screenHeight = Display.displays[targetDisplay].systemHeight;
+        var screenWidth = Display.displays[targetDisplay].renderingWidth;
+        var screenHeight = Display.displays[targetDisplay].renderingHeight;
 
         // To screen-relative coordinates
         var screenRelRectX = screenAbsRect.x / screenWidth;

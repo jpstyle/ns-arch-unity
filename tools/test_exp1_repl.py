@@ -13,10 +13,12 @@ import warnings
 warnings.filterwarnings("ignore")
 import random
 from PIL import Image
+from collections import defaultdict
 
 import hydra
 import numpy as np
 from omegaconf import OmegaConf
+from torch.utils.tensorboard import SummaryWriter
 from mlagents_envs.environment import UnityEnvironment
 from mlagents_envs.side_channel.environment_parameters_channel import EnvironmentParametersChannel
 
@@ -34,6 +36,10 @@ def main(cfg):
 
     # Set seed
     random.seed(cfg.seed)
+
+    # Tensorboard writer to log learning progress
+    writer = SummaryWriter(f"{cfg.paths.outputs_dir}/tensorboard_logs")
+    mistakes = defaultdict(lambda: (0,0))     # Accumulating regrets
 
     # Set up student & teacher
     student = ITLAgent(cfg)
@@ -67,7 +73,7 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    while True:
+    for _ in range(1000):
         # Obtain random initialization of each episode
         random_inits = teacher.setup_episode()
 
@@ -183,16 +189,23 @@ def main(cfg):
                 env.step()
 
         # Log progress to tensorboard
-        print(0)
+        for gt_conc, ans_conc in teacher.current_episode_record.items():
+            regrets, total = mistakes[gt_conc]
 
-    # Close Unity environment
+            new_regrets = regrets+1 if gt_conc != ans_conc else regrets
+            new_total = total+1
+
+            writer.add_scalar(f"Cumul. regret: {gt_conc}", new_regrets, new_total)
+            mistakes[gt_conc] = (new_regrets, new_total)
+
+    # Close Unity environment & tensorboard writer
     env.close()
+    writer.close()
 
     # Save current agent model checkpoint to output dir
-    ckpt_path = os.path.join(
-        cfg.paths.outputs_dir, f"injected_{cfg.seed}.ckpt"
-    )
-    agent.save_model(ckpt_path)
+    ckpt_path = os.path.join(cfg.paths.outputs_dir, "agent_model")
+    os.makedirs(ckpt_path, exist_ok=True)
+    student.save_model(f"{ckpt_path}/injected_{cfg.seed}.ckpt")
 
 
 if __name__ == "__main__":
