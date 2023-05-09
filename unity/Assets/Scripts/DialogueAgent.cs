@@ -132,7 +132,11 @@ public class DialogueAgent : Agent
             messagesToUtter.Add(outgoingMsgBuffer.Dequeue());
         
         // If no outgoing message to utter, can terminate here
-        if (messagesToUtter.Count == 0) yield break;
+        if (messagesToUtter.Count == 0)
+        {
+            _uttering = false;
+            yield break;
+        }
 
         // Check if any of the messages has non-empty demonstrative references and
         // thus bounding boxes need to be captured
@@ -162,7 +166,7 @@ public class DialogueAgent : Agent
                             demRefsResolved[range] = EnvEntity.FindByBox(screenAbsRect, targetDisplay).uid;
                             break;
                         case EntityRefType.String:
-                            demRefsResolved[range] = EnvEntity.FindByObjectName(demRef.stringRef).uid;
+                            demRefsResolved[range] = EnvEntity.FindByObjectPath(demRef.stringRef).uid;
                             break;
                         default:
                             // Shouldn't reach here but anyways
@@ -190,6 +194,7 @@ public class DialogueAgent : Agent
 
         // First send a request for a capture to the PerceptionCamera component of the
         // Camera to which the CameraSensorComponent is attached
+        yield return null;              // Wait for a frame to render
         _perCam.RequestCapture();
 
         // Wait until annotations are ready in the storage endpoint for retrieval

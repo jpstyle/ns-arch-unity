@@ -38,7 +38,7 @@ public class TeacherAgent : DialogueAgent
         var envParams = Academy.Instance.EnvironmentParameters;
 
         // Destroy any existing truck object
-        var existingTruck = GameObject.Find($"truck_ep{Academy.Instance.EpisodeCount-1}");
+        var existingTruck = GameObject.Find("truck");
         if (existingTruck is not null)
             Destroy(existingTruck);
         // Disable all existing EnvEntity components; needed because the Destroy call
@@ -83,7 +83,7 @@ public class TeacherAgent : DialogueAgent
 
         // Instantiate selected truck type
         var truck = Instantiate(truckType);
-        truck.name = $"truck_ep{Academy.Instance.EpisodeCount}";
+        truck.name = "truck";
 
         // Replace truck part prefabs
         var sampledPartsWithHandles = new List<(string, GameObject)>

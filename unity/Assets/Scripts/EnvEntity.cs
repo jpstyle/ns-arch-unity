@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Assertions;
 using UnityEngine.Perception.GroundTruth;
 using UnityEngine.Perception.GroundTruth.LabelManagement;
 
@@ -194,13 +195,31 @@ public class EnvEntity : MonoBehaviour
         isAtomic = _closestChildren.Count == 0;
     }
 
-    public static EnvEntity FindByObjectName(string name)
+    public static EnvEntity FindByObjectPath(string path)
     {
-        // Fetch EnvEntity with matching uid (if exists)
+        var pathSplit = path.Split("/");
+        Assert.AreEqual(pathSplit[0], "", "Provide full hierarchy path from root");
+
         var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
         foreach (var ent in allEntities)
         {
-            if (ent.gameObject.name == name) return ent;
+            var traverser = ent.transform;
+            var match = true;
+
+            for (var i = pathSplit.Length-1; i>=1; i--)
+            {
+                if (traverser is not null && traverser.name == pathSplit[i])
+                {
+                    traverser = traverser.parent;
+                }
+                else
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match) return ent;
         }
 
         return null;
@@ -228,6 +247,7 @@ public class EnvEntity : MonoBehaviour
         foreach (var ent in allEntities)
         {
             if (!ent.enabled) continue;
+            if (!ent.boxes.ContainsKey(displayId)) continue;
 
             var entBox = ent.boxes[displayId];
             if (!entBox.Overlaps(box)) continue;

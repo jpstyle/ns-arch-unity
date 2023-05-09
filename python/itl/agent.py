@@ -362,7 +362,7 @@ class ITLAgent:
                 self.kb_snap = copy.deepcopy(self.lt_mem.kb)
 
             # Understand the user input in the context of the dialogue
-            if self.lang.new_input and self.lang.last_input[0]["raw"] != "Correct.":
+            if self.lang.new_input:
                 self.lang.dialogue.record = self.lang.dialogue.record[:ti_last]
                 self.lang.understand(self.lang.last_input, pointing=pointing)
 
@@ -837,8 +837,7 @@ class ITLAgent:
 
             if len(resolved_items) == 0:
                 # No resolvable agenda item any more
-                if (len(return_val) == 0 and self.lang.new_input and
-                    self.lang.last_input[0]["raw"] != "Correct."):
+                if (len(return_val) == 0 and self.lang.new_input):
                     # Nothing to add, acknowledge any user input
                     self.practical.agenda.append(("acknowledge", None))
                 else:

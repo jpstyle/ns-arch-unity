@@ -9,10 +9,6 @@ __pycache__/
 wandb/
 
 .env
-*.csv
-*.png
-*.txt
-!requirements.txt
 
 ## Unity
 /unity/[Ll]ibrary/
