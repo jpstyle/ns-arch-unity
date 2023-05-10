@@ -26,7 +26,7 @@ from .lpmln.utils import wrap_args
 logger = logging.getLogger(__name__)
 
 
-SR_THRES = 0.5               # Mismatch surprisal threshold
+SR_THRES = 0.8               # Mismatch surprisal threshold
 U_IN_PR = 1.00               # How much the agent values information provided by the user
 A_IM_PR = 1.00               # How much the agent values inferred implicature
 EPS = 1e-10                  # Value used for numerical stabilization
@@ -446,7 +446,7 @@ class ITLAgent:
                         ev_prob = q_response[()]
 
                         surprisal = -math.log(ev_prob + EPS)
-                        if surprisal > -math.log(SR_THRES):
+                        if surprisal >= -math.log(SR_THRES):
                             m = (rule, surprisal)
                             if m not in self.symbolic.mismatches:
                                 self.symbolic.mismatches.append(m)

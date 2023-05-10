@@ -234,8 +234,8 @@ public class DialogueAgent : Agent
     private Rect SensorRelRectToScreenAbsRect(Rect sensorRelRect)
     {
         var targetDisplay = _cameraSensor.Camera.targetDisplay;
-        var screenWidth = Display.displays[targetDisplay].systemWidth;
-        var screenHeight = Display.displays[targetDisplay].systemHeight;
+        var screenWidth = Display.displays[targetDisplay].renderingWidth;
+        var screenHeight = Display.displays[targetDisplay].renderingHeight;
 
         // To screen-relative coordinates; transform x-coordinates according to
         // ratio of aspect ratios, while leaving y-coordinates untouched

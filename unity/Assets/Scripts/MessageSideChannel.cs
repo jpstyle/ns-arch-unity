@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using Unity.MLAgents.SideChannels;
 using UnityEngine.Assertions;
+using Unity.MLAgents.SideChannels;
 
 public class MessageSideChannel : SideChannel
 {
