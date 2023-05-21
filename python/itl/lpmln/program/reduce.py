@@ -1,8 +1,6 @@
 """ Program().reduce() factored out """
 import copy
 
-import numpy as np
-
 from ..polynomial import Polynomial
 from ..utils import logit
 

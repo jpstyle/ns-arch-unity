@@ -5,7 +5,7 @@ import os
 import sys
 sys.path.insert(
     0,
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
 import uuid
 import random
@@ -19,12 +19,12 @@ import tqdm as tqdm
 import numpy as np
 import pandas as pd
 from omegaconf import OmegaConf
-from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
 from bokeh.io import save
 from bokeh.models import Title
 from bokeh.layouts import column
 
-from itl import ITLAgent
+from python.itl import ITLAgent
 
 
 TAB = "\t"
@@ -32,16 +32,20 @@ TAB = "\t"
 OmegaConf.register_new_resolver(
     "randid", lambda: str(uuid.uuid4())[:6]
 )
-@hydra.main(config_path="../../itl/configs", config_name="config")
+@hydra.main(config_path="../python/itl/configs", config_name="config")
 def main(cfg):
     print(OmegaConf.to_yaml(cfg))
+
+    # Set seed
+    random.seed(cfg.seed)
 
     # Set up agent
     agent = ITLAgent(cfg)
     exemplars = agent.lt_mem.exemplars
 
     accs = {}
-    for conc_type in ["cls", "att", "rel"]:
+    conc_types = ["cls"] #, "att", "rel"]
+    for conc_type in conc_types:
         if conc_type == "cls" or conc_type == "att":
             vectors = exemplars.storage_vec[conc_type]
             pos_exs_inds = exemplars.exemplars_pos[conc_type]
@@ -73,9 +77,8 @@ def main(cfg):
                 y = ([1] * len(pos_train)) + ([0] * len(neg_train))
 
                 # Fit classifier and run on test set
-                bin_clf = SVC(C=1.0, gamma=0.1, probability=True, random_state=42)
+                bin_clf = KNeighborsClassifier(n_neighbors=50, weights="distance")
                 bin_clf.fit(X, y)
-                bin_clf.predict_proba(vectors[pos_test])
                 pos_results = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 neg_results = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5
                 accs[(concept_name, conc_type)] = \

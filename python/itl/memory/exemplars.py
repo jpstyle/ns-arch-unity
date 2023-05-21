@@ -2,7 +2,7 @@ from collections import defaultdict
 
 import cv2
 import numpy as np
-from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
 
 
 class Exemplars:
@@ -122,7 +122,8 @@ class Exemplars:
                         y = ([1] * len(pos_inds)) + ([0] * len(neg_inds))
 
                         # Fit classifier and update
-                        bin_clf = SVC(C=1.0, gamma=0.1, probability=True, random_state=42)
+                        # bin_clf = SVC(C=1.0, gamma=0.1, probability=True, random_state=42)
+                        bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 50), weights="distance")
                         bin_clf.fit(X, y)
                         self.binary_classifiers[conc_type][conc_ind] = bin_clf
                     else:

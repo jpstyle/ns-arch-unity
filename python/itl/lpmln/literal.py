@@ -35,7 +35,7 @@ class Literal:
 
             elif type(arg) == tuple:
                 # Uninterpreted function term
-                if is_var != any([a[0].isupper() for a in arg[1]]):
+                if is_var != any([fa[0].isupper() for fa in arg[1]]):
                     raise ValueError("Term letter case and variable claim mismatch")
 
             else:
@@ -47,15 +47,15 @@ class Literal:
     def __str__(self):
         naf_head = "not " if self.naf else ""
         args_str = []
-        for a in self.args:
-            if type(a[0]) == float:
-                args_str.append(f"{a[0]:.2f}")
-            elif type(a[0]) == list:
-                args_str.append("".join(a[0]))
-            elif type(a[0]) == tuple:
-                args_str.append(f"{a[0][0]}({','.join(a[0][1])})")
+        for arg in self.args:
+            if type(arg[0]) == float:
+                args_str.append(f"{arg[0]:.2f}")
+            elif type(arg[0]) == list:
+                args_str.append("".join(arg[0]))
+            elif type(arg[0]) == tuple:
+                args_str.append(f"{arg[0][0]}({','.join(arg[0][1])})")
             else:
-                args_str.append(str(a[0]))
+                args_str.append(str(arg[0]))
         args = "("+",".join(args_str)+")" if len(args_str)>0 else ""
 
         conds = f" : {','.join([str(c) for c in self.conds])}" \
@@ -124,11 +124,12 @@ class Literal:
         fns_map = functions or {}
         preds_map = preds or {}
 
-        term_is_var_map = { a[0]: a[1] for a in self.args if type(a[0])==str }
+        term_is_var_map = { arg[0]: arg[1] for arg in self.args if type(arg[0])==str }
         term_is_var_map.update({ t2[0]: t2[1] for t2 in terms_map.values() })
 
-        if self.name == "*_?" and self.args[0][0] in preds_map:
-            # Substituting the reserved predicate "*_?" with a contentful predicate
+        if self.name == "*_isinstance" and self.args[0][0] in preds_map:
+            # Substituting the reserved predicate "*_isinstance" with a contentful predicate,
+            # un-reifying the 'predicate instance'
             subs_name = preds_map[self.args[0][0]]
             self_args = self.args[1:]
         else:
@@ -166,13 +167,13 @@ class Literal:
         """ Create and return new instance from clingo.Symbol instance """
         name = symbol.name
         args = [
-            (a.number, False)
-                if a.type == clingo.SymbolType.Number
-                else ((a.name, a.name.isupper())                  # Constant
-                    if len(a.arguments)==0
-                    else ((a.name, tuple([t.name for t in a.arguments])), False)   # Function
+            (arg.number, False)
+                if arg.type == clingo.SymbolType.Number
+                else ((arg.name, arg.name.isupper())                  # Constant
+                    if len(arg.arguments)==0
+                    else ((arg.name, tuple([t.name for t in arg.arguments])), False)   # Function
                 )
-            for a in symbol.arguments
+            for arg in symbol.arguments
         ]
         return Literal(name=name, args=args)
 

@@ -538,7 +538,7 @@ def _combine_factors_outer(factors):
     # Each factors are specifications of cases sharing the same atom set signature,
     # differing only whether elements are positive or negative
     assert all(
-        len({frozenset([abs(a) for a in ff]) for ff in f})==1
+        len({frozenset([abs(atm) for atm in ff]) for ff in f})==1
         for f in factors
     )
 
@@ -733,9 +733,9 @@ def _pairwise_consistent_unions(cumul, next_cases):
         cases_cumul = [frozenset()]
 
     # Common atom signatures between cumulation so far and next_cases
-    signature_common = {abs(a) for a in list(cases_cumul)[0]} & \
-        {abs(a) for a in list(next_cases)[0]}
-    signature_common_pn = set(sum([(-a, a) for a in signature_common], ()))
+    signature_common = {abs(atm) for atm in list(cases_cumul)[0]} & \
+        {abs(atm) for atm in list(next_cases)[0]}
+    signature_common_pn = set(sum([(-atm, atm) for atm in signature_common], ()))
 
     cumul_new = []
     for i, lits1 in enumerate(cases_cumul):

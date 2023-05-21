@@ -58,8 +58,10 @@ class SimulatedTeacher:
         gameObject_handle = self.current_target_concept[1]
 
         opening_output = {
-            "utterances": ["What is this?"],
-            "pointing": [{ (8, 12): gameObject_handle }]
+            "utterances": ["What kind of truck is this?"],
+            "pointing": [{ (22, 26): gameObject_handle }]
+            # "utterances": ["What is this?"],
+            # "pointing": [{ (8, 12): gameObject_handle }]
         }
 
         return opening_output

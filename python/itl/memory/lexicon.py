@@ -5,9 +5,14 @@ class Lexicon:
     """
     # Special reserved symbols
     RESERVED = {
-        ("=", "*"): ("=", "*"),             # 'Object identity' predicate
-        ("?", "*"): ("?", "*"),             # Wh-quantified predicate
-        ("diff", "*"): ("diff", "*"),       # Concept difference predicate
+        # Invokes object identity check
+        ("=", "*"): ("=", "*"),
+        # Invokes concept instance (i.e., set element) check
+        ("isinstance", "*"): ("isinstance", "*"),
+        # Invokes concept entailment check (against KB)
+        ("entail", "*"): ("entail", "*"),
+        # Invokes concept difference computation
+        ("diff", "*"): ("diff", "*"),
     }
 
     def __init__(self):

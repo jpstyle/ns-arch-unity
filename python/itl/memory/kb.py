@@ -2,7 +2,7 @@ import re
 from collections import defaultdict
 
 from ..lpmln import Literal, Rule, Program
-from ..lpmln.utils import wrap_args, flatten_head_body, unify_mappings
+from ..lpmln.utils import wrap_args, flatten_cons_ante
 
 
 P_C = 0.01          # Catchall hypothesis probability
@@ -13,11 +13,11 @@ class KnowledgeBase:
     ASP) rules
     """
     def __init__(self):
-        # Knowledge base entries stored as collections of rules; each collection
-        # corresponds to a batch (i.e. conjunction) of generic rules extracted from
-        # the same provenance (utterances from teacher, etc.), associated with a
-        # shared probability weight value between 0 ~ 1. Each collection stands for
-        # a conjunction of heads of rules, which should share the same rule body.
+        # Knowledge base entries stored as collections of antecedent-consequent pairs
+        # containing generically quantified variables; each collection corresponds to
+        # a batch (i.e. conjunction) of generic rules extracted from the same provenance
+        # (utterances from teacher, etc.), associated with a shared probability weight
+        # value between 0 ~ 1.
         self.entries = []
 
         # Indexing entries by contained predicates
@@ -31,29 +31,29 @@ class KnowledgeBase:
 
     def __contains__(self, item):
         """ Test if an entry isomorphic to item exists """
-        head, body = item
+        cons, ante = item
 
-        for (ent_head, ent_body), _ in self.entries:
+        for (ent_cons, ent_ante), _ in self.entries:
             # Don't even bother with different set sizes
-            if len(head) != len(ent_head): continue
-            if len(body) != len(ent_body): continue
+            if len(cons) != len(ent_cons): continue
+            if len(ante) != len(ent_ante): continue
 
-            head_isomorphic = Literal.isomorphic_conj_pair(head, ent_head)
-            body_isomorphic = Literal.isomorphic_conj_pair(body, ent_body)
+            cons_isomorphic = Literal.isomorphic_conj_pair(cons, ent_cons)
+            ante_isomorphic = Literal.isomorphic_conj_pair(ante, ent_ante)
 
-            if head_isomorphic and body_isomorphic:
+            if cons_isomorphic and ante_isomorphic:
                 return True
 
         return False
 
     def add(self, rule, weight, source):
         """ Returns whether KB is expanded or not """
-        head, body = rule
+        cons, ante = rule
 
         # Neutralizing variable & function names by stripping off turn/clause
         # indices, etc.
         rename_var = {
-            a for a, _ in _flatten(_extract_terms(head+body))
+            a for a, _ in _flatten(_extract_terms(cons+ante))
             if isinstance(a, str)
         }
         rename_var = {
@@ -61,60 +61,61 @@ class KnowledgeBase:
             for vn in rename_var
         }
         rename_fn = {
-            a[0] for a, _ in _flatten(_extract_terms(head+body))
+            a[0] for a, _ in _flatten(_extract_terms(cons+ante))
             if isinstance(a, tuple)
         }
         rename_fn = {
             fn: re.match("(.+?)(_.+)?$", fn).group(1)+f"_{i}"
             for i, fn in enumerate(rename_fn)
         }
-        head = tuple(_substitute(h, rename_var, rename_fn) for h in head)
-        body = tuple(_substitute(b, rename_var, rename_fn) for b in body)
+        cons = tuple(_substitute(c, rename_var, rename_fn) for c in cons)
+        ante = tuple(_substitute(a, rename_var, rename_fn) for a in ante)
 
-        preds_head = set(_flatten(_extract_preds(head)))
-        preds_body = set(_flatten(_extract_preds(body)))
+        preds_cons = set(_flatten(_extract_preds(cons)))
+        preds_ante = set(_flatten(_extract_preds(ante)))
 
         # Check if the input knowledge can be logically entailed by some existing
         # KB entry (or is already contained in the KB). For now, just check
         # simple one-step entailments (by A,B |- A).
 
         # Initial filtering of irrelevant entries without any overlapping for
-        # both head and body
+        # both cons and ante
         entries_with_overlap = set.union(*[
-            self.entries_by_pred.get(pred, set()) for pred in preds_head
+            self.entries_by_pred.get(pred, set()) for pred in preds_cons
         ]) & set.union(*[
-            self.entries_by_pred.get(pred, set()) for pred in preds_body
+            self.entries_by_pred.get(pred, set()) for pred in preds_ante
         ])
 
         entries_entailed = set()       # KB entries entailed by input
         entries_entailing = set()      # KB entries that entail input
         for ent_id in entries_with_overlap:
-            (ent_head, ent_body), ent_weight, _ = self.entries[ent_id]
+            (ent_cons, ent_ante), ent_weight, _ = self.entries[ent_id]
 
             # Find (partial) term mapping between the KB entry and input with
             # which they can unify
-            mapping_b, ent_dir_b = Literal.entailing_mapping_btw(
-                body, ent_body
+            mapping_a, ent_dir_a = Literal.entailing_mapping_btw(
+                ante, ent_ante
             )
-            if mapping_b is not None:
-                mapping_h, ent_dir_h = Literal.entailing_mapping_btw(
-                    head, ent_head, mapping_b
+            if mapping_a is not None:
+                mapping_c, ent_dir_c = Literal.entailing_mapping_btw(
+                    cons, ent_cons, mapping_a
                 )
-                if mapping_h is not None and {ent_dir_h, ent_dir_b} != {1, -1}:
+                if mapping_c is not None and {ent_dir_c, ent_dir_a} != {1, -1}:
                     # Entailment relation detected
-                    if ent_dir_h >= 0 and ent_dir_b <= 0 and weight >= ent_weight:
+                    if ent_dir_c >= 0 and ent_dir_a <= 0 and weight >= ent_weight:
                         entries_entailed.add(ent_id)
-                    if ent_dir_h <= 0 and ent_dir_b >= 0 and weight <= ent_weight:
+                    if ent_dir_c <= 0 and ent_dir_a >= 0 and weight <= ent_weight:
                         entries_entailing.add(ent_id)
 
         if len(entries_entailing) == len(entries_entailed) == 0:
             # Add the input as a whole new entry along with the weight & source
             # and index it by occurring predicates
-            self.entries.append(((head, body), weight, [(source, weight)]))
-            for pred in preds_head | preds_body:
+            self.entries.append(((cons, ante), weight, [(source, weight)]))
+            for pred in preds_cons | preds_ante:
                 self.entries_by_pred[pred].add(len(self.entries)-1)
             
             kb_updated = True
+
         else:
             # Due to the invariant condition that there's no two KB entries such
             # that one is strictly stronger than the other, the input shouldn't be
@@ -137,9 +138,9 @@ class KnowledgeBase:
 
                     # Add the stronger input as new entry
                     self.entries.append(
-                        ((head, body), weight, [(source, weight)])
+                        ((cons, ante), weight, [(source, weight)])
                     )
-                    for pred in preds_head | preds_body:
+                    for pred in preds_cons | preds_ante:
                         self.entries_by_pred[pred].add(len(self.entries)-1)
 
                     kb_updated = True
@@ -178,6 +179,24 @@ class KnowledgeBase:
             for pred, ent_ids in self.entries_by_pred.items()
         })
 
+    def find_entailer_concepts(self, concepts):
+        """
+        Given a set of concepts, return a set of concepts that entail the conjunction
+        of the provided concepts.
+        
+        (The current version is a hack implementation that assumes all concerned concepts
+        are unary, and the query doesn't require more than single step entailments. If
+        we want to implement a proper querying mechanism later, we may employ a logical
+        reasoning package like clingo...)
+        """
+        assert isinstance(concepts, set)
+
+        if len(self.entries) > 0:
+            return set()
+        else:
+            # Empty KB, no entailing concepts
+            return set()
+
     def export_reasoning_program(self):
         """
         Returns an ASP program that implements deductive & abductive reasonings by
@@ -186,12 +205,12 @@ class KnowledgeBase:
         inference_prog = Program()
 
         # Add rules implementing deductive inference
-        entries_by_head, intermediate_outputs = \
+        entries_by_cons, intermediate_outputs = \
             self._add_deductive_inference_rules(inference_prog)
 
         # Add rules implementing abductive inference
         self._add_abductive_inference_rules(
-            inference_prog, entries_by_head, intermediate_outputs
+            inference_prog, entries_by_cons, intermediate_outputs
         )
 
         # Set of predicates that warrant consideration as possibility even with score
@@ -212,9 +231,9 @@ class KnowledgeBase:
         As self.export_reasoning_program() was getting too long, refactored code for
         deductive inference program synthesis from KB
         """
-        # For collecting entries by same heads, so that abductive inference rules can
+        # For collecting entries by same cons, so that abductive inference rules can
         # be implemented for each collection
-        entries_by_head = defaultdict(list)
+        entries_by_cons = defaultdict(list)
 
         # For caching intermediate outputs assembled during the first (deductive) part
         # and reusing in the second (abductive) part
@@ -222,25 +241,25 @@ class KnowledgeBase:
 
         # Process each entry
         for i, (rule, weight, _) in enumerate(self.entries):
-            head, body = flatten_head_body(*rule)
+            cons, ante = flatten_cons_ante(*rule)
 
             # Keep track of variable names used to avoid accidentally using
             # overlapping names for 'lifting' variables (see below)
             all_var_names = {
-                a for a, _ in _flatten(_extract_terms(head+body))
-                if isinstance(a, str)
+                v for v, _ in _flatten(_extract_terms(cons+ante))
+                if isinstance(v, str)
             }
 
             # All function term args used in this rule
             all_fn_args = {
-                a for a in _flatten(_extract_terms(head+body))
-                if isinstance(a[0], tuple)
+                fa for fa in _flatten(_extract_terms(cons+ante))
+                if isinstance(fa[0], tuple)
             }
 
             # Attach unique identifier suffixes to function names, so that functions
             # from different KB entries can be distinguished; names are shared across
             # within entry
-            all_fn_names = {a[0][0] for a in all_fn_args}
+            all_fn_names = {fa[0][0] for fa in all_fn_args}
             fn_name_map = { fn: f"{fn}_{i}" for fn in all_fn_names }
 
             # Map for lifting function term to new variable arg term
@@ -251,74 +270,74 @@ class KnowledgeBase:
             }
 
             rule_fn_subs = {
-                "head": [h.substitute(functions=fn_name_map) for h in head],
-                "body": [b.substitute(functions=fn_name_map) for b in body]
+                "cons": [c.substitute(functions=fn_name_map) for c in cons],
+                "ante": [a.substitute(functions=fn_name_map) for a in ante]
             }
             rule_lifted = {
-                "head": [h.substitute(terms=fn_lifting_map) for h in rule_fn_subs["head"]],
-                "body": [b.substitute(terms=fn_lifting_map) for b in rule_fn_subs["body"]]
+                "cons": [c.substitute(terms=fn_lifting_map) for c in rule_fn_subs["cons"]],
+                "ante": [a.substitute(terms=fn_lifting_map) for a in rule_fn_subs["ante"]]
             }
 
-            # List of unique non-function variable arguments in 1) rule head and 2) rule body
+            # List of unique non-function variable arguments in 1) rule cons and 2) rule ante
             # (effectively whole rule) in the order of occurrence
-            h_var_signature = []; b_var_signature = []
-            for hl in rule_fn_subs["head"]:
+            c_var_signature = []; a_var_signature = []
+            for hl in rule_fn_subs["cons"]:
                 for v_val, _ in hl.nonfn_terms():
-                    if v_val not in h_var_signature: h_var_signature.append(v_val)
-            for bl in rule_fn_subs["body"]:
+                    if v_val not in c_var_signature: c_var_signature.append(v_val)
+            for bl in rule_fn_subs["ante"]:
                 for v_val, _ in bl.nonfn_terms():
-                    if v_val not in b_var_signature: b_var_signature.append(v_val)
+                    if v_val not in a_var_signature: a_var_signature.append(v_val)
 
-            # Rule head/body satisfaction flags literals
-            h_sat_lit = Literal(f"head_sat_{i}", wrap_args(*h_var_signature))
-            b_sat_lit = Literal(f"body_sat_{i}", wrap_args(*b_var_signature))
+            # Rule cons/ante satisfaction flags literals
+            c_sat_lit = Literal(f"cons_sat_{i}", wrap_args(*c_var_signature))
+            a_sat_lit = Literal(f"ante_sat_{i}", wrap_args(*a_var_signature))
 
-            # Flag literal is derived when head/body is satisfied; in the meantime, lift
+            # Flag literal is derived when cons/ante is satisfied; in the meantime, lift
             # occurrences of function terms and add appropriate function value assignment
             # literals
-            h_sat_conds_pure = [        # Conditions having only 'pure' non-function args
-                lit for lit in rule_lifted["head"]
-                if all(a[0] in h_var_signature for a in lit.args)
+            c_sat_conds_pure = [        # Conditions having only 'pure' non-function args
+                lit for lit in rule_lifted["cons"]
+                if all(arg[0] in c_var_signature for arg in lit.args)
             ]
-            h_fn_terms = set.union(*[
-                {a for a in l.args if type(a[0])==tuple} for l in rule_fn_subs["head"]
-            ]) if len(rule_fn_subs["head"]) > 0 else set()
-            h_fn_assign = [
+            c_fn_terms = set.union(*[
+                {arg for arg in l.args if type(arg[0])==tuple} for l in rule_fn_subs["cons"]
+            ]) if len(rule_fn_subs["cons"]) > 0 else set()
+            c_fn_assign = [
                 Literal(f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[fn_lifting_map[ft]])
-                for ft in h_fn_terms
+                for ft in c_fn_terms
             ]
 
-            b_sat_conds_pure = [
-                lit for lit in rule_lifted["body"]
-                if all(a[0] in b_var_signature for a in lit.args)
+            a_sat_conds_pure = [
+                lit for lit in rule_lifted["ante"]
+                if all(arg[0] in a_var_signature for arg in lit.args)
             ]
-            b_fn_terms = set.union(*[
-                {a for a in l.args if type(a[0])==tuple} for l in rule_fn_subs["body"]
+            a_fn_terms = set.union(*[
+                {arg for arg in l.args if type(arg[0])==tuple} for l in rule_fn_subs["ante"]
             ])
-            b_fn_assign = [
+            a_fn_assign = [
                 Literal(f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[fn_lifting_map[ft]])
-                for ft in b_fn_terms
+                for ft in a_fn_terms
             ]
 
-            if len(h_sat_conds_pure+h_fn_assign) > 0:
-                # Skip headless rules
+            if len(c_sat_conds_pure+c_fn_assign) > 0:
+                # Skip cons-less rules
                 inference_prog.add_absolute_rule(
-                    Rule(head=h_sat_lit, body=h_sat_conds_pure+h_fn_assign)
+                    Rule(head=c_sat_lit, body=c_sat_conds_pure+c_fn_assign)
                 )
             inference_prog.add_absolute_rule(
-                Rule(head=b_sat_lit, body=b_sat_conds_pure+b_fn_assign)
+                Rule(head=a_sat_lit, body=a_sat_conds_pure+a_fn_assign)
             )
 
-            # Indexing & storing the entry by head for later abductive rule
-            # translation (thus, no need to consider headless constraints)
-            if len(head) > 0:
-                for h_lits in entries_by_head:
-                    ism, ent_dir = Literal.entailing_mapping_btw(head, h_lits)
+            # Indexing & storing the entry by cons for later abductive rule
+            # translation (thus, no need to consider cons-less constraints)
+            if len(cons) > 0:
+                for c_lits in entries_by_cons:
+                    ism, ent_dir = Literal.entailing_mapping_btw(cons, c_lits)
                     if ent_dir == 0:
-                        entries_by_head[h_lits].append((i, ism))
+                        entries_by_cons[c_lits].append((i, ism))
                         break
                 else:
-                    entries_by_head[frozenset(head)].append((i, None))
+                    entries_by_cons[frozenset(cons)].append((i, None))
 
             # Choice rule for function value assignments
             def add_assignment_choices(fn_terms, sat_conds):
@@ -336,14 +355,14 @@ class KnowledgeBase:
                             body=rel_conds
                         )
                     )
-            add_assignment_choices(h_fn_terms, rule_lifted["head"])
-            add_assignment_choices(b_fn_terms, rule_lifted["body"])
+            add_assignment_choices(c_fn_terms, rule_lifted["cons"])
+            add_assignment_choices(a_fn_terms, rule_lifted["ante"])
 
             # Rule violation flag
-            r_unsat_lit = Literal(f"deduc_viol_{i}", wrap_args(*b_var_signature))
+            r_unsat_lit = Literal(f"deduc_viol_{i}", wrap_args(*a_var_signature))
             inference_prog.add_absolute_rule(Rule(
                 head=r_unsat_lit,
-                body=[b_sat_lit] + ([h_sat_lit.flip()] if len(head) > 0 else [])
+                body=[a_sat_lit] + ([c_sat_lit.flip()] if len(cons) > 0 else [])
             ))
             
             # Add appropriately weighted rule for applying 'probabilistic pressure'
@@ -352,69 +371,69 @@ class KnowledgeBase:
 
             # Store intermediate outputs for later reuse
             intermediate_outputs.append((
-                h_sat_lit, b_sat_lit, h_var_signature, b_var_signature
+                c_sat_lit, a_sat_lit, c_var_signature, a_var_signature
             ))
 
-        return entries_by_head, intermediate_outputs
+        return entries_by_cons, intermediate_outputs
 
     def _add_abductive_inference_rules(
-        self, inference_prog, entries_by_head, intermediate_outputs
+        self, inference_prog, entries_by_cons, intermediate_outputs
     ):
         """
         As self.export_reasoning_program() was getting too long, refactored code for
         abductive inference program synthesis from KB
         """
-        for i, entry_collection in enumerate(entries_by_head.values()):
+        for i, entry_collection in enumerate(entries_by_cons.values()):
             # (If there are more than one entries in collection) Standardize names
             # to comply with the first entry in collection, using the discovered
             # isomorphic mappings (which should not be None)
             standardized_outputs = []
             for ei, ism in entry_collection:
-                h_sat_lit, b_sat_lit, h_var_signature, b_var_signature \
+                c_sat_lit, a_sat_lit, c_var_signature, a_var_signature \
                     = intermediate_outputs[ei]
 
                 if ism is not None:
-                    h_sat_lit = h_sat_lit.substitute(**ism)
-                    b_sat_lit = b_sat_lit.substitute(**ism)
+                    c_sat_lit = c_sat_lit.substitute(**ism)
+                    a_sat_lit = a_sat_lit.substitute(**ism)
 
-                    h_var_signature = [ism["terms"][v] for v in h_var_signature]
-                    b_var_signature = [ism["terms"][v] for v in b_var_signature]
+                    c_var_signature = [ism["terms"][v] for v in c_var_signature]
+                    a_var_signature = [ism["terms"][v] for v in a_var_signature]
 
                 standardized_outputs.append((
-                    h_sat_lit, b_sat_lit, h_var_signature, b_var_signature
+                    c_sat_lit, a_sat_lit, c_var_signature, a_var_signature
                 ))
 
-            coll_h_var_signature = standardized_outputs[0][2]
+            coll_c_var_signature = standardized_outputs[0][2]
 
-            # Index-neutral flag holding when any (and all) of the explanandum (head(s))
+            # Index-neutral flag holding when any (and all) of the explanandum (cons(s))
             # in the collection holds
-            coll_h_sat_lit = Literal(
-                f"coll_head_sat_{i}", wrap_args(*coll_h_var_signature)
+            coll_c_sat_lit = Literal(
+                f"coll_cons_sat_{i}", wrap_args(*coll_c_var_signature)
             )
 
             for s_out in standardized_outputs:
-                # coll_h_sat_lit holds when any (and all) of the heads hold
+                # coll_c_sat_lit holds when any (and all) of the cons hold
                 inference_prog.add_absolute_rule(
-                    Rule(head=coll_h_sat_lit, body=s_out[0])
+                    Rule(head=coll_c_sat_lit, body=s_out[0])
                 )
 
-            # Flag holding when the explanandum (head) is not explained by any of
+            # Flag holding when the explanandum (cons) is not explained by any of
             # the explanantia (bodies), and thus evoke 'catchall' hypothesis
-            coll_h_catchall_lit = Literal(
-                f"abduc_catchall_{i}", wrap_args(*coll_h_var_signature)
+            coll_c_catchall_lit = Literal(
+                f"abduc_catchall_{i}", wrap_args(*coll_c_var_signature)
             )
 
-            # r_catchall_lit holds when coll_h_sat_lit holds but none of the
+            # r_catchall_lit holds when coll_c_sat_lit holds but none of the
             # explanantia (bodies) hold
             unexpl_lits = [s_out[1].flip() for s_out in standardized_outputs]
             inference_prog.add_absolute_rule(Rule(
-                head=coll_h_catchall_lit, body=[coll_h_sat_lit]+unexpl_lits
+                head=coll_c_catchall_lit, body=[coll_c_sat_lit]+unexpl_lits
             ))
 
             # Add appropriately weighted rule for applying 'probabilistic pressure'
             # against resorting to catchall hypothesis due to absence of abductive
-            # explanation of head
-            inference_prog.add_rule(Rule(body=coll_h_catchall_lit), 1-P_C)
+            # explanation of cons
+            inference_prog.add_rule(Rule(body=coll_c_catchall_lit), 1-P_C)
 
 
 # Recursive helper methods for fetching predicate terms and names, substituting

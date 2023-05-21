@@ -2,11 +2,11 @@
 from itertools import product
 
 from ..lpmln import Rule, Polynomial
-from ..lpmln.utils import flatten_head_body
+from ..lpmln.utils import flatten_cons_ante
 from ..lpmln.program.compile import bjt_query
 
 
-def query(bjt, q_vars, event):
+def query(bjt, q_vars, event, restrictors):
     """
     Query a BJT compiled from LP^MLN program to estimate the likelihood of each
     possible answer to the provided question, represented as tuple of entities
@@ -16,6 +16,9 @@ def query(bjt, q_vars, event):
 
     If q_vars is None we have a yes/no (polar) question, where having a non-empty
     tuple as q_vars indicates we have a wh-question.
+
+    The dict 'restrictors' contains constraints (if any) for predicate variables
+    such that their values can only be picked among them.
     """
     if isinstance(event, tuple):
         # Accept single-rule (tuple) event and wrap in a set
@@ -25,11 +28,11 @@ def query(bjt, q_vars, event):
         event = list(event)
 
     event = [
-        flatten_head_body(ev_head, ev_body) for ev_head, ev_body in event
+        flatten_cons_ante(ev_cons, ev_ante) for ev_cons, ev_ante in event
     ]
     event = set(sum([
-        [Rule(head=l) for l in ev_head] if len(ev_head) > 0 else [Rule(body=ev_body)]
-        for ev_head, ev_body in event
+        [Rule(head=l) for l in ev_cons] if len(ev_cons) > 0 else [Rule(body=ev_ante)]
+        for ev_cons, ev_ante in event
     ], []))
     assert all(
         ev_rule.is_fact() or ev_rule.is_single_body_constraint()
@@ -53,26 +56,37 @@ def query(bjt, q_vars, event):
         # Set of entities and predicates (along w/ arity info - values defined only for
         # predicate q_var) occurring in atoms_covered
         if len(atoms_covered) > 0:
-            ents = set.union(*[{a[0] for a in atm.args} for atm in atoms_covered])
+            ents = set.union(*[{arg[0] for arg in atm.args} for atm in atoms_covered])
         else:
             ents = set()
-
         preds = set((atm.name, len(atm.args)) for atm in atoms_covered)
-        # For now, let's limit our answer to "what is X" questions to nouns: i.e. object
-        # class categories...
-        preds = {p for p in preds if p[0].startswith("cls")}
 
+        # Arities of the occurring preds for preliminary filtering of possible
+        # grounded event instances
         pred_var_arities = {
             l for l in set.union(*[ev_rule.literals() for ev_rule in event])
-            if l.name=="*_?"
+            if l.name=="*_isinstance"
         }
-        pred_var_arities = {l.args[0][0]: len(l.args)-1 for l in pred_var_arities}
+        pred_var_arities = { l.args[0][0]: len(l.args)-1 for l in pred_var_arities }
 
-        # All possible grounded instances of event
-        subs_options = product(*[
-            [p[0] for p in preds if pred_var_arities[qv]==p[1]] if is_pred else ents
-            for qv, is_pred in q_vars
-        ])
+        # All possible variable substitutions based on ents & preds (& restrictors)
+        subs_options = []       # List index matching with q_vars
+        for qv, is_pred in q_vars:
+            if is_pred:
+                preds_filtered = {
+                    p[0] for p in preds
+                    if pred_var_arities[qv]==p[1] and
+                        (qv not in restrictors or p[0] in restrictors[qv])
+                    # Filter to leave predicates that have matching arities and are
+                    # allowed by restrictors; if qv is not in restrictors, no constaints
+                    # placed for qv
+                }
+                subs_options.append(preds_filtered)
+            else:
+                subs_options.append(ents)
+
+        # All combinatorially possible grounded instances of event, obtained from
+        # the substitutions
         ev_instances = {
             s_opt: [
                 ev_rule.substitute(
@@ -87,11 +101,11 @@ def query(bjt, q_vars, event):
                 )
                 for ev_rule in event
             ]
-            for s_opt in subs_options
+            for s_opt in product(*subs_options)
         }
 
         # Initial pruning of q_vars assignments that are not worth considering; may
-        # disregard assignments yielding any body-less rules (i.e. facts) whose head
+        # disregard assignments yielding any ante-less rules (i.e. facts) whose cons
         # atom(s) does not appear in atoms_covered
         ev_instances = {
             assig: ev_ins for assig, ev_ins in ev_instances.items()
@@ -117,8 +131,6 @@ def query(bjt, q_vars, event):
         assig: (
             p_table[query_keys[assig]],
             sum(p_table.values(), Polynomial(float_val=0.0))
-        ) if p_table is not None else (
-            Polynomial(float_val=0.0), Polynomial(float_val=1.0)
         )
         for assig, p_table in unnorm_potentials.items()
     }
@@ -181,14 +193,16 @@ def _query_bjt(bjt, q_key):
     """
     if q_key is None:
         # Unsatisfiable query
-        return None
+        return { None: Polynomial(float_val=0.0), frozenset(): Polynomial(float_val=1.0) }
 
-    assert len(q_key) > 0
+    if len(q_key) == 0:
+        # Trivially satisfiable query
+        return { q_key: Polynomial(float_val=1.0) }
 
     relevant_nodes = frozenset({abs(n) for n in q_key})
     if len(q_key) == 1:
         # Simpler case of single-item key, just fetch the smallest BJT node covering
-        # the key node, which always exist, and is guaranteed to be as small as possible
+        # the key node, which always exists, and is guaranteed to be as small as possible
         # (since all singleton node sets are included during construction of BJT)
         return bjt.nodes[relevant_nodes]["output_beliefs"]
     else:

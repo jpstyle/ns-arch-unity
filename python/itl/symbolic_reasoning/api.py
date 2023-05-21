@@ -22,7 +22,7 @@ import numpy as np
 
 from .query import query
 from ..lpmln import Literal, Rule, Program
-from ..lpmln.utils import wrap_args, flatten_head_body
+from ..lpmln.utils import wrap_args, flatten_cons_ante
 
 
 TAB = "\t"              # For use in format strings
@@ -145,14 +145,17 @@ class SymbolicReasonerModule:
 
         # Discourse referents
         for rf, v in dialogue_state["referents"]["dis"].items():
-            if not (v["is_univ_quantified"] or v["is_wh_quantified"]):
-                aprog.add_absolute_rule(Rule(head=Literal("dis", wrap_args(rf))))
-                if v["is_referential"]:
-                    aprog.add_absolute_rule(Rule(head=Literal("referential", wrap_args(rf))))
+            # No need to assign if not an entity referent
+            if not rf.startswith("x"): continue
+            # No need to assign if universally quantified or wh-quantified
+            if v["is_univ_quantified"] or v["is_wh_quantified"]: continue
+
+            aprog.add_absolute_rule(Rule(head=Literal("dis", wrap_args(rf))))
+            if v["is_referential"]:
+                aprog.add_absolute_rule(Rule(head=Literal("referential", wrap_args(rf))))
 
         # Hard assignments by pointing, etc.
         for ref, env in dialogue_state["assignment_hard"].items():
-            aprog.add_absolute_rule(Rule(head=Literal("env", wrap_args(env))))
             aprog.add_absolute_rule(
                 Rule(body=[Literal("assign", [(ref, False), (env, False)], naf=True)])
             )
@@ -194,19 +197,19 @@ class SymbolicReasonerModule:
 
         # Understood dialogue record contents
         occurring_preds = set()
-        for ti, (speaker, turn_clauses) in enumerate(dialogue_state["record"]):
+        for ti, (speaker, turn_sentences) in enumerate(dialogue_state["record"]):
             # Nothing particular to do with agent's own utterances
             if speaker == "A": continue
 
-            for ci, ((rule, question), _) in enumerate(turn_clauses):
+            for si, ((rule, question), _) in enumerate(turn_sentences):
                 if rule is not None:
-                    head, body = rule
+                    cons, ante = rule
 
-                    head_preds = [extract_preds(h) for h in head]
-                    body_preds = [extract_preds(b) for b in body]
+                    cons_preds = [extract_preds(c) for c in cons]
+                    ante_preds = [extract_preds(a) for a in ante]
 
                     # Symbol token occurrence locations
-                    for c, preds in [("h", head_preds), ("b", body_preds)]:
+                    for c, preds in [("c", cons_preds), ("a", ante_preds)]:
                         for src, p in flatten(preds):
                             # Skip special reserved predicates
                             if p[1] == "*": continue
@@ -217,25 +220,28 @@ class SymbolicReasonerModule:
                             src_loc = "_".join(str(i) for i in src)
 
                             sym = f"{p[1]}_{p[0].split('/')[0]}"
-                            tok_loc = f"t{ti}_c{ci}_r{c}_{src_loc}"
+                            tok_loc = f"t{ti}_s{si}_r{c}_{src_loc}"
                             aprog.add_absolute_rule(
                                 Rule(head=Literal("pred_token", wrap_args(tok_loc, sym)))
                             )
 
-                    head_args = [extract_args(h) for h in head]
-                    body_args = [extract_args(b) for b in body]
-                    occurring_args = set(sum([a for _, a in flatten(head_args+body_args)], ()))
+                    cons_args = [extract_args(c) for c in cons]
+                    ante_args = [extract_args(a) for a in ante]
+                    occurring_args = sum([a for _, a in flatten(cons_args+ante_args)], ())
+                    # Those starting with "p" refer to predicates, not entities
+                    occurring_args = {arg for arg in occurring_args if arg.startswith("x")}
 
-                    if all(a in dialogue_state["assignment_hard"] for a in occurring_args):
+                    if all(arg in dialogue_state["assignment_hard"] for arg in occurring_args):
                         # Below not required if all occurring args are hard-assigned to some entity
                         continue
 
                     # If bjt_v is present and rule is grounded, add bias in favor of
                     # assignments which would satisfy the rule
-                    is_grounded = all(not a[0].isupper() for a in occurring_args)
+                    is_grounded = all(not arg[0].isupper() for arg in occurring_args)
                     if self.concl_vis is not None and is_grounded:
-                        # TODO: Update to comply with the recent changes
-                        raise NotImplementedError
+                        # TODO: Update to comply with the recent changes... When coreference
+                        # resolution becomes a serious issue to address
+                        pass
 
                         # # Rule instances by possible word sense selections
                         # wsd_cands = [lexicon.s2d[sym[:2]] for sym in head_preds+body_preds]
@@ -283,13 +289,13 @@ class SymbolicReasonerModule:
                         #         aprog.add_absolute_rule(Rule(head=c_head, body=c_body))
                 
                 if question is not None:
-                    _, (head, body) = question
+                    _, (cons, ante) = question
 
-                    head_preds = [extract_preds(h) for h in head]
-                    body_preds = [extract_preds(b) for b in body]
+                    cons_preds = [extract_preds(c) for c in cons]
+                    ante_preds = [extract_preds(a) for a in ante]
 
                     # Symbol token occurrence locations
-                    for c, preds in [("h", head_preds), ("b", body_preds)]:
+                    for c, preds in [("c", cons_preds), ("a", ante_preds)]:
                         for src, p in flatten(preds):
                             # Skip special reserved predicates
                             if p[1] == "*": continue
@@ -300,7 +306,7 @@ class SymbolicReasonerModule:
                             src_loc = "_".join(str(i) for i in src)
 
                             sym = f"{p[1]}_{p[0].split('/')[0]}"
-                            tok_loc = f"t{ti}_c{ci}_q{c}_{src_loc}"
+                            tok_loc = f"t{ti}_s{si}_q{c}_{src_loc}"
                             aprog.add_absolute_rule(
                                 Rule(head=Literal("pred_token", wrap_args(tok_loc, sym)))
                             )
@@ -436,30 +442,30 @@ class SymbolicReasonerModule:
         sense selection. Dismiss (replace with None) any utterances containing
         unresolved neologisms.
         """
-        a_map = lambda args: [self.value_assignment.get(a, a) for a in args]
+        a_map = lambda args: [self.value_assignment.get(arg, arg) for arg in args]
 
         # Recursive helper methods for encoding pre-translation tuples representing
         # literals into actual Literal objects
-        encode_lits = lambda cnjt, ti, ci, rqhb, inds: Literal(
+        encode_lits = lambda cnjt, ti, si, rqca, inds: Literal(
                 self.word_senses.get(
-                    (f"t{ti}",f"c{ci}",rqhb)+tuple(str(i) for i in inds),
+                    (f"t{ti}",f"s{si}",rqca)+tuple(str(i) for i in inds),
                     # If not found (likely reserved predicate), fall back to cnjt's pred
                     (None, "_".join(cnjt[1::-1]))
                 )[1],
                 args=wrap_args(*a_map(cnjt[2])), naf=cnjt[3]
             ) \
             if isinstance(cnjt, tuple) \
-            else [encode_lits(nc, ti, ci, rqhb, inds+(i,)) for i, nc in enumerate(cnjt)]
+            else [encode_lits(nc, ti, si, rqca, inds+(i,)) for i, nc in enumerate(cnjt)]
 
         record_translated = []
-        for ti, (speaker, turn_clauses) in enumerate(dialogue_state["record"]):
+        for ti, (speaker, turn_sentences) in enumerate(dialogue_state["record"]):
             turn_translated = []
-            for ci, ((rule, question), raw) in enumerate(turn_clauses):
+            for si, ((rule, question), raw) in enumerate(turn_sentences):
                 # If the utterance contains an unresolved neologism, give up translation
                 # for the time being
                 contains_unresolved_neologism = any([
                     den is None for tok, (_, den) in self.word_senses.items()
-                    if tok[:2]==(f"t{ti}", f"c{ci}")
+                    if tok[:2]==(f"t{ti}", f"s{si}")
                 ])
                 if contains_unresolved_neologism:
                     turn_translated.append(((None, None), raw))
@@ -467,45 +473,45 @@ class SymbolicReasonerModule:
 
                 # Translate rules
                 if rule is not None:
-                    head, body = rule
+                    cons, ante = rule
 
-                    if len(head) > 0:
-                        tr_head = tuple(
-                            encode_lits(h,ti,ci,"rh",(hi,)) for hi, h in enumerate(head)
+                    if len(cons) > 0:
+                        tr_cons = tuple(
+                            encode_lits(c,ti,si,"rc",(ci,)) for ci, c in enumerate(cons)
                         )
                     else:
-                        tr_head = None
+                        tr_cons = None
 
-                    if len(body) > 0:
-                        tr_body = tuple(
-                            encode_lits(b,ti,ci,"rb",(bi,)) for bi, b in enumerate(body)
+                    if len(ante) > 0:
+                        tr_ante = tuple(
+                            encode_lits(a,ti,si,"ra",(ai,)) for ai, a in enumerate(ante)
                         )
                     else:
-                        tr_body = None
+                        tr_ante = None
 
-                    translated_rule = (tr_head, tr_body)
+                    translated_rule = (tr_cons, tr_ante)
                 else:
                     translated_rule = None
                 
                 # Translate question
                 if question is not None:
-                    q_vars, (head, body) = question
+                    q_vars, (cons, ante) = question
 
-                    if len(head) > 0:
-                        tr_head = tuple(
-                            encode_lits(h,ti,ci,"qh",(hi,)) for hi, h in enumerate(head)
+                    if len(cons) > 0:
+                        tr_cons = tuple(
+                            encode_lits(c,ti,si,"qc",(ci,)) for ci, c in enumerate(cons)
                         )
                     else:
-                        tr_head = None
+                        tr_cons = None
 
-                    if len(body) > 0:
-                        tr_body = tuple(
-                            encode_lits(b,ti,ci,"qb",(bi,)) for bi, b in enumerate(body)
+                    if len(ante) > 0:
+                        tr_ante = tuple(
+                            encode_lits(a,ti,si,"qa",(ai,)) for ai, a in enumerate(ante)
                         )
                     else:
-                        tr_body = None
+                        tr_ante = None
 
-                    translated_question = q_vars, (tr_head, tr_body)
+                    translated_question = q_vars, (tr_cons, tr_ante)
                 else:
                     translated_question = None
 
@@ -528,33 +534,43 @@ class SymbolicReasonerModule:
         dprog = Program()
         bjt_v, (pprog, kb_prog) = self.concl_vis
 
-        # TODO (in some future): Incremental BJT update from existing bjt_v and additional dprog info
+        # TODO (in some future): Incremental BJT update from existing bjt_v and additional
+        # dprog info (cf. [Incremental junction tree inference], Agli et al. 2016)
 
         # Incorporate additional information provided by the user in language for updated
         # sensemaking
-        for speaker, turn_clauses in self.translate_dialogue_content(dialogue_state):
+        for speaker, turn_sentences in self.translate_dialogue_content(dialogue_state):
             if speaker != "U": continue
 
-            for (rule, _), _ in turn_clauses:
+            for (rule, _), _ in turn_sentences:
                 if rule is not None:
-                    head, body = flatten_head_body(*rule)
+                    cons, ante = flatten_cons_ante(*rule)
 
                     # Skip any non-grounded content
-                    head_has_var = len(head) > 0 and any([
-                        any(is_var for _, is_var in h.args) for h in head
+                    cons_has_var = len(cons) > 0 and any([
+                        any(is_var for _, is_var in c.args) for c in cons
                     ])
-                    body_has_var = len(body) > 0 and any([
-                        any(is_var for _, is_var in b.args) for b in body
+                    ante_has_var = len(ante) > 0 and any([
+                        any(is_var for _, is_var in a.args) for a in ante
                     ])
-                    if head_has_var or body_has_var: continue
+                    if cons_has_var or ante_has_var: continue
 
-                    if len(head) > 0:
-                        # One ASP rule per head
-                        for hl in head:
-                            dprog.add_rule(Rule(head=hl, body=body), U_IN_PR)
+                    # Skip any rules with non-entity referents
+                    cons_has_pred_ent = len(cons) > 0 and any([
+                        any(arg.startswith("p") for arg, _ in c.args) for c in cons
+                    ])
+                    ante_has_pred_ent = len(ante) > 0 and any([
+                        any(arg.startswith("p") for arg, _ in a.args) for a in ante
+                    ])
+                    if cons_has_pred_ent or ante_has_pred_ent: continue
+
+                    if len(cons) > 0:
+                        # One ASP rule per cons
+                        for cl in cons:
+                            dprog.add_rule(Rule(head=cl, body=ante), U_IN_PR)
                     else:
-                        # Headless; single constraint
-                        dprog.add_rule(Rule(body=body), U_IN_PR)
+                        # Cons-less; single constraint
+                        dprog.add_rule(Rule(body=ante), U_IN_PR)
 
         # Finally, reasoning with all visual+language info
         if len(dprog) > 0:
@@ -567,5 +583,5 @@ class SymbolicReasonerModule:
         self.concl_vis_lang = bjt_vl, (pprog, kb_prog, dprog)
 
     @staticmethod
-    def query(bjt, q_vars, event):
-        return query(bjt, q_vars, event)
+    def query(bjt, q_vars, event, restrictors=None):
+        return query(bjt, q_vars, event, restrictors or {})

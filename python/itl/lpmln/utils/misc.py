@@ -10,17 +10,17 @@ def wrap_args(*args):
     if the first letter is uppercased
     """
     wrapped = []
-    for a in args:
-        if type(a) == str:
+    for arg in args:
+        if type(arg) == str:
             # Non-function term
-            wrapped.append((a, a[0].isupper()))
-        elif type(a) == tuple:
+            wrapped.append((arg, arg[0].isupper()))
+        elif type(arg) == tuple:
             # Function term
-            _, f_args = a
-            wrapped.append((a, all(fa[0].isupper() for fa in f_args)))
-        elif type(a) == int or type(a) == float:
+            _, f_args = arg
+            wrapped.append((arg, all(fa[0].isupper() for fa in f_args)))
+        elif type(arg) == int or type(arg) == float:
             # Number, definitely not a variable
-            wrapped.append((a, False))
+            wrapped.append((arg, False))
         else:
             raise NotImplementedError
 
@@ -48,33 +48,33 @@ def sigmoid(l):
     else:
         return float(1 / (1 + np.exp(-l)))
 
-def flatten_head_body(head, body):
+def flatten_cons_ante(cons, ante):
     """
     Rearrange until any nested conjunctions are all properly flattened out,
     so that rule can be translated into appropriate ASP clause
     """
     from .. import Literal
 
-    head = list(head) if head is not None else []
-    body = list(body) if body is not None else []
-    conjuncts = head + body
+    cons = list(cons) if cons is not None else []
+    ante = list(ante) if ante is not None else []
+    conjuncts = cons + ante
     while any(not isinstance(c, Literal) for c in conjuncts):
-        # Migrate any negated conjunctions in head to body
-        conjuncts_p = [h for h in head if isinstance(h, Literal)]
-        conjuncts_n = [h for h in head if not isinstance(h, Literal)]
+        # Migrate any negated conjunctions in cons to ante
+        conjuncts_p = [c for c in cons if isinstance(c, Literal)]
+        conjuncts_n = [c for c in cons if not isinstance(c, Literal)]
 
-        head = conjuncts_p
-        body = body + sum(conjuncts_n, [])
+        cons = conjuncts_p
+        ante = ante + sum(conjuncts_n, [])
 
-        if any(not isinstance(c, Literal) for c in body):
+        if any(not isinstance(a, Literal) for a in ante):
             # Introduce auxiliary literals that are derived when
-            # each conjunction in body is satisfied
+            # each conjunction in ante is satisfied
             # (Not needed, not implemented yet :p)
             raise NotImplementedError
 
-        conjuncts = head + body
+        conjuncts = cons + ante
     
-    return head, body
+    return cons, ante
 
 def unify_mappings(mappings):
     """

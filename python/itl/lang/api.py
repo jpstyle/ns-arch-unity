@@ -86,10 +86,10 @@ class LanguageModule:
                     if type(rf) == tuple:
                         # Function term
                         f_args = tuple(
-                            f"{term_char.upper()}{r2i[a]}{turn_clause_tag}"
-                                if ref_map[a]["is_univ_quantified"] or ref_map[a]["is_wh_quantified"]
-                                else f"{term_char}{r2i[a]}{turn_clause_tag}"
-                            for a in rf[1]
+                            f"{term_char.upper()}{r2i[arg]}{turn_clause_tag}"
+                                if ref_map[arg]["is_univ_quantified"] or ref_map[arg]["is_wh_quantified"]
+                                else f"{term_char}{r2i[arg]}{turn_clause_tag}"
+                            for arg in rf[1]
                         )
                         rf = (rf[0], f_args)
 
@@ -155,56 +155,56 @@ class LanguageModule:
 
             # ASP-compatible translation
             for ev_id, (topic_msgs, focus_msgs) in asp_content.items():
-                head = []; body = []
+                cons = []; ante = []
 
                 # Process topic messages
                 for m in topic_msgs:
                     if type(m) == tuple:
                         # Non-negated message
-                        occurring_args = sum([a[1] if type(a)==tuple else (a,) for a in m[2]], ())
+                        occurring_args = sum([arg[1] if type(arg)==tuple else (arg,) for arg in m[2]], ())
                         occurring_args = tuple(set(occurring_args))
 
-                        var_free = not any([ref_map[a]["is_univ_quantified"] for a in occurring_args])
+                        var_free = not any([ref_map[arg]["is_univ_quantified"] for arg in occurring_args])
 
                         if var_free:
-                            # Add the grounded literal to head
-                            head.append(m[:2]+(tuple(m[2]),False))
+                            # Add the grounded literal to cons
+                            cons.append(m[:2]+(tuple(m[2]),False))
                         else:
-                            # Add the non-grounded literal to body
-                            body.append(m[:2]+(tuple(m[2]),False))
+                            # Add the non-grounded literal to ante
+                            ante.append(m[:2]+(tuple(m[2]),False))
                     else:
                         # Negation of conjunction
                         occurring_args = sum([
-                            sum([a[1] if type(a)==tuple else (a,) for a in l[2]], ()) for l in m
+                            sum([arg[1] if type(arg)==tuple else (arg,) for arg in l[2]], ()) for l in m
                         ], ())
                         occurring_args = tuple(set(occurring_args))
 
-                        var_free = not any([ref_map[a]["is_univ_quantified"] for a in occurring_args])
+                        var_free = not any([ref_map[arg]["is_univ_quantified"] for arg in occurring_args])
 
                         conj = [l[:2]+(tuple(l[2]),False) for l in m]
                         conj = list(set(conj))      # Remove duplicate literals
 
                         if var_free:
-                            # Add the non-grounded conjunction to head
-                            head.append(conj)
+                            # Add the non-grounded conjunction to cons
+                            cons.append(conj)
                         else:
-                            # Add the non-grounded conjunction to body
-                            body.append(conj)
+                            # Add the non-grounded conjunction to ante
+                            ante.append(conj)
 
                 # Process focus messages
                 for m in focus_msgs:
                     if type(m) == tuple:
                         # Non-negated message
-                        head.append(m[:2] + (tuple(m[2]), False))
+                        cons.append(m[:2] + (tuple(m[2]), False))
                     else:
                         # Negation of conjunction
                         conj = [l[:2]+(tuple(l[2]),False) for l in m]
                         conj = list(set(conj))      # Remove duplicate literals
-                        head.append(conj)
+                        cons.append(conj)
 
                 if parse["utt_type"][ev_id] == "prop":
                     # Indicatives
-                    prop = _map_and_format((head, body), ref_map, ti, si, r2i, se2i)
+                    prop = _map_and_format((cons, ante), ref_map, ti, si, r2i, se2i)
 
                     new_record.append(((prop, None), parse["conjunct_raw"][ev_id]))
 
@@ -230,17 +230,17 @@ class LanguageModule:
                         # currently I cannot think of any universally quantified
                         # presuppositions that can be conveyed via questions -- at
                         # least we don't have such cases in our use scenarios).
-                        head = [l for l in head if len(wh_refs & set(l[2])) > 0]
-                        body = [l for l in body if len(wh_refs & set(l[2])) > 0]
                         presup = [
-                            l for l in head if len(wh_refs & set(l[2])) == 0
+                            l for l in cons if len(wh_refs & set(l[2])) == 0
                         ] + [
-                            l for l in body if len(wh_refs & set(l[2])) == 0
-                        ]
+                            l for l in ante if len(wh_refs & set(l[2])) == 0
+                        ]       # presup should be extracted first before cons & ante update
+                        cons = [l for l in cons if len(wh_refs & set(l[2])) > 0]
+                        ante = [l for l in ante if len(wh_refs & set(l[2])) > 0]
 
-                        q_vars = wh_refs & set.union(*[set(l[2]) for l in head+body])
+                        q_vars = wh_refs & set.union(*[set(l[2]) for l in cons+ante])
 
-                    question = (q_vars, (head, body))
+                    question = (q_vars, (cons, ante))
 
                     if len(presup) > 0:
                         presup = _map_and_format((presup, []), ref_map, ti, si, r2i, se2i)
@@ -294,7 +294,7 @@ def _map_and_format(data, ref_map, ti, si, r2i, se2i):
 
     def fmt(rf):
         if type(rf) == tuple:
-            return (rf[0], tuple(fmt(a) for a in rf[1]))
+            return (rf[0], tuple(fmt(arg) for arg in rf[1]))
         else:
             assert type(rf) == str
             is_var = ref_map[rf]['is_univ_quantified'] or ref_map[rf]['is_wh_quantified']
@@ -306,19 +306,19 @@ def _map_and_format(data, ref_map, ti, si, r2i, se2i):
             return f"{term_char}{r2i[rf]}{turn_clause_tag}"
 
     process_conjuncts = lambda conjuncts: tuple(
-        (cnjt[0], cnjt[1], tuple(fmt(a) for a in cnjt[2]), cnjt[3])
+        (cnjt[0], cnjt[1], tuple(fmt(arg) for arg in cnjt[2]), cnjt[3])
             if isinstance(cnjt, tuple) else list(process_conjuncts(cnjt))
         for cnjt in conjuncts
     )
 
     if isinstance(data[0], list):
         # Proposition
-        head, body = data
-        return (process_conjuncts(head), process_conjuncts(body))
+        cons, ante = data
+        return (process_conjuncts(cons), process_conjuncts(ante))
 
     elif isinstance(data[0], set):
         # Question
-        q_vars, (head, body) = data
+        q_vars, (cons, ante) = data
 
         # Annotate whether the variable is zeroth-order (entity) or first-order
         # (predicate)
@@ -326,7 +326,7 @@ def _map_and_format(data, ref_map, ti, si, r2i, se2i):
             (fmt(e), ref_map[e]["is_pred"]) for e in q_vars
         ) if q_vars is not None else None
 
-        return (new_q_vars, (process_conjuncts(head), process_conjuncts(body)))
+        return (new_q_vars, (process_conjuncts(cons), process_conjuncts(ante)))
 
     else:
         raise ValueError("Can't _map_and_format this")

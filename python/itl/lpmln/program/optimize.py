@@ -46,7 +46,7 @@ def optimize(prog, statements):
     
     models = [m[0] for m in models if m[1] == best_cost]
     models = [
-        [Literal.from_clingo_symbol(a) for a in m] for m in models
+        [Literal.from_clingo_symbol(atm) for atm in m] for m in models
     ]
 
     return models

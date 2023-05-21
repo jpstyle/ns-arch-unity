@@ -51,10 +51,14 @@ def main(cfg):
         # Each dict contains concepts to be tested and taught in a single episode,
         # with string concept names as key and Unity GameObject string name handle
         # as value
-        { "truck": "/truck" },
-        { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
-        { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
-        { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+        { "base truck": "/truck" },
+        { "dump truck": "/truck" },
+        { "fire truck": "/truck" },
+        { "missile truck": "/truck" }
+        # { "truck": "/truck" },
+        # { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
+        # { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
+        # { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
     ]
 
     # Student/teacher-side string message communication side channels
@@ -73,7 +77,7 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    for _ in range(1000):
+    for _ in range(500):
         # Obtain random initialization of each episode
         random_inits = teacher.setup_episode()
 
@@ -88,6 +92,9 @@ def main(cfg):
 
         # Let the settings take effect and begin the episode
         env.reset()
+
+        # New scene bool flag
+        new_scene = True
 
         while True:
             # Keep running until either student or teacher terminates episode
@@ -135,7 +142,7 @@ def main(cfg):
                                 agent_loop_input["pointing"].append(dem_refs)
                         
                         # ITL agent loop: process input and generate output (action)
-                        act_out = student.loop(**agent_loop_input)
+                        act_out = student.loop(**agent_loop_input, new_scene=new_scene)
 
                         if len(act_out) > 0:
                             # Process action output accordingly by setting Unity MLAgent actions
@@ -150,6 +157,9 @@ def main(cfg):
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
                         else:
                             terminate = True
+                        
+                        # Disable new scene flag after any agent loop
+                        new_scene = False
 
                     # Handle teacher's decision request
                     if b_name.startswith("TeacherBehavior"):

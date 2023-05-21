@@ -327,10 +327,10 @@ class VisionModule:
                                 # Handles to literal args; either search target variable or
                                 # previously identified entity
                                 arg_handles = [
-                                    ("v", s_vars.index(a[0]))
-                                        if a[0] in s_vars
-                                        else ("e", exs_idx_map_inv[a[0]])
-                                    for a in d_lit.args
+                                    ("v", s_vars.index(arg[0]))
+                                        if arg[0] in s_vars
+                                        else ("e", exs_idx_map_inv[arg[0]])
+                                    for arg in d_lit.args
                                 ]
 
                                 # Bounding boxes for all candidates
@@ -624,7 +624,11 @@ class VisionModule:
 
 class VisualConceptInventory:
     def __init__(self):
-        self.cls = self.att = self.rel = 0
+        # self.cls = self.att = self.rel = 0
+
+        # (Temp) Inventory of relation concept is a fixed singleton set, containing "have"
+        self.cls = self.att = 0
+        self.rel = 1
 
 
 def _box_intersection(box1, box2):

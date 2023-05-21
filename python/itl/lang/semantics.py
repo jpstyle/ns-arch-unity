@@ -48,7 +48,10 @@ class SemanticParser:
             # Extract essential parse, assuming flat structure (no significant semantic scoping)
             for ep in parsed.rels:
 
-                args = {a: ep.args[a] for a in ep.args if a.startswith("ARG") and len(a)>3}
+                args = {
+                    arg: ep.args[arg] for arg in ep.args
+                    if arg.startswith("ARG") and len(arg)>3
+                }
                 args = tuple([ep.args[f"ARG{i}"] for i in range(len(args))])
 
                 rel = {
@@ -212,8 +215,9 @@ class SemanticParser:
                     while not fixpoint_reached:
                         prev_size = len(covered_args)
                         covered_args = set.union(*[
-                            set(args) for args in parse["relations"]["by_args"]
-                            if parent_id not in args and any(a in covered_args for a in args)
+                            set(rel["args"]+(id,)) for id, rel in parse["relations"]["by_id"].items()
+                            if parent_id not in rel["args"] and 
+                                any(arg in covered_args for arg in rel["args"])
                         ])
                         fixpoint_reached = len(covered_args) == prev_size
                     covered_cranges = [
@@ -305,13 +309,13 @@ class SemanticParser:
                     if isinstance(msg, tuple):
                         # Positive message, as single tuple entry
                         args = msg[2]
-                        for a in args: ref_map[a]["source_ind"] = index_id
+                        for arg in args: ref_map[arg]["source_ind"] = index_id
                     else:
                         # Negative message, consisting of negated msgs
                         assert isinstance(msg, list)
                         for nmsg in msg:
                             args = nmsg[2]
-                            for a in args: ref_map[a]["source_ind"] = index_id
+                            for arg in args: ref_map[arg]["source_ind"] = index_id
 
             # We assume bare NPs (underspecified quant.) have universal reading when they are arg1
             # of index (and existential reading otherwise)
@@ -384,14 +388,14 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
     daughters = set()
 
     for args, rels in rel_rels.items():
-        for a in args:
-            if a not in ref_map and a != rel_id: daughters.add(a)
+        for arg in args:
+            if arg not in ref_map and arg != rel_id: daughters.add(arg)
 
         for rel in rels:
             if rel["id"] not in covered:
                 rel_rels_to_cover.append(rel)
                 covered.add(rel["id"])
-    
+
     # Then register the remaining referents unless already registered; disregard event
     # referents for stative verb predicates! (TODO?: implement stative thing)
     for id in daughters:
@@ -454,7 +458,12 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
                     # MRS flips the arg order when subject is quantified with 'which',
                     # presumably seeing it as wh-movement? Re-flip, except when the
                     # wh-word is 'what' (represented as 'which thing' in MRS)
-                    if parse["relations"]["by_id"][rel_args[2]]["predicate"] == "thing":
+                    wh_ref_pred = parse["relations"]["by_id"][rel_args[2]]["predicate"]
+                    if wh_ref_pred == "thing":
+                        arg1 = rel_args[1]
+                        arg2 = rel_args[2]
+                    # ... or when the wh-phrase is 'what kind/type of X'
+                    elif wh_ref_pred == "kind" or wh_ref_pred == "type":
                         arg1 = rel_args[1]
                         arg2 = rel_args[2]
                     else:
@@ -534,12 +543,36 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
 
         elif rel["pos"] == "n":
             # Noun predicates with args (referent[, more optional referents])
-            rel_lit = (rel["predicate"], "n", [rel_id])
 
-            if negate_focus:
-                focus_msgs.append([rel_lit])
+            if rel["predicate"]=="kind" or rel["predicate"]=="type":
+                # Kind/type of X, specifying some predicate as a subtype of X;
+                # i.e. concept-level entailment
+                rel_lit = ("entail", "*", [rel_id, arg1])
+                if negate_focus:
+                    # Not sure yet what should happen in this case...
+                    raise NotImplementedError
+                else:
+                    focus_msgs.append(rel_lit)
+
+                # Mark arg1 refers to a predicate, not an entity
+                ref_map[arg1]["is_pred"] = True
+
+                # Note to self: Something of an abuse of notation is happening here...
+                # 'predicate(*arg)', where arg is a singleton list, has different meaning
+                # depending on whether the argument refers to an entity (is_pred is False)
+                # or a predicate (is_pred is True). The meaning of the former is straightforward,
+                # namely that the arg referemt is an instance of the predicate. For the latter,
+                # it means the arg referent is a 'conjunctive concept', where the predicate
+                # is one of the concept pieces that make up the conjunction.
+
             else:
-                focus_msgs.append(rel_lit)
+                # General cases
+                rel_lit = (rel["predicate"], "n", [rel_id])
+
+                if negate_focus:
+                    focus_msgs.append([rel_lit])
+                else:
+                    focus_msgs.append(rel_lit)
         
         elif rel["predicate"] == "be":
             # "be" has different semantics depending on the construction of the clause:
@@ -555,17 +588,21 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
             # complement only.)
 
             if not referential_arg2:
-                if parse["utt_type"][rel_id]=="ques" and parse["relations"]["by_id"][arg2]["predicate"]=="thing":
-                    # "What is X?" type of question; attach a special reserved predicate
-                    # to focus_msgs, which signals that which predicate arg2 belongs to is
-                    # under question
-                    rel_lit = ("?", "*", [arg2, arg1])
+                a2_pred = parse["relations"]["by_id"][rel_args[2]]["predicate"]
+
+                if (parse["utt_type"][rel_id]=="ques" and 
+                    (a2_pred=="thing" or a2_pred=="kind" or a2_pred=="type")):
+                    # "What (kind/type of Y) is X?" type of question; attach a special reserved
+                    # predicate to focus_msgs, which signals that which predicate arg2 belongs to
+                    # is under question
+                    rel_lit = ("isinstance", "*", [arg2, arg1])
                     if negate_focus:
                         focus_msgs.append([rel_lit])
                     else:
                         focus_msgs.append(rel_lit)
 
-                    # Any restrictor of the wh-quantified predicate
+                    # Any restrictor of the wh-quantified predicate, denoted as the reserved
+                    # entailment check requirement predicates, included here
                     focus_msgs += daughters[arg2]
 
                     # Mark arg2 refers to a predicate, not an entity
@@ -626,7 +663,7 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
                 lits = [(rel["predicate"], rel["pos"], [arg1, arg2_sk])]
                 for a2_lit in daughters[arg2]:
                     # Replace occurrences of arg2 with the skolem term
-                    args_sk = [arg2_sk if arg2==a else a for a in a2_lit[2]]
+                    args_sk = [arg2_sk if arg2==arg else arg for arg in a2_lit[2]]
                     a2_lit_sk = a2_lit[:2] + (args_sk,)
                     lits.append(a2_lit_sk)
                 
@@ -636,7 +673,8 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
                     focus_msgs += lits
 
         else:
-            # Other general cases
+            # Other general cases; currently, the reserved MRS predicate 'thing' funnels
+            # all the way down to here since pos is None
             continue
 
     return {rel_id: (topic_msgs, focus_msgs)}
