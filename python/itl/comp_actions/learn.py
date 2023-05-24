@@ -4,6 +4,7 @@ referring to belief updates that modify long-term memory
 """
 import re
 import math
+from collections import defaultdict
 
 import inflect
 import torch
@@ -19,21 +20,230 @@ SR_THRES = 0.8               # Mismatch surprisal threshold
 U_IN_PR = 1.00               # How much the agent values information provided by the user
 A_IM_PR = 1.00               # How much the agent values inferred implicature
 
+# Recursive helper methods for checking whether rule cons/ante is grounded (variable-
+# free), lifted (all variables), or contains any predicate referent as argument
+is_grounded = lambda cnjt: all(not is_var for _, is_var in cnjt.args) \
+    if isinstance(cnjt, Literal) else all(is_grounded(nc) for nc in cnjt)
+is_lifted = lambda cnjt: all(is_var for _, is_var in cnjt.args) \
+    if isinstance(cnjt, Literal) else all(is_lifted(nc) for nc in cnjt)
+has_pred_referent = lambda cnjt: any(a.startswith("p") for a, _ in cnjt.args) \
+    if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
+
 def identify_mismatch(agent, rule):
     """
     Test against vision-only sensemaking result to identify any mismatch btw.
     agent's & user's perception of world state
     """
-    # Make a yes/no query to obtain the likelihood of content
-    bjt_v, _ = agent.symbolic.concl_vis
-    q_response = agent.symbolic.query(bjt_v, None, rule)
-    ev_prob = q_response[()]
+    cons, ante = rule
+    rule_is_grounded = (cons is None or is_grounded(cons)) and \
+        (ante is None or is_grounded(ante))
+    rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
+        (ante is None or has_pred_referent(ante))
 
-    surprisal = -math.log(ev_prob + EPS)
-    if surprisal >= -math.log(SR_THRES):
-        m = (rule, surprisal)
-        if m not in agent.symbolic.mismatches:
-            agent.symbolic.mismatches.append(m)
+    if (rule_is_grounded and not rule_has_pred_referent and 
+        agent.symbolic.concl_vis is not None):
+        # Grounded event without constant predicate referents, only if vision-only
+        # sensemaking result has been obtained
+
+        # Make a yes/no query to obtain the likelihood of content
+        bjt_v, _ = agent.symbolic.concl_vis
+        q_response = agent.symbolic.query(bjt_v, None, rule)
+        ev_prob = q_response[()]
+
+        surprisal = -math.log(ev_prob + EPS)
+        if surprisal >= -math.log(SR_THRES):
+            m = (rule, surprisal)
+            if m not in agent.symbolic.mismatches:
+                agent.symbolic.mismatches.append(m)
+
+def identify_confusion(agent, rule, prev_facts, novel_concepts):
+    """
+    Test against vision module output to identify  any 'concept overlap' -- i.e.
+    whenever the agent confuses two concepts difficult to distinguish visually
+    and mistakes one for another.
+    """
+    cons, ante = rule
+    rule_is_grounded = (cons is None or is_grounded(cons)) and \
+        (ante is None or is_grounded(ante))
+    rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
+        (ante is None or has_pred_referent(ante))
+
+    if (rule_is_grounded and ante is None and not rule_has_pred_referent and
+        agent.cfg.exp1.strat_feedback == "maxHelp"):
+        # Grounded fact without constant predicate referents, only if the user
+        # adopts maxHelp strategy and provides generic NL feedback
+
+        # Fetch agent's last answer; this assumes the last factual statement
+        # by agent is provided as answer to the last question from user. This
+        # might change in the future when we adopt a more sophisticated formalism
+        # for representing discourse to relax the assumption.
+        prev_facts_A = [fct for spk, fct in prev_facts if spk=="A"]
+        if len(prev_facts_A) > 0:
+            agent_last_ans = prev_facts_A[-1][0][0]
+            _, agent_last_ans = agent_last_ans.name.split("_")
+            agent_last_ans = int(agent_last_ans)
+        else:
+            agent_last_ans = None
+
+        for lit in cons:
+            # Disregard negated conjunctions
+            if not isinstance(lit, Literal): continue
+
+            # (Temporary) Only consider 1-place predicates, so retrieve
+            # the single and first entity from the arg list
+            conc_type, conc_ind = lit.name.split("_")
+            conc_ind = int(conc_ind)
+
+            if (conc_ind, conc_type) not in novel_concepts:
+                # Disregard if the correct answer concept is novel to the agent and
+                # has to be newly registered in the visual concept inventory
+                continue
+
+            if agent_last_ans is not None and agent_last_ans != conc_ind:
+                # Potential confusion case, as unordered label pair
+                confusion_pair = frozenset([agent_last_ans, conc_ind])
+
+                if ("cls", confusion_pair) not in agent.confused_no_more:
+                    # Agent's best guess disagrees with the user-provided
+                    # information
+                    agent.vision.confusions.add(("cls", confusion_pair))
+
+def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
+    """
+    For symbolic knowledge base expansion. Integrate the rule into KB by adding
+    (for now we won't worry about intra-KB consistency, belief revision, etc.).
+    Identified generics will be added to the provided `generics` list, optionally
+    along with the appropriate negative implicatures as required by the agent's
+    strategy. `pair_rules` will also be updated as needed for later computation
+    of implicatures.
+    """
+    cons, ante = rule
+    rule_is_lifted = (cons is None or is_lifted(cons)) and \
+        (ante is None or is_lifted(ante))
+    rule_is_grounded = (cons is None or is_grounded(cons)) and \
+        (ante is None or is_grounded(ante))
+    rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
+        (ante is None or has_pred_referent(ante))
+
+    if rule_is_lifted:
+        # Lifted generic rule statement, without any grounded term arguments
+
+        # First add the face-value semantics of the explicitly stated rule
+        generics.append((rule, U_IN_PR, provenance))
+
+        if agent.strat_generic == "semNeg" or agent.strat_generic == "semNegScal":
+            # Current rule cons conjunction & ante conjunction as list
+            occurring_preds = {lit.name for lit in cons+ante}
+
+            # Collect concept_diff questions made by the agent during this dialogue
+            diff_Qs_args = []
+            for (spk, (q_vars, (q_cons, _)), _, raw) in prev_Qs:
+                if spk!="A": continue
+                diff_Qs_args += [
+                    l.args for l in q_cons
+                    if l.name=="*_diff" and l.args[2][0]==q_vars[0][0]
+                ]
+
+            if len(diff_Qs_args) > 0:
+                # Fetch two concepts being compared in the latest
+                # concept diff question
+                c1, _ = diff_Qs_args[-1][0]
+                c2, _ = diff_Qs_args[-1][1]
+                # Note: more principled way to manage relevant (I)QAP pair utterances
+                # would be to adopt a legitimate, established formalism for representing
+                # discourse structure (e.g. SDRT)
+
+                # (Ordered) Concept pair with which implicatures will be computed
+                if c1 in occurring_preds and c2 not in occurring_preds:
+                    rel_conc_pair = (c1, c2)
+                elif c2 in occurring_preds and c1 not in occurring_preds:
+                    rel_conc_pair = (c2, c1)
+                else:
+                    rel_conc_pair = None
+            else:
+                rel_conc_pair = None
+
+            if rel_conc_pair is not None:
+                # Compute appropriate implicatures for the concept pairs found
+                c1, c2 = rel_conc_pair
+
+                # Negative implicature; replace occurrence of c1 with c2 then negate
+                # cons conjunction (i.e. move cons conj to ante)
+                cons_repl = tuple(
+                    l.substitute(preds={ c1: c2 }) for l in cons
+                )
+                ante_repl = tuple(
+                    l.substitute(preds={ c1: c2 }) for l in ante
+                )
+                negImpl = ((list(cons_repl),), ante_repl)
+                generics.append(
+                    (negImpl, A_IM_PR, f"{provenance} [vs. {c1}] (Neg. Impl.)")
+                )
+
+                # Collect explicit generics provided for the concept pair and negative
+                # implicature computed from the context, with which scalar implicatures
+                # will be computed
+                pair_rules[frozenset(rel_conc_pair)] += [
+                    rule, negImpl
+                ]
+
+    if (rule_is_grounded and ante is None and not rule_has_pred_referent):
+        # Grounded fact without constant predicate referents
+
+        # For corrective feedback "This is Y" following the agent's incorrect answer
+        # to the probing question "What kind of X is this?", extract 'Y entails X'
+        # (e.g., What kind of truck is this? This is a fire truck => All fire trucks
+        # are trucks). More of a universal statement rather than a generic one.
+
+        # Collect concept entailment & constraints in questions made
+        # by the user during this dialogue
+        entail_consts = defaultdict(list)       # Map from pred var to set of pred consts
+        instance_consts = {}                    # Map from ent const to pred var
+        context_Qs = {}                         # Pointers to user's original question
+        for (spk, (q_vars, (q_cons, _)), presup, raw) in prev_Qs:
+            # Consider only questions from user
+            if spk!="U": continue
+
+            if presup is None:
+                p_cons = []
+            else:
+                p_cons, _ = presup
+
+            for qv, is_pred in q_vars:
+                # Consider only predicate variables
+                if not is_pred: continue
+
+                for ql in q_cons:
+                    # Constraint: P should entail conjunction {p1 and p2 and ...}
+                    if ql.name=="*_entail" and ql.args[0][0]==qv:
+                        entail_consts[qv] += [pl.name for pl in p_cons]
+
+                    # Constraint: x should be an instance of P
+                    if ql.name=="*_isinstance" and ql.args[0][0]==qv:
+                        instance_consts[ql.args[1][0]] = qv
+            
+                context_Qs[qv] = raw
+
+        # Synthesize into a rule encoding the appropriate entailment
+        for ent, pred_var in instance_consts.items():
+            if pred_var not in entail_consts: continue
+            entailed_preds = entail_consts[pred_var]
+
+            # (Temporary) Only consider 1-place predicates, so match the first and
+            # only entity from the arg list. Disregard negated conjunctions.
+            entailing_preds = tuple(
+                lit.name for lit in cons
+                if isinstance(lit, Literal) and len(lit.args)==1 and lit.args[0][0]==ent
+            )
+            if len(entailing_preds) == 0: continue
+
+            entailment_rule = (
+                [Literal(pred, [("X", True)]) for pred in entailed_preds],
+                [Literal(pred, [("X", True)]) for pred in entailing_preds]
+            )
+            generics.append(
+                (entailment_rule, U_IN_PR, f"{context_Qs[pred_var]} => {provenance}")
+            )
 
 def handle_mismatch(agent, mismatch):
     """
@@ -90,47 +300,6 @@ def handle_mismatch(agent, mismatch):
             pointers_src={ conc_type: pointers_src },
             pointers_exm={ conc_type: pointers_exm }
         )
-
-def identify_confusion(agent, rule, previous_utts, novel_concepts):
-    """
-    Test against vision module output to identify  any 'concept overlap' -- i.e.
-    whenever the agent confuses two concepts difficult to distinguish visually and
-    mistakes one for another.
-    """
-    # Fetch agent's last answer; this assumes the last factual statement by agent
-    # is provided as answer to the last question from user. This might change
-    # in the future when we adopt a more sophisticated formalism for representing
-    # discourse to relax the assumption.
-    if len(previous_utts) > 0:
-        agent_last_ans = previous_utts[-1][0][0]
-        _, agent_last_ans = agent_last_ans.name.split("_")
-        agent_last_ans = int(agent_last_ans)
-    else:
-        agent_last_ans = None
-
-    cons, _ = rule
-    for lit in cons:
-        # Disregard negated conjunctions
-        if not isinstance(lit, Literal): continue
-
-        # (Temporary?) Only consider 1-place predicates, so retrieve
-        # the single and first entity from the arg list
-        conc_type, conc_ind = lit.name.split("_")
-        conc_ind = int(conc_ind)
-
-        if (conc_ind, conc_type) not in novel_concepts:
-            # Disregard if the correct answer concept is novel to the agent and
-            # has to be newly registered in the visual concept inventory
-            continue
-
-        if agent_last_ans is not None and agent_last_ans != conc_ind:
-            # Potential confusion case, as unordered label pair
-            confusion_pair = frozenset([agent_last_ans, conc_ind])
-
-            if ("cls", confusion_pair) not in agent.confused_no_more:
-                # Agent's best guess disagrees with the user-provided
-                # information
-                agent.vision.confusions.add(("cls", confusion_pair))
 
 def handle_confusion(agent, confusion):
     """
@@ -190,64 +359,6 @@ def handle_confusion(agent, confusion):
     # for the rest of the interaction episode sequence
     agent.confused_no_more.add(confusion)
 
-def identify_generics(agent, rule, provenance, generics, diff_Qs, pair_rules):
-    """
-    For symbolic knowledge base expansion. Integrate the rule into KB by adding
-    (for now we won't worry about intra-KB consistency, belief revision, etc.).
-    Identified generics will be added to the provided `generics` list, optionally
-    along with the appropriate negative implicatures as required by the agent's
-    strategy. `pair_rules` will also be updated as needed for later computation
-    of implicatures.
-    """
-    # First add the face-value semantics of the explicitly stated rule
-    generics.append((rule, U_IN_PR, provenance))
-
-    if agent.strat_generic == "semNeg" or agent.strat_generic == "semNegScal":
-        # Current rule cons conjunction & ante conjunction as list
-        cons, ante = rule
-        occurring_preds = {lit.name for lit in cons+ante}
-
-        if len(diff_Qs) > 0:
-            # Fetch two concepts being compared in the latest
-            # concept diff question
-            c1 = diff_Qs[-1].args[0][0]
-            c2 = diff_Qs[-1].args[1][0]
-            # Note: more principled way to manage relevant (I)QAP pair utterances
-            # would be to adopt a legitimate, established formalism for representing
-            # discourse structure (e.g. SDRT)
-
-            # (Ordered) Concept pair with which implicatures will be computed
-            if c1 in occurring_preds and c2 not in occurring_preds:
-                rel_conc_pair = (c1, c2)
-            elif c2 in occurring_preds and c1 not in occurring_preds:
-                rel_conc_pair = (c2, c1)
-            else:
-                rel_conc_pair = None
-        else:
-            rel_conc_pair = None
-
-        if rel_conc_pair is not None:
-            # Compute appropriate implicatures for the concept pairs found
-            c1, c2 = rel_conc_pair
-
-            # Negative implicature; replace occurrence of c1 with c2 then negate
-            # cons conjunction (i.e. move cons conj to ante)
-            cons_repl = tuple(
-                l.substitute(preds={ c1: c2 }) for l in cons
-            )
-            ante_repl = tuple(
-                l.substitute(preds={ c1: c2 }) for l in ante
-            )
-            negImpl = ((list(cons_repl),), ante_repl)
-            generics.append((negImpl, A_IM_PR, f"{provenance} (Neg. Impl.)"))
-
-            # Collect explicit generics provided for the concept pair and negative
-            # implicature computed from the context, with which scalar implicatures
-            # will be computed
-            pair_rules[frozenset(rel_conc_pair)] += [
-                rule, negImpl
-            ]
-
 def add_scalar_implicatures(agent, pair_rules):
     """
     For concepts c1 vs. c2 recorded in pair_rules, infer implicit concept similarities
@@ -262,7 +373,7 @@ def add_scalar_implicatures(agent, pair_rules):
 
         for cons, ante in scal_impls:
             agent.lt_mem.kb.add(
-                (cons, ante), A_IM_PR, f"{c1} ~= {c2} (Scal. Impl.)"
+                (cons, ante), A_IM_PR, f"[{c1} ~= {c2}] (Scal. Impl.)"
             )
 
     # Regular inspection of KB by weeding out defeasible rules inferred

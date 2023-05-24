@@ -234,17 +234,17 @@ class Literal:
 
                             if type(sa_term) == type(oa_term) == str:
                                 # Both args are variable terms
-                                if sa_term in mapping["terms"]:
-                                    if mapping["terms"][sa_term] != oa_term:
+                                if sa in mapping["terms"]:
+                                    if mapping["terms"][sa] != oa:
                                         # Conflict with existing mapping
                                         args_mappable = False; break
-                                elif sa_term in potential_mapping["terms"]:
-                                    if potential_mapping["terms"][sa_term] != oa_term:
+                                elif sa in potential_mapping["terms"]:
+                                    if potential_mapping["terms"][sa] != oa:
                                         # Conflict with existing potential mapping
                                         args_mappable = False; break
                                 else:
                                     # Record potential mapping
-                                    potential_mapping["terms"][sa_term] = oa_term
+                                    potential_mapping["terms"][sa] = oa
 
                             elif type(sa_term) == type(oa_term) == tuple:
                                 sa_f_name, sa_f_args = sa_term
@@ -268,17 +268,19 @@ class Literal:
                                     potential_mapping["functions"][sa_f_name] = oa_f_name
 
                                 for sfa, ofa in zip(sa_f_args, oa_f_args):
-                                    if sfa in mapping["terms"]:
-                                        if mapping["terms"][sfa] != ofa:
+                                    sfa_term = (sfa, sfa[0].isupper())
+                                    ofa_term = (ofa, ofa[0].isupper())
+                                    if sfa_term in mapping["terms"]:
+                                        if mapping["terms"][sfa_term] != ofa_term:
                                             # Conflict with existing mapping
                                             args_mappable = False; break
-                                    elif sfa in potential_mapping["terms"]:
-                                        if potential_mapping["terms"][sfa] != ofa:
+                                    elif sfa_term in potential_mapping["terms"]:
+                                        if potential_mapping["terms"][sfa_term] != ofa_term:
                                             # Conflict with existing potential mapping
                                             args_mappable = False; break
                                     else:
                                         # Both args are variable terms, record potential mapping
-                                        potential_mapping["terms"][sfa] = ofa
+                                        potential_mapping["terms"][sfa_term] = ofa_term
                             
                             else:
                                 raise NotImplementedError
@@ -359,7 +361,7 @@ class Literal:
             # Valid permutation(s) found; use the first one in the list (not sure
             # if there's any real difference between prms when more than one found)
             final_mapping = {
-                "terms": valid_prms[0][0], "functions": valid_prms[0][0]
+                "terms": valid_prms[0][0], "functions": valid_prms[0][1]
             }
             if len(iter1) > len(iter2):
                 entail_dir = 1

@@ -110,7 +110,6 @@ class Exemplars:
                     exs_neg = {fv_id+N_C for fv_id in exs_neg}
                     self.exemplars_pos[conc_type][conc_ind] |= exs_pos
                     self.exemplars_neg[conc_type][conc_ind] |= exs_neg
-
                     # If we have at least one positive & negative exemplars each,
                     # (re-)train a binary classifier and store it
                     if len(self.exemplars_pos[conc_type][conc_ind]) > 0 and \

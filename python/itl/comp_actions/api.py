@@ -24,12 +24,12 @@ class CompositeActions:
         return identify_mismatch(self.agent, rule)
     def handle_mismatch(self, mismatch):
         return handle_mismatch(self.agent, mismatch)
-    def identify_confusion(self, rule, previous_utts, novel_concepts):
-        return identify_confusion(self.agent, rule, previous_utts, novel_concepts)
+    def identify_confusion(self, rule, prev_facts, novel_concepts):
+        return identify_confusion(self.agent, rule, prev_facts, novel_concepts)
     def handle_confusion(self, confusion):
         return handle_confusion(self.agent, confusion)
-    def identify_generics(self, rule, provenance, generics, diff_Qs, pair_rules):
-        return identify_generics(self.agent, rule, provenance, generics, diff_Qs, pair_rules)
+    def identify_generics(self, rule, provenance, prev_Qs, generics, pair_rules):
+        return identify_generics(self.agent, rule, provenance, prev_Qs, generics, pair_rules)
     def add_scalar_implicatures(self, pair_rules):
         return add_scalar_implicatures(self.agent, pair_rules)
     def handle_neologisms(self, novel_concepts, dialogue_state):

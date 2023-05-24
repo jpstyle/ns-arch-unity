@@ -51,14 +51,14 @@ def main(cfg):
         # Each dict contains concepts to be tested and taught in a single episode,
         # with string concept names as key and Unity GameObject string name handle
         # as value
-        { "base truck": "/truck" },
-        { "dump truck": "/truck" },
-        { "fire truck": "/truck" },
-        { "missile truck": "/truck" }
-        # { "truck": "/truck" },
-        # { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
-        # { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
-        # { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+        # { "base truck": "/truck" },
+        # { "dump truck": "/truck" },
+        # { "fire truck": "/truck" },
+        # { "missile truck": "/truck" }
+        { "truck": "/truck" },
+        { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
+        { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
+        { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
     ]
 
     # Student/teacher-side string message communication side channels
@@ -77,7 +77,7 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    for _ in range(500):
+    for _ in range(300):
         # Obtain random initialization of each episode
         random_inits = teacher.setup_episode()
 

@@ -79,7 +79,7 @@ def prepare_answer_Q(agent, utt_pointer):
     # critical influence on the symbolic sensemaking process. Make sure such entities, if
     # actually present, are captured in scene graphs by performing visual search as needed.
     if len(agent.lt_mem.kb.entries) > 0:
-        search_specs = _search_specs_from_kb(question, bjt_v)
+        search_specs = _search_specs_from_kb(agent, question, bjt_v)
         if len(search_specs) > 0:
             agent.vision.predict(
                 None, agent.lt_mem.exemplars,
@@ -97,20 +97,26 @@ def prepare_answer_Q(agent, utt_pointer):
 
     # Process any 'concept conjunctions' provided in the presupposition into a more
     # legible format, for easier processing right after
-    conc_conjs = defaultdict(set)
-    for lit in presup[0]:
-        conc_conjs[lit.args[0][0]].add(tuple(lit.name.split("_")))
-    conc_conjs = {
-        pred_ref: {(int(conc_ind), conc_type) for (conc_type, conc_ind) in concepts}
-        for pred_ref, concepts in conc_conjs.items()
-    }
-    # Extract any '*_entail' statements and cast into appropriate query restrictors
-    restrictors = {
-        lit.args[0][0]: agent.lt_mem.kb.find_entailer_concepts(conc_conjs[lit.args[1][0]])
-        for lit in cons if lit.name=="*_entail"
-    }
-    # Remove the '*_entail' statements from cons now that they are processed
-    cons = tuple(lit for lit in cons if lit.name!="*_entail")
+    if presup is None:
+        restrictors = {}
+    else:
+        conc_conjs = defaultdict(set)
+        for lit in presup[0]:
+            conc_conjs[lit.args[0][0]].add(lit.name)
+        # for lit in presup[0]:
+        #     conc_conjs[lit.args[0][0]].add(tuple(lit.name.split("_")))
+        # conc_conjs = {
+        #     pred_ref: {(int(conc_ind), conc_type) for (conc_type, conc_ind) in concepts}
+        #     for pred_ref, concepts in conc_conjs.items()
+        # }
+
+        # Extract any '*_entail' statements and cast into appropriate query restrictors
+        restrictors = {
+            lit.args[0][0]: agent.lt_mem.kb.find_entailer_concepts(conc_conjs[lit.args[1][0]])
+            for lit in cons if lit.name=="*_entail"
+        }
+        # Remove the '*_entail' statements from cons now that they are processed
+        cons = tuple(lit for lit in cons if lit.name!="*_entail")
 
     # Compute raw answer candidates by appropriately querying compiled BJT
     answers_raw = agent.symbolic.query(bjt_v, q_vars, (cons, ante), restrictors)

@@ -220,16 +220,6 @@ class ITLAgent:
         # during the loop
         novel_concepts = set()
 
-        # Recursive helper methods for checking whether rule cons/ante is grounded
-        # (variable-free), lifted (all variables), or contains any predicate referent
-        # as argument
-        is_grounded = lambda cnjt: all(not is_var for _, is_var in cnjt.args) \
-            if isinstance(cnjt, Literal) else all(is_grounded(nc) for nc in cnjt)
-        is_lifted = lambda cnjt: all(is_var for _, is_var in cnjt.args) \
-            if isinstance(cnjt, Literal) else all(is_lifted(nc) for nc in cnjt)
-        has_pred_referent = lambda cnjt: any(a.startswith("p") for a, _ in cnjt.args) \
-            if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
-
         # Keep updating beliefs until there's no more immediately exploitable learning
         # opportunities
         xb_updated = False      # Whether learning happened at neural-level (in exemplar base)
@@ -327,75 +317,42 @@ class ITLAgent:
             # Info needed (along with generics) for computing scalar implicatures
             pair_rules = defaultdict(list)
 
+            # Translate dialogue record into processable format based on the result
+            # of symbolic.resolve_symbol_semantics
+            translated = self.symbolic.translate_dialogue_content(dialogue_state)
+
+            # Collect previous factual statements made during this dialogue
+            prev_facts = [
+                (spk, rule)
+                for spk, turn_clauses in translated
+                for (rule, _), _ in turn_clauses
+                if rule is not None and len(rule[0])==1 and rule[1] is None
+            ]
+
+            # Collect previous questions made during this dialogue
+            prev_Qs = [
+                (spk, ques, presup, raw)
+                for spk, turn_clauses in translated
+                for (presup, ques), raw in turn_clauses
+                if ques is not None
+            ]
+
             # Process translated dialogue record to do the following:
             #   - Identify recognition mismatch btw. user provided vs. agent
             #   - Identify visual concept confusion
             #   - Identify new generic rules to be integrated into KB
-            translated = self.symbolic.translate_dialogue_content(dialogue_state)
             for speaker, turn_clauses in translated:
                 if speaker != "U": continue
 
                 for (rule, _), raw in turn_clauses:
                     if rule is None: continue
 
-                    cons, ante = rule
-                    rule_is_grounded = (cons is None or is_grounded(cons)) and \
-                        (ante is None or is_grounded(ante))
-                    rule_is_lifted = (cons is None or is_lifted(cons)) and \
-                        (ante is None or is_lifted(ante))
-                    rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
-                        (ante is None or has_pred_referent(ante))
-
-                    # Grounded event statement; test against vision-only sensemaking
-                    # result to identify any mismatch btw. agent's & user's perception
-                    # of world state
-                    if (rule_is_grounded and not rule_has_pred_referent
-                        and self.symbolic.concl_vis is not None):
-
-                        self.comp_actions.identify_mismatch(rule)
-
-                    # Grounded fact; test against vision module output to identify any
-                    # 'concept overlap'. Applicable only to experiment configs with maxHelp
-                    # teachers.
-                    if (rule_is_grounded and ante is None and not rule_has_pred_referent and
-                        self.cfg.exp1.strat_feedback == "maxHelp"):
-
-                        # Collect previous factual statements the agent made during this
-                        # dialogue (as answer to user's question)
-                        agent_utts = [
-                            rule
-                            for speaker, turn_clauses in translated
-                            for (rule, _), _ in turn_clauses
-                            if speaker == "A" and rule is not None \
-                                and len(rule[0])==1 and rule[1] is None
-                        ]
-
-                        self.comp_actions.identify_confusion(rule, agent_utts, novel_concepts)
-
-                    # Lifted rules; symbolic knowledge base expansion. Integrate the rule
-                    # into KB by adding (for now we won't worry about intra-KB consistency,
-                    # belief revision, etc.)
-                    if rule_is_lifted:
-                        # Collect concept_diff questions made by the agent during this dialogue,
-                        # in case the agent's strategy of understanding generic statement is to
-                        # exploit dialogue context (specifically, in the presence of record of
-                        # a concept difference question)
-                        agent_Qs = [
-                            ques
-                            for spk, turn_clauses in translated
-                            for (_, ques), _ in turn_clauses
-                            if spk == "A" and ques is not None
-                        ]
-                        diff_Qs = [
-                            q_cons[0] for q_vars, (q_cons, _) in agent_Qs
-                            if any(
-                                l.name=="*_diff" and l.args[2][0]==q_vars[0][0]
-                                for l in q_cons
-                            )
-                        ]
-                        self.comp_actions.identify_generics(
-                            rule, raw, generics, diff_Qs, pair_rules
-                        )
+                    # Identify learning opportunities; i.e., any deviations from the
+                    # agent's estimated states of affairs, or generic rules delivered
+                    # via NL generic statements
+                    self.comp_actions.identify_mismatch(rule)
+                    self.comp_actions.identify_confusion(rule, prev_facts, novel_concepts)
+                    self.comp_actions.identify_generics(rule, raw, prev_Qs, generics, pair_rules)
 
             # Update knowledge base with obtained generic statements
             for rule, w_pr, provenance in generics:

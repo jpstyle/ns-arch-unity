@@ -192,7 +192,27 @@ class KnowledgeBase:
         assert isinstance(concepts, set)
 
         if len(self.entries) > 0:
-            return set()
+            entailment_rules = [
+                (cons, ante) for (cons, ante), _, _ in self.entries
+                if any(lit.name in concepts for lit in cons)
+            ]
+
+            candidate_preds = defaultdict(set)
+            for cons, ante in entailment_rules:
+                # For now will just consider single concepts as candidates: i.e., those
+                # which can entail the target concepts in its own right without requiring
+                # extra concepts
+                if len(ante) > 1: continue
+                candidate_preds[ante[0].name] |= {lit.name for lit in cons}
+
+            # Filter to finally leave concepts that fully entail the target concepts and
+            # return
+            entailer_concepts = {
+                pred for pred, entailed in candidate_preds.items()
+                if entailed == concepts
+            }
+            return entailer_concepts
+
         else:
             # Empty KB, no entailing concepts
             return set()
@@ -396,8 +416,8 @@ class KnowledgeBase:
                     c_sat_lit = c_sat_lit.substitute(**ism)
                     a_sat_lit = a_sat_lit.substitute(**ism)
 
-                    c_var_signature = [ism["terms"][v] for v in c_var_signature]
-                    a_var_signature = [ism["terms"][v] for v in a_var_signature]
+                    c_var_signature = [ism["terms"][(v, True)][0] for v in c_var_signature]
+                    a_var_signature = [ism["terms"][(v, True)][0] for v in a_var_signature]
 
                 standardized_outputs.append((
                     c_sat_lit, a_sat_lit, c_var_signature, a_var_signature
