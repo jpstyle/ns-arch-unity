@@ -73,28 +73,6 @@ def prepare_answer_Q(agent, utt_pointer):
     }
     conc_type_to_pos = { "cls": "n" }
 
-    # Ensure it has every ingredient available needed for making most informed judgements
-    # on computing the best answer to the question. Specifically, scene graph outputs from
-    # vision module may be omitting some entities, whose presence and properties may have
-    # critical influence on the symbolic sensemaking process. Make sure such entities, if
-    # actually present, are captured in scene graphs by performing visual search as needed.
-    if len(agent.lt_mem.kb.entries) > 0:
-        search_specs = _search_specs_from_kb(agent, question, bjt_v)
-        if len(search_specs) > 0:
-            agent.vision.predict(
-                None, agent.lt_mem.exemplars,
-                specs=search_specs, visualize=False, lexicon=agent.lt_mem.lexicon
-            )
-
-            #  ... and another round of sensemaking
-            exported_kb = agent.lt_mem.kb.export_reasoning_program()
-            agent.symbolic.sensemake_vis(agent.vision.scene, exported_kb)
-            agent.symbolic.resolve_symbol_semantics(dialogue_state, agent.lt_mem.lexicon)
-            # symbolic.sensemake_vis_lang(dialogue_state)
-
-            bjt_v, _ = agent.symbolic.concl_vis
-            # bjt_vl, _ = symbolic.concl_vis_lang
-
     # Process any 'concept conjunctions' provided in the presupposition into a more
     # legible format, for easier processing right after
     if presup is None:
@@ -117,6 +95,29 @@ def prepare_answer_Q(agent, utt_pointer):
         }
         # Remove the '*_entail' statements from cons now that they are processed
         cons = tuple(lit for lit in cons if lit.name!="*_entail")
+        question = (q_vars, (cons, ante))
+
+    # Ensure it has every ingredient available needed for making most informed judgements
+    # on computing the best answer to the question. Specifically, scene graph outputs from
+    # vision module may be omitting some entities, whose presence and properties may have
+    # critical influence on the symbolic sensemaking process. Make sure such entities, if
+    # actually present, are captured in scene graphs by performing visual search as needed.
+    if len(agent.lt_mem.kb.entries) > 0:
+        search_specs = _search_specs_from_kb(agent, question, bjt_v, restrictors)
+        if len(search_specs) > 0:
+            agent.vision.predict(
+                None, agent.lt_mem.exemplars,
+                specs=search_specs, visualize=False, lexicon=agent.lt_mem.lexicon
+            )
+
+            #  ... and another round of sensemaking
+            exported_kb = agent.lt_mem.kb.export_reasoning_program()
+            agent.symbolic.sensemake_vis(agent.vision.scene, exported_kb)
+            agent.symbolic.resolve_symbol_semantics(dialogue_state, agent.lt_mem.lexicon)
+            # symbolic.sensemake_vis_lang(dialogue_state)
+
+            bjt_v, _ = agent.symbolic.concl_vis
+            # bjt_vl, _ = symbolic.concl_vis_lang
 
     # Compute raw answer candidates by appropriately querying compiled BJT
     answers_raw = agent.symbolic.query(bjt_v, q_vars, (cons, ante), restrictors)
@@ -202,16 +203,16 @@ def prepare_answer_Q(agent, utt_pointer):
         (answer_logical_form, None), answer_translated, { (0, 4): dem_bbox }
     ))
 
-def _search_specs_from_kb(agent, question, ref_bjt):
+def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
     """
     Factored helper method for extracting specifications for visual search,
     based on the agent's current knowledge-base entries and some sensemaking
     result provided as a compiled binary join tree (BJT)
     """
-    q_vars, (cons, ante) = question
+    q_vars, (cons, _) = question
 
-    # Queries (in IR sense) to feed into KB for fetching search specs. Represent each
-    # query as a pair of predicates of interest & arg entities of interest
+    # Return value: Queries to feed into KB for fetching search specs. Represent
+    # each query as a pair of predicates of interest & arg entities of interest
     kb_queries = set()
 
     # Inspecting literals in each q_rule for identifying search specs to feed into
@@ -219,8 +220,8 @@ def _search_specs_from_kb(agent, question, ref_bjt):
     for q_lit in cons:
         if q_lit.name == "*_isinstance":
             # Literal whose predicate is question-marked (contained for questions
-            # like "What is this?", etc.); the first argument term, standing for
-            # the predicate variable, must be contained in q_vars
+            # like "What (kind of X) is this?", etc.); the first argument term,
+            # standing for the predicate variable, must be contained in q_vars
             assert q_lit.args[0] in q_vars
 
             # Assume we are only interested in cls concepts with "What is this?"
@@ -229,13 +230,12 @@ def _search_specs_from_kb(agent, question, ref_bjt):
                 pred for pred in agent.lt_mem.kb.entries_by_pred 
                 if pred.startswith("cls")
             ])
-            # (Temporary) Enforce non-part concept as answer. This may be enforced in a more
-            # elegant way in the future...
-            kb_query_preds = frozenset([
-                pred for pred in kb_query_preds
-                if pred.split("_")[0] == "cls" and int(pred.split("_")[1]) >= 11
-            ])
-
+            # Filter further by provided restrictors if applicable
+            if q_lit.args[0][0] in restrictors:
+                kb_query_preds = frozenset([
+                    pred for pred in kb_query_preds
+                    if pred in restrictors[q_lit.args[0][0]]
+                ])
             kb_query_args = tuple(q_lit.args[1:])
         else:
             # Literal with fixed predicate, to which can narrow down the KB query
@@ -246,8 +246,7 @@ def _search_specs_from_kb(agent, question, ref_bjt):
 
     # Query the KB to collect search specs
     search_spec_cands = []
-    for kb_qr in kb_queries:
-        kb_query_preds, kb_query_args = kb_qr
+    for kb_query_preds, kb_query_args in kb_queries:
 
         for pred in kb_query_preds:
             # Relevant KB entries containing predicate of interest
@@ -258,9 +257,9 @@ def _search_specs_from_kb(agent, question, ref_bjt):
             ]
 
             # Set of literals for each relevant KB entry
-            relevant_literals = [
+            relevant_literals = sum([
                 flatten_cons_ante(*entry[0]) for entry in relevant_entries
-            ]
+            ], [])
             relevant_literals = [
                 set(cons+ante) for cons, ante in relevant_literals
             ]

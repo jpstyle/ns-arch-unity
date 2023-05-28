@@ -1,6 +1,7 @@
 ## Root
-/outputs/
-/assets/
+/outputs
+/assets/*
+!/assets/domain_knowledge/
 
 ## Python
 __pycache__/

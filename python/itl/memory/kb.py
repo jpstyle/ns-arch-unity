@@ -110,7 +110,7 @@ class KnowledgeBase:
         if len(entries_entailing) == len(entries_entailed) == 0:
             # Add the input as a whole new entry along with the weight & source
             # and index it by occurring predicates
-            self.entries.append(((cons, ante), weight, [(source, weight)]))
+            self.entries.append(((cons, ante), weight, {(source, weight)}))
             for pred in preds_cons | preds_ante:
                 self.entries_by_pred[pred].add(len(self.entries)-1)
             
@@ -125,7 +125,7 @@ class KnowledgeBase:
                 assert entries_entailing == entries_entailed
                 # Equivalent entry exists; just add to provenance list
                 for ent_id in entries_entailing:
-                    self.entries[ent_id][2].append((source, weight))
+                    self.entries[ent_id][2].add((source, weight))
 
                 kb_updated = False
 
@@ -138,7 +138,7 @@ class KnowledgeBase:
 
                     # Add the stronger input as new entry
                     self.entries.append(
-                        ((cons, ante), weight, [(source, weight)])
+                        ((cons, ante), weight, {(source, weight)})
                     )
                     for pred in preds_cons | preds_ante:
                         self.entries_by_pred[pred].add(len(self.entries)-1)
@@ -148,7 +148,7 @@ class KnowledgeBase:
                     assert len(entries_entailing) > 0
                     # Entry entailing the given input exists; just add to provenance list
                     for ent_id in entries_entailing:
-                        self.entries[ent_id][2].append((source, weight))
+                        self.entries[ent_id][2].add((source, weight))
 
                     kb_updated = False
 
@@ -192,18 +192,23 @@ class KnowledgeBase:
         assert isinstance(concepts, set)
 
         if len(self.entries) > 0:
-            entailment_rules = [
-                (cons, ante) for (cons, ante), _, _ in self.entries
-                if any(lit.name in concepts for lit in cons)
-            ]
-
+            # Map from candidate predicates that entail some concepts of interest; will
+            # be filtered later to leave only those candidates that entail all concepts
+            # in entirety
             candidate_preds = defaultdict(set)
-            for cons, ante in entailment_rules:
-                # For now will just consider single concepts as candidates: i.e., those
-                # which can entail the target concepts in its own right without requiring
-                # extra concepts
-                if len(ante) > 1: continue
-                candidate_preds[ante[0].name] |= {lit.name for lit in cons}
+
+            for rule, _, _ in self.entries:
+                for cons, ante in flatten_cons_ante(*rule):
+                    # Disregard the cons-ante pair if cons doesn't contain any literals
+                    # with concepts of interest
+                    if not any(lit.name in concepts for lit in cons): continue
+
+                    # For now will just consider single concepts as candidates: i.e.,
+                    # those which can entail the target concepts in its own right without
+                    # requiring extra concepts
+                    if len(ante) > 1: continue
+
+                    candidate_preds[ante[0].name] |= {lit.name for lit in cons}
 
             # Filter to finally leave concepts that fully entail the target concepts and
             # return
@@ -261,138 +266,137 @@ class KnowledgeBase:
 
         # Process each entry
         for i, (rule, weight, _) in enumerate(self.entries):
-            cons, ante = flatten_cons_ante(*rule)
+            for j, (cons, ante) in enumerate(flatten_cons_ante(*rule)):
+                # Keep track of variable names used to avoid accidentally using
+                # overlapping names for 'lifting' variables (see below)
+                all_var_names = {
+                    v for v, _ in _flatten(_extract_terms(cons+ante))
+                    if isinstance(v, str)
+                }
 
-            # Keep track of variable names used to avoid accidentally using
-            # overlapping names for 'lifting' variables (see below)
-            all_var_names = {
-                v for v, _ in _flatten(_extract_terms(cons+ante))
-                if isinstance(v, str)
-            }
+                # All function term args used in this rule
+                all_fn_args = {
+                    fa for fa in _flatten(_extract_terms(cons+ante))
+                    if isinstance(fa[0], tuple)
+                }
 
-            # All function term args used in this rule
-            all_fn_args = {
-                fa for fa in _flatten(_extract_terms(cons+ante))
-                if isinstance(fa[0], tuple)
-            }
+                # Attach unique identifier suffixes to function names, so that functions
+                # from different KB entries can be distinguished; names are shared across
+                # within entry
+                all_fn_names = {fa[0][0] for fa in all_fn_args}
+                fn_name_map = { fn: f"{fn}_{i}_{j}" for fn in all_fn_names }
 
-            # Attach unique identifier suffixes to function names, so that functions
-            # from different KB entries can be distinguished; names are shared across
-            # within entry
-            all_fn_names = {fa[0][0] for fa in all_fn_args}
-            fn_name_map = { fn: f"{fn}_{i}" for fn in all_fn_names }
+                # Map for lifting function term to new variable arg term
+                fn_lifting_map = {
+                    ((fn_name_map[fa[0][0]], fa[0][1]), fa[1]):
+                        (f"X{i+len(all_var_names)}", True)
+                    for i, fa in enumerate(all_fn_args)
+                }
 
-            # Map for lifting function term to new variable arg term
-            fn_lifting_map = {
-                ((fn_name_map[fa[0][0]], fa[0][1]), fa[1]):
-                    (f"X{i+len(all_var_names)}", True)
-                for i, fa in enumerate(all_fn_args)
-            }
+                rule_fn_subs = {
+                    "cons": [c.substitute(functions=fn_name_map) for c in cons],
+                    "ante": [a.substitute(functions=fn_name_map) for a in ante]
+                }
+                rule_lifted = {
+                    "cons": [c.substitute(terms=fn_lifting_map) for c in rule_fn_subs["cons"]],
+                    "ante": [a.substitute(terms=fn_lifting_map) for a in rule_fn_subs["ante"]]
+                }
 
-            rule_fn_subs = {
-                "cons": [c.substitute(functions=fn_name_map) for c in cons],
-                "ante": [a.substitute(functions=fn_name_map) for a in ante]
-            }
-            rule_lifted = {
-                "cons": [c.substitute(terms=fn_lifting_map) for c in rule_fn_subs["cons"]],
-                "ante": [a.substitute(terms=fn_lifting_map) for a in rule_fn_subs["ante"]]
-            }
+                # List of unique non-function variable arguments in 1) rule cons and 2) rule ante
+                # (effectively whole rule) in the order of occurrence
+                c_var_signature = []; a_var_signature = []
+                for hl in rule_fn_subs["cons"]:
+                    for v_val, _ in hl.nonfn_terms():
+                        if v_val not in c_var_signature: c_var_signature.append(v_val)
+                for bl in rule_fn_subs["ante"]:
+                    for v_val, _ in bl.nonfn_terms():
+                        if v_val not in a_var_signature: a_var_signature.append(v_val)
 
-            # List of unique non-function variable arguments in 1) rule cons and 2) rule ante
-            # (effectively whole rule) in the order of occurrence
-            c_var_signature = []; a_var_signature = []
-            for hl in rule_fn_subs["cons"]:
-                for v_val, _ in hl.nonfn_terms():
-                    if v_val not in c_var_signature: c_var_signature.append(v_val)
-            for bl in rule_fn_subs["ante"]:
-                for v_val, _ in bl.nonfn_terms():
-                    if v_val not in a_var_signature: a_var_signature.append(v_val)
+                # Rule cons/ante satisfaction flags literals
+                c_sat_lit = Literal(f"cons_sat_{i}_{j}", wrap_args(*c_var_signature))
+                a_sat_lit = Literal(f"ante_sat_{i}_{j}", wrap_args(*a_var_signature))
 
-            # Rule cons/ante satisfaction flags literals
-            c_sat_lit = Literal(f"cons_sat_{i}", wrap_args(*c_var_signature))
-            a_sat_lit = Literal(f"ante_sat_{i}", wrap_args(*a_var_signature))
+                # Flag literal is derived when cons/ante is satisfied; in the meantime, lift
+                # occurrences of function terms and add appropriate function value assignment
+                # literals
+                c_sat_conds_pure = [        # Conditions having only 'pure' non-function args
+                    lit for lit in rule_lifted["cons"]
+                    if all(arg[0] in c_var_signature for arg in lit.args)
+                ]
+                c_fn_terms = set.union(*[
+                    {arg for arg in l.args if type(arg[0])==tuple} for l in rule_fn_subs["cons"]
+                ]) if len(rule_fn_subs["cons"]) > 0 else set()
+                c_fn_assign = [
+                    Literal(f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[fn_lifting_map[ft]])
+                    for ft in c_fn_terms
+                ]
 
-            # Flag literal is derived when cons/ante is satisfied; in the meantime, lift
-            # occurrences of function terms and add appropriate function value assignment
-            # literals
-            c_sat_conds_pure = [        # Conditions having only 'pure' non-function args
-                lit for lit in rule_lifted["cons"]
-                if all(arg[0] in c_var_signature for arg in lit.args)
-            ]
-            c_fn_terms = set.union(*[
-                {arg for arg in l.args if type(arg[0])==tuple} for l in rule_fn_subs["cons"]
-            ]) if len(rule_fn_subs["cons"]) > 0 else set()
-            c_fn_assign = [
-                Literal(f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[fn_lifting_map[ft]])
-                for ft in c_fn_terms
-            ]
+                a_sat_conds_pure = [
+                    lit for lit in rule_lifted["ante"]
+                    if all(arg[0] in a_var_signature for arg in lit.args)
+                ]
+                a_fn_terms = set.union(*[
+                    {arg for arg in l.args if type(arg[0])==tuple} for l in rule_fn_subs["ante"]
+                ])
+                a_fn_assign = [
+                    Literal(f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[fn_lifting_map[ft]])
+                    for ft in a_fn_terms
+                ]
 
-            a_sat_conds_pure = [
-                lit for lit in rule_lifted["ante"]
-                if all(arg[0] in a_var_signature for arg in lit.args)
-            ]
-            a_fn_terms = set.union(*[
-                {arg for arg in l.args if type(arg[0])==tuple} for l in rule_fn_subs["ante"]
-            ])
-            a_fn_assign = [
-                Literal(f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[fn_lifting_map[ft]])
-                for ft in a_fn_terms
-            ]
-
-            if len(c_sat_conds_pure+c_fn_assign) > 0:
-                # Skip cons-less rules
-                inference_prog.add_absolute_rule(
-                    Rule(head=c_sat_lit, body=c_sat_conds_pure+c_fn_assign)
-                )
-            inference_prog.add_absolute_rule(
-                Rule(head=a_sat_lit, body=a_sat_conds_pure+a_fn_assign)
-            )
-
-            # Indexing & storing the entry by cons for later abductive rule
-            # translation (thus, no need to consider cons-less constraints)
-            if len(cons) > 0:
-                for c_lits in entries_by_cons:
-                    ism, ent_dir = Literal.entailing_mapping_btw(cons, c_lits)
-                    if ent_dir == 0:
-                        entries_by_cons[c_lits].append((i, ism))
-                        break
-                else:
-                    entries_by_cons[frozenset(cons)].append((i, None))
-
-            # Choice rule for function value assignments
-            def add_assignment_choices(fn_terms, sat_conds):
-                for ft in fn_terms:
-                    # Function arguments and function term lifted
-                    ft_lifted = fn_lifting_map[ft]
-
-                    # Filter relevant conditions for filtering options worth considering
-                    rel_conds = [cl for cl in sat_conds if ft_lifted in cl.args]
+                if len(c_sat_conds_pure+c_fn_assign) > 0:
+                    # Skip cons-less rules
                     inference_prog.add_absolute_rule(
-                        Rule(
-                            head=Literal(
-                                f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[ft_lifted]
-                            ),
-                            body=rel_conds
-                        )
+                        Rule(head=c_sat_lit, body=c_sat_conds_pure+c_fn_assign)
                     )
-            add_assignment_choices(c_fn_terms, rule_lifted["cons"])
-            add_assignment_choices(a_fn_terms, rule_lifted["ante"])
+                inference_prog.add_absolute_rule(
+                    Rule(head=a_sat_lit, body=a_sat_conds_pure+a_fn_assign)
+                )
 
-            # Rule violation flag
-            r_unsat_lit = Literal(f"deduc_viol_{i}", wrap_args(*a_var_signature))
-            inference_prog.add_absolute_rule(Rule(
-                head=r_unsat_lit,
-                body=[a_sat_lit] + ([c_sat_lit.flip()] if len(cons) > 0 else [])
-            ))
-            
-            # Add appropriately weighted rule for applying 'probabilistic pressure'
-            # against deductive rule violation
-            inference_prog.add_rule(Rule(body=r_unsat_lit), weight)
+                # Indexing & storing the entry by cons for later abductive rule
+                # translation (thus, no need to consider cons-less constraints)
+                if len(cons) > 0:
+                    for c_lits in entries_by_cons:
+                        ism, ent_dir = Literal.entailing_mapping_btw(cons, c_lits)
+                        if ent_dir == 0:
+                            entries_by_cons[c_lits].append((i, ism))
+                            break
+                    else:
+                        entries_by_cons[frozenset(cons)].append((i, None))
 
-            # Store intermediate outputs for later reuse
-            intermediate_outputs.append((
-                c_sat_lit, a_sat_lit, c_var_signature, a_var_signature
-            ))
+                # Choice rule for function value assignments
+                def add_assignment_choices(fn_terms, sat_conds):
+                    for ft in fn_terms:
+                        # Function arguments and function term lifted
+                        ft_lifted = fn_lifting_map[ft]
+
+                        # Filter relevant conditions for filtering options worth considering
+                        rel_conds = [cl for cl in sat_conds if ft_lifted in cl.args]
+                        inference_prog.add_absolute_rule(
+                            Rule(
+                                head=Literal(
+                                    f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[ft_lifted]
+                                ),
+                                body=rel_conds
+                            )
+                        )
+                add_assignment_choices(c_fn_terms, rule_lifted["cons"])
+                add_assignment_choices(a_fn_terms, rule_lifted["ante"])
+
+                # Rule violation flag
+                r_unsat_lit = Literal(f"deduc_viol_{i}_{j}", wrap_args(*a_var_signature))
+                inference_prog.add_absolute_rule(Rule(
+                    head=r_unsat_lit,
+                    body=[a_sat_lit] + ([c_sat_lit.flip()] if len(cons) > 0 else [])
+                ))
+                
+                # Add appropriately weighted rule for applying 'probabilistic pressure'
+                # against deductive rule violation
+                inference_prog.add_rule(Rule(body=r_unsat_lit), weight)
+
+                # Store intermediate outputs for later reuse
+                intermediate_outputs.append((
+                    c_sat_lit, a_sat_lit, c_var_signature, a_var_signature
+                ))
 
         return entries_by_cons, intermediate_outputs
 

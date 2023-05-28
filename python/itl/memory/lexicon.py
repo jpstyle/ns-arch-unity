@@ -23,6 +23,9 @@ class Lexicon:
         # Add reserved symbols & denotations
         for s, d in Lexicon.RESERVED.items(): self.add(s, d)
 
+        # (Temp) Inventory of relation concept is a fixed singleton set, containing "have"
+        self.add(("have", "v"), (0, "rel"))
+
     def __repr__(self):
         return f"Lexicon(len={len(self.s2d)})"
 

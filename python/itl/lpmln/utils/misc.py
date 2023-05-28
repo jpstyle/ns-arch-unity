@@ -50,31 +50,51 @@ def sigmoid(l):
 
 def flatten_cons_ante(cons, ante):
     """
-    Rearrange until any nested conjunctions are all properly flattened out,
-    so that rule can be translated into appropriate ASP clause
+    Rearrange into (possibly multiple) flattened rules until any all of the nested
+    conjunctions are all properly fished up, such that the rule can be translated
+    into appropriate ASP clauses.
+
+    Example:
+        A consequent-antecedent pair "p, not q <= r" would yield a list of flattened
+        cons-ante pairs of ["p <= r", "<= q, r"].
     """
     from .. import Literal
 
     cons = list(cons) if cons is not None else []
     ante = list(ante) if ante is not None else []
-    conjuncts = cons + ante
-    while any(not isinstance(c, Literal) for c in conjuncts):
-        # Migrate any negated conjunctions in cons to ante
-        conjuncts_p = [c for c in cons if isinstance(c, Literal)]
-        conjuncts_n = [c for c in cons if not isinstance(c, Literal)]
 
-        cons = conjuncts_p
-        ante = ante + sum(conjuncts_n, [])
+    flattened = [(cons, ante)]
+    while any(
+        not isinstance(conjunct, Literal)
+        for cons, ante in flattened for conjunct in cons+ante
+    ):
+        flattened_new = []
 
-        if any(not isinstance(a, Literal) for a in ante):
-            # Introduce auxiliary literals that are derived when
-            # each conjunction in ante is satisfied
-            # (Not needed, not implemented yet :p)
-            raise NotImplementedError
+        for cons, ante in flattened:
+            # Positive & negative conjuncts in consequent
+            # (Reminder for self: a list of conjuncts stands for negation of
+            # the conjunction in current implementation)
+            cons_cjcts_p = [c for c in cons if isinstance(c, Literal)]
+            cons_cjcts_n = [c for c in cons if not isinstance(c, Literal)]
 
-        conjuncts = cons + ante
+            if any(not isinstance(a, Literal) for a in ante):
+                # Introduce auxiliary literals that are derived when each conjunction
+                # in ante is satisfied (Not needed, not implemented yet :p)
+                # (Mind differences of semantics of strong vs. weak negation...)
+                raise NotImplementedError
+
+            if len(cons_cjcts_p) > 0:
+                # Positive conjuncts in consequent <= antecedent
+                flattened_new.append((cons_cjcts_p, ante))
+
+            for neg_cjct in cons_cjcts_n:
+                # Migrate each negated conjunction to ante, creating a new (cons, ante)
+                # pair to be processed and included
+                flattened_new.append(([], ante+neg_cjct))
+
+        flattened = flattened_new
     
-    return cons, ante
+    return flattened
 
 def unify_mappings(mappings):
     """

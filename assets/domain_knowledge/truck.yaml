@@ -1,0 +1,43 @@
+# Encodes domain knowledge about different types of trucks characterized by
+# their load parts
+
+# Template) For empty list and dictionary, enter [] and null respectively
+# {class_name}:
+#     supertype: {class_name}
+#     parts:
+#         - {class_name}
+#         - {class_name}
+#         ...
+#     part_attributes:
+#         {class_name}:
+#             - {attribute_name}
+#             - {attribute_name}
+#             ...
+#         {class_name}:
+#             - {attribute_name}
+#             - {attribute_name}
+#             ...
+#         ...
+
+base truck:
+    supertype: truck
+    parts: []
+    part_attributes: null
+
+dump truck:
+    supertype: truck
+    parts:
+        - dumper
+    part_attributes: null
+
+missile truck:
+    supertype: truck
+    parts:
+        - rocket launcher
+    part_attributes: null
+
+fire truck:
+    supertype: truck
+    parts:
+        - ladder
+    part_attributes: null

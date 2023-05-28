@@ -26,8 +26,9 @@ is_grounded = lambda cnjt: all(not is_var for _, is_var in cnjt.args) \
     if isinstance(cnjt, Literal) else all(is_grounded(nc) for nc in cnjt)
 is_lifted = lambda cnjt: all(is_var for _, is_var in cnjt.args) \
     if isinstance(cnjt, Literal) else all(is_lifted(nc) for nc in cnjt)
-has_pred_referent = lambda cnjt: any(a.startswith("p") for a, _ in cnjt.args) \
-    if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
+has_pred_referent = \
+    lambda cnjt: any(isinstance(a,str) and a[0].lower()=="p" for a, _ in cnjt.args) \
+        if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
 
 def identify_mismatch(agent, rule):
     """
@@ -78,12 +79,13 @@ def identify_confusion(agent, rule, prev_facts, novel_concepts):
         # might change in the future when we adopt a more sophisticated formalism
         # for representing discourse to relax the assumption.
         prev_facts_A = [fct for spk, fct in prev_facts if spk=="A"]
-        if len(prev_facts_A) > 0:
-            agent_last_ans = prev_facts_A[-1][0][0]
-            _, agent_last_ans = agent_last_ans.name.split("_")
-            agent_last_ans = int(agent_last_ans)
-        else:
-            agent_last_ans = None
+        if len(prev_facts_A) == 0:
+            # Hasn't given an answer (i.e., "I am not sure.")
+            return
+
+        agent_last_ans = prev_facts_A[-1][0][0]
+        ans_conc_type, ans_conc_ind = agent_last_ans.name.split("_")
+        ans_conc_ind = int(ans_conc_ind)
 
         for lit in cons:
             # Disregard negated conjunctions
@@ -91,6 +93,8 @@ def identify_confusion(agent, rule, prev_facts, novel_concepts):
 
             # (Temporary) Only consider 1-place predicates, so retrieve
             # the single and first entity from the arg list
+            assert len(lit.args) == 1
+
             conc_type, conc_ind = lit.name.split("_")
             conc_ind = int(conc_ind)
 
@@ -99,14 +103,15 @@ def identify_confusion(agent, rule, prev_facts, novel_concepts):
                 # has to be newly registered in the visual concept inventory
                 continue
 
-            if agent_last_ans is not None and agent_last_ans != conc_ind:
+            if (lit.args == agent_last_ans.args and conc_type == ans_conc_type
+                and conc_ind != ans_conc_ind):
                 # Potential confusion case, as unordered label pair
-                confusion_pair = frozenset([agent_last_ans, conc_ind])
+                confusion_pair = frozenset([conc_ind, ans_conc_ind])
 
-                if ("cls", confusion_pair) not in agent.confused_no_more:
+                if (conc_type, confusion_pair) not in agent.confused_no_more:
                     # Agent's best guess disagrees with the user-provided
                     # information
-                    agent.vision.confusions.add(("cls", confusion_pair))
+                    agent.vision.confusions.add((conc_type, confusion_pair))
 
 def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
     """
@@ -177,7 +182,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
                 )
                 negImpl = ((list(cons_repl),), ante_repl)
                 generics.append(
-                    (negImpl, A_IM_PR, f"{provenance} [vs. {c1}] (Neg. Impl.)")
+                    (negImpl, A_IM_PR, f"{provenance} (Neg. Impl.)")
                 )
 
                 # Collect explicit generics provided for the concept pair and negative
@@ -247,7 +252,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
 
 def handle_mismatch(agent, mismatch):
     """
-    Handle recognition gap following some specified strategy. Note that we now
+    Handle cognition gap following some specified strategy. Note that we now
     assume the user (teacher) is an infallible oracle, and the agent doesn't
     question info provided from user.
     """
@@ -255,51 +260,51 @@ def handle_mismatch(agent, mismatch):
     agent.symbolic.mismatches.remove(mismatch)
 
     rule, _ = mismatch
-    cons, ante = flatten_cons_ante(*rule)
+    for cons, ante in flatten_cons_ante(*rule):
+        is_grounded = all(not is_var for l in cons+ante for _, is_var in l.args)
 
-    is_grounded = all(not is_var for l in cons+ante for _, is_var in l.args)
-    if is_grounded and len(cons+ante)==1:
-        if len(cons) == 1 and len(ante) == 0:
-            # Positive grounded fact
-            atom = cons[0]
-            exm_pointer = ({0}, set())
-        else:
-            # Negative grounded fact
-            atom = ante[0]
-            exm_pointer = (set(), {0})
+        if is_grounded and len(cons+ante)==1:
+            if len(cons) == 1 and len(ante) == 0:
+                # Positive grounded fact
+                atom = cons[0]
+                exm_pointer = ({0}, set())
+            else:
+                # Negative grounded fact
+                atom = ante[0]
+                exm_pointer = (set(), {0})
 
-        conc_type, conc_ind = atom.name.split("_")
-        conc_ind = int(conc_ind)
-        args = [a for a, _ in atom.args]
+            conc_type, conc_ind = atom.name.split("_")
+            conc_ind = int(conc_ind)
+            args = [a for a, _ in atom.args]
 
-        ex_bboxes = [
-            box_convert(
-                torch.tensor(agent.lang.dialogue.referents["env"][arg]["bbox"]),
-                "xyxy", "xywh"
-            ).numpy()
-            for arg in args
-        ]
+            ex_bboxes = [
+                box_convert(
+                    torch.tensor(agent.lang.dialogue.referents["env"][arg]["bbox"]),
+                    "xyxy", "xywh"
+                ).numpy()
+                for arg in args
+            ]
 
-        # Fetch current score for the asserted fact
-        if conc_type == "cls":
-            f_vec = agent.vision.f_vecs[args[0]][0]
-        elif conc_type == "att":
-            f_vec = agent.vision.f_vecs[args[0]][1]
-        else:
-            assert conc_type == "rel"
-            raise NotImplementedError   # Step back for relation prediction...
+            # Fetch current score for the asserted fact
+            if conc_type == "cls":
+                f_vec = agent.vision.f_vecs[args[0]][0]
+            elif conc_type == "att":
+                f_vec = agent.vision.f_vecs[args[0]][1]
+            else:
+                assert conc_type == "rel"
+                raise NotImplementedError   # Step back for relation prediction...
 
-        # Add new concept exemplars to memory, as feature vectors at the
-        # penultimate layer right before category prediction heads
-        pointers_src = { 0: (0, tuple(ai for ai in range(len(args)))) }
-        pointers_exm = { conc_ind: exm_pointer }
+            # Add new concept exemplars to memory, as feature vectors at the
+            # penultimate layer right before category prediction heads
+            pointers_src = { 0: (0, tuple(ai for ai in range(len(args)))) }
+            pointers_exm = { conc_ind: exm_pointer }
 
-        agent.lt_mem.exemplars.add_exs(
-            sources=[(np.asarray(agent.vision.last_input), ex_bboxes)],
-            f_vecs={ conc_type: f_vec[None,:] },
-            pointers_src={ conc_type: pointers_src },
-            pointers_exm={ conc_type: pointers_exm }
-        )
+            agent.lt_mem.exemplars.add_exs(
+                sources=[(np.asarray(agent.vision.last_input), ex_bboxes)],
+                f_vecs={ conc_type: f_vec[None,:] },
+                pointers_src={ conc_type: pointers_src },
+                pointers_exm={ conc_type: pointers_exm }
+            )
 
 def handle_confusion(agent, confusion):
     """

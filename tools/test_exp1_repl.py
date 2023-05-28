@@ -51,14 +51,14 @@ def main(cfg):
         # Each dict contains concepts to be tested and taught in a single episode,
         # with string concept names as key and Unity GameObject string name handle
         # as value
-        # { "base truck": "/truck" },
-        # { "dump truck": "/truck" },
-        # { "fire truck": "/truck" },
-        # { "missile truck": "/truck" }
-        { "truck": "/truck" },
-        { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
-        { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
-        { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+        { "base truck": "/truck" },
+        { "dump truck": "/truck" },
+        { "fire truck": "/truck" },
+        { "missile truck": "/truck" }
+        # { "truck": "/truck" },
+        # { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
+        # { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
+        # { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
     ]
 
     # Student/teacher-side string message communication side channels
@@ -77,7 +77,7 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    for _ in range(300):
+    for _ in range(100):
         # Obtain random initialization of each episode
         random_inits = teacher.setup_episode()
 
@@ -88,7 +88,9 @@ def main(cfg):
         # Send teacher's episode-initial output---thus user's episode-initial input
         # (Comment out when testing in Heuristics mode)
         opening_output = teacher.initiate_dialogue()
-        teacher_channel.send_string(opening_output["utterances"], opening_output["pointing"])
+        teacher_channel.send_string(
+            opening_output[0]["utterance"], opening_output[0]["pointing"]
+        )
 
         # Let the settings take effect and begin the episode
         env.reset()
@@ -151,7 +153,7 @@ def main(cfg):
                             for act_type, act_data in act_out:
                                 if act_type == "generate":
                                     action.discrete[0][0] = 1       # 'Utter' action
-                                    student_channel.send_string([act_data[0]], [act_data[1]])
+                                    student_channel.send_string(act_data[0], act_data[1])
 
                             # Finally apply actions
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
@@ -176,14 +178,14 @@ def main(cfg):
                                 agent_reactions.append(utterance)
                         
                         # Simulated teacher (user) response
-                        user_responses = teacher.react(agent_reactions)
+                        user_response = teacher.react(agent_reactions)
 
-                        if len(user_responses) > 0:
+                        if len(user_response) > 0:
                             action = b_spec.action_spec.empty_action(1)
-                            for act_data in user_responses:
+                            for act_data in user_response:
                                 action.discrete[0][0] = 1       # 'Utter' action
                                 teacher_channel.send_string(
-                                    act_data["utterances"], act_data["pointing"]
+                                    act_data["utterance"], act_data["pointing"]
                                 )
                             
                             # Finally apply actions

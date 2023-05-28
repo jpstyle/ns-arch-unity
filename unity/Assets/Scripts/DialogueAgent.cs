@@ -87,10 +87,6 @@ public class DialogueAgent : Agent
             if (incomingMsgBuffer.Count == 0) return;
 
             // Unprocessed incoming messages exist; process and consult backend
-            var speakers = new List<string>();
-            var utterances = new List<string>();
-            var demRefs = new List<Dictionary<(int, int), EntityRef>>();
-
             while (incomingMsgBuffer.Count > 0)
             {
                 // Fetch single message record from queue
@@ -98,23 +94,23 @@ public class DialogueAgent : Agent
                 
                 // (If any) Translate EnvEntity reference by UID to box coordinates w.r.t.
                 // this agent's camera sensor
-                var demRefsForUtt = new Dictionary<(int, int), EntityRef>();
+                var demRefs = new Dictionary<(int, int), EntityRef>();
                 foreach (var (range, entUid) in incomingMessage.demonstrativeReferences)
                 {
                     // Retrieve referenced EnvEntity and fetch absolute box coordinates w.r.t.
                     // this agent's camera's target display screen
                     var refEnt = EnvEntity.FindByUid(entUid);
                     var screenAbsRect = refEnt.boxes[_cameraSensor.Camera.targetDisplay];
-                    demRefsForUtt[range] = new EntityRef(ScreenAbsRectToSensorRelRect(screenAbsRect));
+                    demRefs[range] = new EntityRef(ScreenAbsRectToSensorRelRect(screenAbsRect));
                 }
 
-                speakers.Add(incomingMessage.speaker);
-                utterances.Add(incomingMessage.utterance);
-                demRefs.Add(demRefsForUtt);
+                // Send message via side channel
+                backendMsgChannel.SendMessageToBackend(
+                    incomingMessage.speaker, incomingMessage.utterance, demRefs
+                );
             }
 
-            // Now send message via side channel and wait for decision
-            backendMsgChannel.SendMessageToBackend(speakers, utterances, demRefs);
+            // Now wait for decision
             RequestDecision();
         }
     }

@@ -27,9 +27,9 @@ def query(bjt, q_vars, event, restrictors):
         # Treat as list
         event = list(event)
 
-    event = [
+    event = sum([
         flatten_cons_ante(ev_cons, ev_ante) for ev_cons, ev_ante in event
-    ]
+    ], [])
     event = set(sum([
         [Rule(head=l) for l in ev_cons] if len(ev_cons) > 0 else [Rule(body=ev_ante)]
         for ev_cons, ev_ante in event

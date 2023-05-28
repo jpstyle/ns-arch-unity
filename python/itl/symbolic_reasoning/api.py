@@ -145,10 +145,10 @@ class SymbolicReasonerModule:
 
         # Discourse referents
         for rf, v in dialogue_state["referents"]["dis"].items():
-            # No need to assign if not an entity referent
-            if not rf.startswith("x"): continue
             # No need to assign if universally quantified or wh-quantified
             if v["is_univ_quantified"] or v["is_wh_quantified"]: continue
+            # No need to assign if not an entity referent
+            if not rf.startswith("x"): continue
 
             aprog.add_absolute_rule(Rule(head=Literal("dis", wrap_args(rf))))
             if v["is_referential"]:
@@ -227,17 +227,23 @@ class SymbolicReasonerModule:
 
                     cons_args = [extract_args(c) for c in cons]
                     ante_args = [extract_args(a) for a in ante]
-                    occurring_args = sum([a for _, a in flatten(cons_args+ante_args)], ())
-                    # Those starting with "p" refer to predicates, not entities
-                    occurring_args = {arg for arg in occurring_args if arg.startswith("x")}
+                    occurring_ent_refs = sum([a for _, a in flatten(cons_args+ante_args)], ())
+                    occurring_ent_refs = sum([
+                        (ref,) if isinstance(ref, str) else ref[1]
+                        for ref in occurring_ent_refs
+                    ], ())
+                    # Only referents starting with "x" refer to environment entities
+                    occurring_ent_refs = {
+                        ref for ref in occurring_ent_refs if ent.startswith("x")
+                    }
 
-                    if all(arg in dialogue_state["assignment_hard"] for arg in occurring_args):
+                    if all(arg in dialogue_state["assignment_hard"] for arg in occurring_ent_refs):
                         # Below not required if all occurring args are hard-assigned to some entity
                         continue
 
                     # If bjt_v is present and rule is grounded, add bias in favor of
                     # assignments which would satisfy the rule
-                    is_grounded = all(not arg[0].isupper() for arg in occurring_args)
+                    is_grounded = all(not arg[0].isupper() for arg in occurring_ent_refs)
                     if self.concl_vis is not None and is_grounded:
                         # TODO: Update to comply with the recent changes... When coreference
                         # resolution becomes a serious issue to address
@@ -267,7 +273,7 @@ class SymbolicReasonerModule:
 
                         #     # Question to query models_v with
                         #     q_rule = Rule(head=rule_head, body=rule_body)
-                        #     q_vars = tuple((a, False) for a in occurring_args)
+                        #     q_vars = tuple((a, False) for a in occurring_ent_refs)
                         #     query_result = models_v.query(q_vars, q_rule)
 
                         #     for ans, (_, score) in query_result.items():
@@ -544,33 +550,32 @@ class SymbolicReasonerModule:
 
             for (rule, _), _ in turn_sentences:
                 if rule is not None:
-                    cons, ante = flatten_cons_ante(*rule)
+                    for cons, ante in flatten_cons_ante(*rule):
+                        # Skip any non-grounded content
+                        cons_has_var = len(cons) > 0 and any([
+                            any(is_var for _, is_var in c.args) for c in cons
+                        ])
+                        ante_has_var = len(ante) > 0 and any([
+                            any(is_var for _, is_var in a.args) for a in ante
+                        ])
+                        if cons_has_var or ante_has_var: continue
 
-                    # Skip any non-grounded content
-                    cons_has_var = len(cons) > 0 and any([
-                        any(is_var for _, is_var in c.args) for c in cons
-                    ])
-                    ante_has_var = len(ante) > 0 and any([
-                        any(is_var for _, is_var in a.args) for a in ante
-                    ])
-                    if cons_has_var or ante_has_var: continue
+                        # Skip any rules with non-entity referents
+                        cons_has_pred_ent = len(cons) > 0 and any([
+                            any(arg.startswith("p") for arg, _ in c.args) for c in cons
+                        ])
+                        ante_has_pred_ent = len(ante) > 0 and any([
+                            any(arg.startswith("p") for arg, _ in a.args) for a in ante
+                        ])
+                        if cons_has_pred_ent or ante_has_pred_ent: continue
 
-                    # Skip any rules with non-entity referents
-                    cons_has_pred_ent = len(cons) > 0 and any([
-                        any(arg.startswith("p") for arg, _ in c.args) for c in cons
-                    ])
-                    ante_has_pred_ent = len(ante) > 0 and any([
-                        any(arg.startswith("p") for arg, _ in a.args) for a in ante
-                    ])
-                    if cons_has_pred_ent or ante_has_pred_ent: continue
-
-                    if len(cons) > 0:
-                        # One ASP rule per cons
-                        for cl in cons:
-                            dprog.add_rule(Rule(head=cl, body=ante), U_IN_PR)
-                    else:
-                        # Cons-less; single constraint
-                        dprog.add_rule(Rule(body=ante), U_IN_PR)
+                        if len(cons) > 0:
+                            # One ASP rule per cons
+                            for cl in cons:
+                                dprog.add_rule(Rule(head=cl, body=ante), U_IN_PR)
+                        else:
+                            # Cons-less; single constraint
+                            dprog.add_rule(Rule(body=ante), U_IN_PR)
 
         # Finally, reasoning with all visual+language info
         if len(dprog) > 0:
