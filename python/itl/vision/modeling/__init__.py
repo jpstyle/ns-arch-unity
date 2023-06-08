@@ -1,3 +1,3 @@
-from .module import FewShotSceneGraphGenerator
+from .module import VisualSceneAnalyzer
 
-__all__ = ["FewShotSceneGraphGenerator"]
+__all__ = ["VisualSceneAnalyzer"]

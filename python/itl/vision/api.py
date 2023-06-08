@@ -1,16 +1,14 @@
 """
-Vision processing module API that exposes only the high-level functionalities
-required by the ITL agent inference (full scene graph generation, classification
-given bbox and visual search by concept exemplars). Implemented using publicly
-released model of OWL-ViT.
+Vision processing module API that exposes the high-level functionalities required
+by the ITL agent inference (concept classification of object instances in image,
+concept instance search in image). Implemented by building upon the pretrained
+Segment Anything Model (SAM).
 """
 import os
-import json
 import logging
 from PIL import Image
 from itertools import product
 
-import tqdm
 import torch
 import wandb
 import numpy as np
@@ -20,8 +18,8 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from torchvision.ops import box_convert, nms, box_area
 
-from .data import FewShotSGGDataModule
-from .modeling import FewShotSceneGraphGenerator
+from .data import FewShotDataModule
+from .modeling import VisualSceneAnalyzer
 from .utils.visualize import visualize_sg_predictions
 
 logger = logging.getLogger(__name__)
@@ -52,13 +50,13 @@ class VisionModule:
         # only integer sizes of inventories for now...
         self.inventories = VisualConceptInventory()
 
-        self.model = FewShotSceneGraphGenerator(self.cfg)
+        self.model = VisualSceneAnalyzer(self.cfg)
 
         # Reading W&B config environment variables, if exists
         try:
             load_dotenv(find_dotenv(raise_error_if_not_found=True))
         except OSError as e:
-            print(f"While reading dotenv: {e}")
+            logger.warn(f"While reading dotenv: {e}")
 
         # If pre-trained vision model is specified, download and load weights
         if "fs_model" in self.cfg.vision.model:
@@ -488,52 +486,6 @@ class VisionModule:
                 }
             self.summ = visualize_sg_predictions(self.last_input, self.scene, lexicon)
 
-    def cache_vectors(self):
-        """
-        Pre-compute and cache feature vector outputs from the DETR model to speed up
-        the training process...
-        """
-        self.model.eval()
-
-        dataset_path = self.cfg.vision.data.path
-        images_path = os.path.join(dataset_path, "images")
-        vectors_path = os.path.join(dataset_path, "vectors")
-        os.makedirs(vectors_path, exist_ok=True)
-
-        with open(f"{dataset_path}/annotations.json") as ann_f:
-            annotations = json.load(ann_f)
-
-        for img in tqdm.tqdm(annotations, total=len(annotations)):
-            vec_path = os.path.join(vectors_path, f"{img['file_name']}.vectors")
-
-            if os.path.exists(vec_path): continue
-            if len(img["annotations"]) == 0:
-                # Still save an empty dict to maintain 1-to-1 file correspondence...
-                # for sanity's sake
-                torch.save({}, vec_path)
-                continue
-
-            image_raw = os.path.join(images_path, img["file_name"])
-            image_raw = Image.open(image_raw)
-            if image_raw.mode != "RGB":
-                # Cast non-RGB images (e.g. grayscale) into RGB format
-                old_image_raw = image_raw
-                image_raw = Image.new("RGB", old_image_raw.size)
-                image_raw.paste(old_image_raw)
-
-            bboxes = [obj["bbox"] for obj in img["annotations"].values()]
-            bboxes = torch.tensor(bboxes).to(self.model.device)
-            bboxes = box_convert(bboxes, "xywh", "cxcywh")
-            bboxes = torch.stack([
-                bboxes[:,0] / image_raw.width, bboxes[:,1] / image_raw.height,
-                bboxes[:,2] / image_raw.width, bboxes[:,3] / image_raw.height,
-            ], dim=-1)
-
-            _, fvecs = self.model.fvecs_from_image_and_bboxes(image_raw, bboxes)
-            fvecs = fvecs.cpu()[0]
-            fvecs = {oid: fv for oid, fv in zip(img["annotations"], fvecs)}
-            torch.save(fvecs, vec_path)
-
     def train(self):
         """
         Training few-shot visual object detection & class/attribute classification
@@ -544,20 +496,12 @@ class VisionModule:
         not called by end user.)
         """
         # Prepare DataModule from data config
-        dm = FewShotSGGDataModule(self.cfg)
-
-        # Search task -- especially with VG datasets, consisting of bigger images --
-        # is quite demanding w.r.t. memory consumption... let's accumulate gradients
-        # instead, using the batch size config.
-        if self.cfg.vision.task == "fs_search":
-            accumulate_grad_batches = self.cfg.vision.data.batch_size
-        else:
-            accumulate_grad_batches = 1
+        dm = FewShotDataModule(self.cfg)
 
         # Configure and run trainer
         wb_logger = WandbLogger(
-            # offline=True,           # Uncomment for offline run (comment out log_model)
-            log_model=True,         # Uncomment for online run (comment out offline)
+            offline=True,           # Uncomment for offline run (comment out log_model)
+            # log_model=True,         # Uncomment for online run (comment out offline)
             project=os.environ.get("WANDB_PROJECT"),
             entity=os.environ.get("WANDB_ENTITY"),
             save_dir=self.cfg.paths.outputs_dir
@@ -565,8 +509,7 @@ class VisionModule:
         trainer = pl.Trainer(
             accelerator="auto",
             max_steps=self.cfg.vision.optim.max_steps,
-            accumulate_grad_batches=accumulate_grad_batches,
-            check_val_every_n_epoch=None,       # Iteration-based val
+            # check_val_every_n_epoch=None,       # Iteration-based val
             log_every_n_steps=self.cfg.vision.optim.log_interval,
             val_check_interval=self.cfg.vision.optim.val_interval,
             num_sanity_val_steps=0,
@@ -588,7 +531,7 @@ class VisionModule:
         Evaluate best model from a run on test dataset
         """
         # Prepare DataModule from data config
-        dm = FewShotSGGDataModule(self.cfg)
+        dm = FewShotDataModule(self.cfg)
 
         if self.cfg.vision.model.fs_model.startswith(WB_PREFIX):
             wb_logger = WandbLogger(

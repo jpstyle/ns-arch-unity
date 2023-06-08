@@ -1,2 +1,7 @@
 model:
-    detr_model: "SenseTime/deformable-detr-with-box-refine-two-stage"
+    sam_model: "facebook/sam-vit-huge"
+
+data:
+    batch_size: 32
+    num_exs_per_conc: 8
+    num_loader_workers: 4

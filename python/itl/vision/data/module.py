@@ -4,30 +4,27 @@ import json
 import random
 import logging
 from PIL import Image
+from functools import reduce
 from collections import defaultdict
 
-import nltk
 import torch
-import networkx as nx
+import numpy as np
 import pytorch_lightning as pl
-from torch.utils.data import Dataset, DataLoader
+from pycocotools import mask
+from torch.utils.data import Dataset, DataLoader, Sampler
 from torch.utils.data._utils.collate import default_collate
 
-from .vg_prepare import (
-    download_and_unzip,
-    process_image_metadata,
-    download_images,
-    reformat_annotations
-)
+from .prepare import download_from_url, download_vg_images, extract_metadata
 
 logger = logging.getLogger(__name__)
 
 
-class FewShotSGGDataModule(pl.LightningDataModule):
+VAW_URL = "https://github.com/adobe-research/vaw_dataset/raw/main/data"
+
+class FewShotDataModule(pl.LightningDataModule):
     """
-    DataModule for preparing & loading data for few-shot scene graph generation
-    task (object detection & class/attribute classification; relation classification
-    may also be added in some future?). Responsible for downloading, pre-processing
+    DataModule for preparing & loading data for few-shot tasks concerning visual
+    object classes and attributes. Responsible for downloading, pre-processing
     data, managing train/val/test split, and shipping appropriate dataloaders.
     """
     def __init__(self, cfg):
@@ -41,209 +38,85 @@ class FewShotSGGDataModule(pl.LightningDataModule):
         os.makedirs(dataset_path, exist_ok=True)
         os.makedirs(images_path, exist_ok=True)
 
-        dataset_name = self.cfg.vision.data.name
-        if dataset_name == "visual_genome":
-            num_images = self.cfg.vision.data.num_images
-            num_images_used = int(num_images * self.cfg.vision.data.use_percentage)
+        if self.cfg.vision.data.name == "vaw":
+            # VAW (Visual Attributes in the Wild) dataset; images are from VG
+            # datasets, with higher-quality (i.e., denser, less noisy, provides
+            # negative labels as well) annotations on visual attributes
 
-            # Prepare NLTK wordnet resources to handle ontology info
-            nltk_dir = os.path.join(self.cfg.paths.assets_dir, "nltk_data")
-            nltk.data.path.append(nltk_dir)
-            try:
-                nltk.find("corpora/wordnet.zip", paths=[nltk_dir])
-            except LookupError:
-                nltk.download("wordnet", download_dir=nltk_dir)
-            try:
-                nltk.find("corpora/omw-1.4.zip", paths=[nltk_dir])
-            except LookupError:
-                nltk.download("omw-1.4", download_dir=nltk_dir)
+            # Note: Turns out Visual Genome API is somewhat unstable lately, so
+            # the VG image metadata file is salvaged and included as part of repo.
+            # In the meantime, image files themselves are hosted on stanford server
+            # and seem to be affected less, fortunately.
+            with open(f"{self.cfg.paths.data_dir}/vg_image_data.json") as vg_imgs_f:
+                vg_img_data = json.load(vg_imgs_f)
 
-            if os.path.exists(f"{dataset_path}/annotations.json") and \
-                os.path.exists(f"{dataset_path}/metadata.json"):
-                # Annotation & metadata file exists, presume we already have the
-                # target data in the format we need
-                logger.info(f"Required data files seem already present in {dataset_path}...")
-                logger.info("If you want to download and process VG data files again, " \
-                    "empty the directory and re-run the script.")
-            else:
-                # Download original VG annotations
-                for f in ["image_data", "attribute_synsets", "scene_graphs"]:
-                    json_filename = f"{f}.json"
-                    jsonzip_filename = f"{json_filename}.zip"
+            # Download annotation JSON files
+            for data_name in ["train_part1", "train_part2", "val", "test"]:
+                json_filename = f"{data_name}.json"
+                data_file_url = f"{VAW_URL}/{json_filename}"
+                target_path = f"{dataset_path}/{json_filename}"
 
-                    if os.path.exists(f"{dataset_path}/{json_filename}"):
-                        logger.info(f"{json_filename} already exists, skip download")
-                    else:
-                        download_and_unzip(dataset_path, jsonzip_filename)
+                if os.path.exists(target_path):
+                    logger.info(f"{json_filename} already exists, skip download")
+                else:
+                    download_from_url(data_file_url, target_path)
 
-                # Download image files, reformat & save VG annotations
-                img_anns, imgs_to_download = process_image_metadata(
-                    dataset_path, num_images_used
-                )
-                download_images(imgs_to_download)
-                reformat_annotations(dataset_path, num_images_used, img_anns, self.cfg.seed)
-
-            # Finally, cleanup by removing files that are not needed anymore
-            for f in ["image_data", "attribute_synsets", "scene_graphs"]:
-                if os.path.exists(f"{dataset_path}/{f}.json"):
-                    os.remove(f"{dataset_path}/{f}.json")
+            # Download image files, reformat & save VG annotations
+            imgs_to_download = extract_metadata(dataset_path)
+            download_vg_images(images_path, vg_img_data, imgs_to_download)
 
     def setup(self, stage):
-        # Construct _SGGDataset instance with specified dataset
+        # Prepare dataset & samplers according to task type
         dataset_path = self.cfg.vision.data.path
-
-        with open(f"{dataset_path}/annotations.json") as ann_f:
-            annotations = json.load(ann_f)
-        with open(f"{dataset_path}/metadata.json") as meta_f:
-            metadata = json.load(meta_f)
-
-        # Prepare dataloaders and samplers according to train/val/test split provided
-        # in metadata
+        annotations = {
+            "train": defaultdict(dict),
+            "val": defaultdict(dict),
+            "test": defaultdict(dict)
+        }
         self.datasets = {}; self.samplers = {}
-        for conc_type in ["classes", "attributes"]: #, "relations"]:
-            if len(metadata[f"{conc_type}_train_split"]) == 0 or \
-                len(metadata[f"{conc_type}_val_split"]) == 0:
-                continue
 
-            self.datasets[conc_type] = {}
-            self.samplers[conc_type] = {}
+        if self.cfg.vision.task == "rgb":
+            # Load VAW metadata
+            with open(f"{dataset_path}/metadata.json") as meta_f:
+                metadata = json.load(meta_f)
 
-            hypernym_info = metadata[f"{conc_type}_hypernyms"] \
-                if f"{conc_type}_hypernyms" in metadata else {}
-            hypernym_info = { int(k): set(v) for k, v in hypernym_info.items() }
+            # For loading annotation data for train/val/test splits
+            def load_annotation_data(file_name, anno_dict):
+                with open(f"{dataset_path}/{file_name}") as ann_f:
+                    for entry in json.load(ann_f):
+                        img_id = int(entry["image_id"])
+                        instance_id = int(entry["instance_id"])
+                        anno_dict[img_id][instance_id] = {
+                            "class": entry["object_name"],
+                            "attributes_pos": entry["positive_attributes"],
+                            "attributes_neg": entry["negative_attributes"],
+                            "instance_bbox": entry["instance_bbox"],
+                            "instance_mask": entry["instance_polygon"]
+                        }
 
-            if self.cfg.vision.task == "fs_classify":
-                batch_size = self.cfg.vision.data.batch_size
-                batch_size_eval = self.cfg.vision.data.batch_size_eval
-            else:
-                assert self.cfg.vision.task == "fs_search"
-                batch_size = batch_size_eval = 1
-
+            # Create _FewShotDataset & _FewShotDataSampler instances per split
+            # as required by `stage`
+            def add_dataset_and_sampler(spl):
+                B = self.cfg.vision.data.batch_size
+                K = self.cfg.vision.data.num_exs_per_conc
+                self.datasets[spl] = _FewShot2DDataset(dict(annotations[spl]), dataset_path)
+                self.samplers[spl] = {
+                    conc_type: _FewShot2DDataSampler(metadata, conc_type, spl, B, K)
+                    for conc_type in ["class", "attribute"]
+                }
             if stage in ["fit"]:
                 # Training set required for "fit" stage setup
-                index_train, ann_train = _annotations_by_concept(
-                    annotations, metadata, conc_type, "train"
-                )
-                self.datasets[conc_type]["train"] = _SGGDataset(
-                    ann_train, dataset_path, conc_type, metadata[f"{conc_type}_names"],
-                    task_type=self.cfg.vision.task
-                )
-                self.samplers[conc_type]["train"] = _FewShotSGGDataSampler(
-                    index_train, hypernym_info, batch_size,
-                    self.cfg.vision.data.num_exs_per_conc,
-                    task_type=self.cfg.vision.task
-                )
+                load_annotation_data("train_part1.json", annotations["train"])
+                load_annotation_data("train_part2.json", annotations["train"])
+                add_dataset_and_sampler("train")
             if stage in ["fit", "validate"]:
                 # Validation set required for "fit"/"validate" stage setup
-                index_val, ann_val = _annotations_by_concept(
-                    annotations, metadata, conc_type, "val"
-                )
-                self.datasets[conc_type]["val"] = _SGGDataset(
-                    ann_val, dataset_path, conc_type, metadata[f"{conc_type}_names"],
-                    task_type=self.cfg.vision.task
-                )
-                self.samplers[conc_type]["val"] = _FewShotSGGDataSampler(
-                    index_val, hypernym_info, batch_size_eval,
-                    self.cfg.vision.data.num_exs_per_conc_eval,
-                    task_type=self.cfg.vision.task,
-                    with_replacement=False,
-                    compress=self.cfg.vision.optim.compress_eval
-                )
+                load_annotation_data("val.json", annotations["val"])
+                add_dataset_and_sampler("val")
             if stage in ["test"]:
                 # Test set required for "fit"/"test"/"predict" stage setup
-                index_test, ann_test = _annotations_by_concept(
-                    annotations, metadata, conc_type, "test"
-                )
-                self.datasets[conc_type]["test"] = _SGGDataset(
-                    ann_test, dataset_path, conc_type, metadata[f"{conc_type}_names"],
-                    task_type=self.cfg.vision.task
-                )
-                self.samplers[conc_type]["test"] = _FewShotSGGDataSampler(
-                    index_test, hypernym_info, batch_size_eval,
-                    self.cfg.vision.data.num_exs_per_conc_eval,
-                    task_type=self.cfg.vision.task,
-                    with_replacement=False,
-                    compress=self.cfg.vision.optim.compress_eval
-                )
-
-        # Also setup class+attribute hybrid dataloader for few-shot search task
-        if self.cfg.vision.task == "fs_search" and \
-            "classes" in self.datasets and "attributes" in self.datasets:
-
-            self.datasets["classes_and_attributes"] = {}
-            self.samplers["classes_and_attributes"] = {}
-
-            splits = set(self.datasets["classes"])
-            assert set(self.datasets["classes"]) == set(self.datasets["attributes"])
-
-            # Small helper class for handling getting concept name tuples
-            class _ConcNameGetter:
-                def __init__(self, names):
-                    self.names = names
-                def __getitem__(self, idxs):
-                    assert len(idxs) == len(self.names)
-                    return tuple(self.names[ni][idx] for ni, idx in enumerate(idxs))
-
-            cls_att_pairs = {
-                tuple(int(i) for i in ci_ai.split("_")): [
-                    (int(img_id), (oi,))
-                    for img_id, obj_ids in insts.items() for oi in obj_ids
-                ]
-                for ci_ai, insts in metadata["classes_attributes_pair_instances"].items()
-            }
-
-            for spl in splits:
-                # Merged _SGGDataset
-                cls_data = self.datasets["classes"][spl]
-                att_data = self.datasets["attributes"][spl]
-
-                self.datasets["classes_and_attributes"][spl] = _SGGDataset(
-                    { **cls_data.annotations, **att_data.annotations },
-                    dataset_path, ("classes", "attributes"),
-                    _ConcNameGetter([cls_data.conc_names, att_data.conc_names]),
-                    task_type="fs_search"
-                )
-
-                # Batch sampler for the merged _SGGDataset
-                cls_sampler = self.samplers["classes"][spl]
-                att_sampler = self.samplers["attributes"][spl]
-
-                # Join index_conc to form class+attribute combination entries
-                combi_index_conc = {}
-                K = cls_sampler.num_exs_per_conc
-                for (ci, ai), insts in cls_att_pairs.items():
-                    if ci not in cls_sampler.index_conc: continue
-                    if ai not in att_sampler.index_conc: continue
-                    if len(insts) < K: continue
-
-                    combi_index_conc[(ci, ai)] = insts
-
-                # Compose hypernym info; among cls+att combinations present, if either
-                # cls or att is hypernym of respective type, add as hypernym
-                combi_hypernym_info = {
-                    (ci1, ai1): {
-                        (ci2, ai2) for ci2, ai2 in combi_index_conc
-                        if (ci1 in cls_sampler.hypernym_info and \
-                            ci2 in cls_sampler.hypernym_info[ci1]) or \
-                            (ai1 in att_sampler.hypernym_info and \
-                            ai2 in att_sampler.hypernym_info[ai1])
-                    }
-                    for ci1, ai1 in combi_index_conc
-                }
-                combi_hypernym_info = {
-                    (ci, ai): hypernyms
-                    for (ci, ai), hypernyms in combi_hypernym_info.items()
-                    if len(hypernyms) > 0
-                }
-
-                self.samplers["classes_and_attributes"][spl] = _FewShotSGGDataSampler(
-                    combi_index_conc, combi_hypernym_info,
-                    cls_sampler.batch_size,
-                    cls_sampler.num_exs_per_conc,
-                    task_type="fs_search",
-                    with_replacement=cls_sampler.with_replacement,
-                    compress=cls_sampler.compress
-                )
+                load_annotation_data("test.json", annotations["test"])
+                add_dataset_and_sampler("test")
 
     def train_dataloader(self):
         return _ChainedLoader(*self._return_dataloaders("train"))
@@ -254,19 +127,18 @@ class FewShotSGGDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return self._return_dataloaders("test")
 
-    def _return_dataloaders(self, split):
+    def _return_dataloaders(self, spl):
         return [
-            self._fetch_dataloader(conc_type, split)
-            for conc_type in self.datasets
+            self._fetch_dataloader(spl, conc_type)
+            for conc_type in ["class", "attribute"]
         ]
 
-    def _fetch_dataloader(self, conc_type, split):
+    def _fetch_dataloader(self, spl, conc_type):
         return DataLoader(
-            dataset=self.datasets[conc_type][split],
-            batch_sampler=self.samplers[conc_type][split],
+            dataset=self.datasets[spl],
+            batch_sampler=self.samplers[spl][conc_type],
             num_workers=self.cfg.vision.data.num_loader_workers,
-            collate_fn=self._collate_fn,
-            prefetch_factor=1
+            collate_fn=self._collate_fn
         )
 
     @staticmethod
@@ -282,15 +154,13 @@ class FewShotSGGDataModule(pl.LightningDataModule):
         for field in data[0][0]:
             assert all(field in d[0] for d in data)
 
-            if field == "image":
-                # PyTorch default collate function cannot recognize PIL Images
+            if field in ["image", "concept_labels"]:
+                # Leave em as-is; 1) "image": PyTorch default collate function cannot
+                # recognize PIL Images, 2) "concept_labels": string values
                 collated[field] = [d[0][field] for d in data]
-            elif field == "bboxes" or field == "bb_all":
-                # Data may be of variable size
+            elif field in ["instance_mask", "concept_masks"]:
+                # Data may be of varying sizes
                 collated[field] = [torch.tensor(d[0][field]) for d in data]
-            elif field == "concept_label" or field == "bb_inds" or field == "supp_vecs":
-                # Let's leave em as-is...
-                collated[field] = [d[0][field] for d in data]
             else:
                 # Otherwise, process with default collate fn
                 collated[field] = default_collate([d[0][field] for d in data])
@@ -309,347 +179,226 @@ class _ChainedLoader:
                 yield next(it)
 
 
-class _SGGDataset(Dataset):
-    def __init__(
-        self, annotations, dataset_path, conc_type, conc_names, task_type
-    ):
+class _FewShot2DDataset(Dataset):
+    def __init__(self, annotations, dataset_path):
         super().__init__()
         self.annotations = annotations
         self.dataset_path = dataset_path
-        self.conc_names = conc_names
-        self.conc_type = conc_type
-        self.task_type = task_type
-    
+
     def __getitem__(self, idx):
+        assert len(idx) == 4
+        img_id, inst_id, conc_type, conc = idx
+
+        # Values to return: raw image, segmentation mask for the specified instance,
+        # and ground-truth segmentation binary map to predict as specified by conc
+        data_dict = {}
+
+        # Raw image
         images_path = os.path.join(self.dataset_path, "images")
-        vectors_path = os.path.join(self.dataset_path, "vectors")
+        image_raw = os.path.join(images_path, f"{img_id}.jpg")
+        image_raw = Image.open(image_raw)
 
-        if self.task_type == "fs_classify":
-            assert len(idx) == 3
-            img_id, obj_ids, conc = idx
+        if image_raw.mode != "RGB":
+            # Cast non-RGB images (e.g. grayscale) into RGB format
+            old_image_raw = image_raw
+            image_raw = Image.new("RGB", old_image_raw.size)
+            image_raw.paste(old_image_raw)
 
-            # Return value
-            data_dict = {}
+        data_dict["image"] = image_raw
 
-            # Concept label; not directly consumed by model, for readability
-            data_dict["concept_label"] = self.conc_names[conc]
+        # Segmentation mask for the specified instance
+        instance_mask = self.poly_to_mask(
+            image_raw, self.annotations[img_id][inst_id]["instance_mask"]
+        )
+        data_dict["instance_mask"] = instance_mask
 
-            img_file = self.annotations[img_id]["file_name"]
-            vecs_file = f"{img_file}.vectors"
+        # Additional training signals for augmenting each training data point with
+        # two additional hybrid prompts: 1) support examples + bbox and 2) support
+        # examples + (near)-centroid coordinate
+        nonzero_inds_y, nonzero_inds_x = instance_mask.nonzero()
 
-            # Fetch and return raw image, bboxes and object indices
-            if not os.path.exists(os.path.join(vectors_path, vecs_file)):
-                image_raw = os.path.join(images_path, img_file)
-                image_raw = Image.open(image_raw)
-                if image_raw.mode != "RGB":
-                    # Cast non-RGB images (e.g. grayscale) into RGB format
-                    old_image_raw = image_raw
-                    image_raw = Image.new("RGB", old_image_raw.size)
-                    image_raw.paste(old_image_raw)
+        # Axis-aligned bounding box from min/max indices for nonzero value in mask
+        data_dict["instance_bbox"] = np.array([
+            nonzero_inds_x.min(), nonzero_inds_y.min(),
+            nonzero_inds_x.max(), nonzero_inds_y.max()
+        ])
 
-                # Raw image
-                data_dict["image"] = image_raw
+        # (Near-)Centroid, as a point in mask closest to 'center of mass'
+        mass_center = (nonzero_inds_x.mean(), nonzero_inds_y.mean())
+        distances_to_center = np.transpose([nonzero_inds_x, nonzero_inds_y])
+        distances_to_center = np.linalg.norm(distances_to_center - mass_center, axis=1)
+        centroid_ind = distances_to_center.argmin()
+        data_dict["instance_centroid"] = np.array([
+            nonzero_inds_x[centroid_ind], nonzero_inds_y[centroid_ind]
+        ])
 
-                # Bounding boxes in the image
-                oids = list(self.annotations[img_id]["annotations"])
-                bboxes = [
-                    ann["bbox"] for ann in self.annotations[img_id]["annotations"].values()
-                ]
-                data_dict["bboxes"] = bboxes
-
-                # Ind(s) of the designated object(s), with which to fetch bounding box(es)
-                data_dict["bb_inds"] = tuple(oids.index(oid) for oid in obj_ids)
-
-            if os.path.exists(os.path.join(vectors_path, vecs_file)):
-                # Fetch and return pre-computed feature vectors for the image
-                vecs = torch.load(os.path.join(vectors_path, vecs_file))
-                vecs = torch.stack([vecs[str(oid)] for oid in obj_ids], dim=0)
-                data_dict["dec_out_cached"] = vecs
-            
-            return data_dict, self.conc_type
-        
-        if self.task_type == "fs_search":
-            assert len(idx) == 2
-            img_id, support_exs = idx
-
-            # Return value
-            data_dict = {}
-
-            img_file = self.annotations[img_id]["file_name"]
-
-            image_raw = os.path.join(images_path, img_file)
-            image_raw = Image.open(image_raw)
-            if image_raw.mode != "RGB":
-                # Cast non-RGB images (e.g. grayscale) into RGB format
-                old_image_raw = image_raw
-                image_raw = Image.new("RGB", old_image_raw.size)
-                image_raw.paste(old_image_raw)
-
-            # Raw image
-            data_dict["image"] = image_raw
-
-            # Bounding boxes in the image
-            oids = list(self.annotations[img_id]["annotations"])
-            bboxes = [
-                ann["bbox"] for ann in self.annotations[img_id]["annotations"].values()
+        # Ground-truth segmentation binary maps for any instances of the specified
+        # 'focus' concept, 
+        if conc_type == "class":
+            all_conc_insts = [
+                data for data in self.annotations[img_id].values()
+                if conc == data["class"]
             ]
-            data_dict["bboxes"] = bboxes
+        else:
+            assert conc_type == "attribute"
+            all_conc_insts = [
+                data for data in self.annotations[img_id].values()
+                if conc in data["attributes_pos"]
+            ]
 
-            # Re-index concepts occurring in this item
-            c2i = { c: i for i, c in enumerate(support_exs) }
+        # Sort by area in descending order then pick top 3, as SAM model is set to predict
+        # at most 3 'valid' segmentation masks for each (non-hybrid) prompt; we are sorting
+        # by area in order to pick the most prominent instances if there are more than 3
+        all_conc_inst_masks = sorted([
+            self.poly_to_mask(image_raw, data["instance_mask"])
+            for data in all_conc_insts if data["instance_mask"] is not None
+        ], key=np.sum, reverse=True) 
 
-            data_dict["bb_inds"] = [None] * len(c2i)
-            data_dict["supp_vecs"] = [None] * len(c2i)
-            for conc, exs in support_exs.items():
-                if isinstance(self.conc_type, tuple):
-                    conc_conds = list(zip(self.conc_type, conc))
-                else:
-                    conc_conds = [(self.conc_type, conc)]
+        if len(all_conc_inst_masks) >= 3:
+            # Only return top 3 masks with largest areas
+            data_dict["concept_masks"] = all_conc_inst_masks[:3]
+        else:
+            # If fewer than 3 masks, pad with 'null' masks
+            pad_masks = [
+                np.full_like(all_conc_inst_masks[0], -1)
+                for _ in range(3 - len(all_conc_inst_masks))
+            ]
+            data_dict["concept_masks"] = all_conc_inst_masks + pad_masks
 
-                # Bounding boxes of all instances for each concept label, with respect
-                # to the label space defined by the set of (re-indexed) concepts
-                data_dict["bb_inds"][c2i[conc]] = [
-                    oids.index(oid)
-                    for oid, ann in self.annotations[img_id]["annotations"].items()
-                    if all(ci in ann[ct] for ct, ci in conc_conds)
-                ]
+        # Positive concept labels; needed for discerning positive pairs (within batch
+        # and memory queue for LooK loss computation). Record as a binary tuple (c, C),
+        # where c is the 'focus' concept label and C is the list of any other applicable
+        # concept labels (C would be always empty for "class" batch)
+        if conc_type == "class":
+            data_dict["concept_labels"] = (conc, [])
+        else:
+            assert conc_type == "attribute"
+            other_attrs = [
+                attr for attr in self.annotations[img_id][inst_id]["attributes_pos"]
+                if attr != conc
+            ]
+            data_dict["concept_labels"] = (conc, other_attrs)
 
-                # Support example vectors for each concept label
-                ex_vecs = [
-                    (self.annotations[ii]["file_name"], ois)
-                    for ii, ois in exs
-                ]
-                ex_vecs = [
-                    (torch.load(os.path.join(vectors_path, f"{fname}.vectors")), ois)
-                    for fname, ois in ex_vecs
-                ]
-                ex_vecs = torch.stack([
-                    torch.stack([all_vecs[str(oi)] for oi in ois], dim=0)
-                    for all_vecs, ois in ex_vecs
-                ], dim=0)
+        return data_dict, conc_type
 
-                data_dict["supp_vecs"][c2i[conc]] = ex_vecs
-
-            return data_dict, self.conc_type
-        
-        raise ValueError("Invalid task type; shouldn't reach here")
-    
     def __len__(self):
         return len(self.annotations)
 
+    @staticmethod
+    def poly_to_mask(img, multipoly):
+        decoded = [
+            # pycoco needs polygon vertex x/y-coordinates to be flattened into 1-dim
+            [c for point in poly for c in point] for poly in multipoly
+        ]
+        decoded = mask.decode(mask.frPyObjects(decoded, img.height, img.width))
+        decoded = reduce(np.bitwise_or, [
+            decoded[..., i] for i in range(decoded.shape[-1])
+        ])      # Merging multiple regions into a single mask
 
-class _FewShotSGGDataSampler:
+        return decoded
+
+
+class _FewShot2DDataSampler(Sampler):
     """
-    Prepare batch sampler that returns few-shot 'episodes' consisting of K
-    instances of N concepts (similar to typical N-way K-shot episodes for few-shot
-    learning, but without support-query set distinction); each instance is passed
-    as a pair of index, namely (image id, object (pair) id)
+    Prepare batch sampler that returns few-shot 'episodes' consisting of K instances
+    of N concepts (similar to typical N-way K-shot episodes for few-shot learning,
+    but without support-query set distinction); each instance is passed as a pair
+    of indices, namely (image id, instance id)
     """
-    def __init__(
-        self, index_conc, hypernym_info, batch_size, num_exs_per_conc, task_type,
-        with_replacement=True, compress=False
-    ):
-        self.index_conc = index_conc
-        self.hypernym_info = hypernym_info
+    def __init__(self, metadata, conc_type, spl, batch_size, num_exs_per_conc):
+        assert spl in ["train", "val", "test"]
+
+        self.conc_type = conc_type
+        self.spl = spl
+        self.is_eval = spl != "train"
         self.batch_size = batch_size
         self.num_exs_per_conc = num_exs_per_conc
         self.num_concepts = self.batch_size // self.num_exs_per_conc
-        self.task_type = task_type
 
-        self.with_replacement = with_replacement
-        self.compress = compress
-
-        # Filter concepts to leave only those with more than K instances for use
-        self.index_conc = {
-            k: v for k, v in self.index_conc.items()
+        # Extract instance indexing by concept for provided concept type and split
+        # from metadata
+        self.index_by_conc = {
+            k: v for k, v in metadata[f"instances_{conc_type}"][spl].items()
             if len(v) >= self.num_exs_per_conc
         }
 
-        # Build ontology tree (forest) from contained concepts and provided
-        # hypernym metadata info, find connected components; later we will
-        # sample components first and then sample concepts from the components,
-        # so as to avoid sampling from concepts belonging to connected ontology
-        # tree
-        self.ont_forest = nx.Graph()
-        for c in self.index_conc:
-            self.ont_forest.add_node(c)
-            if c in self.hypernym_info:
-                for h in self.hypernym_info[c]:
-                    if h in self.index_conc:
-                        self.ont_forest.add_edge(c, h)
-        self.ont_forest = [
-            list(comp) for comp in nx.connected_components(self.ont_forest)
-        ]
-
-        if self.task_type == "fs_classify":
-            # Let's keep things simple by making batch size divisible by number of
-            # exemplars per concept (equivalently, number of concepts or 'ways')
-            assert self.batch_size % self.num_exs_per_conc == 0
-        
-        if self.task_type == "fs_search":
-            # All images containing any instances of the concepts, tagged with
-            # occurring concepts
-            self.index_img = defaultdict(lambda: defaultdict(set))
-            for conc, insts in self.index_conc.items():
-                for img_id, obj_ids in insts:
-                    self.index_img[img_id][conc].add(obj_ids)
-            self.index_img = { k: dict(v) for k, v in self.index_img.items() }
+        # Let's keep things simple by making batch size divisible by number of
+        # exemplars per concept (equivalently, number of concepts or 'ways')
+        assert self.batch_size % self.num_exs_per_conc == 0
 
     def __iter__(self):
-        if self.task_type == "fs_classify":
-            # Concept-based sampling of images for metric learning
+        # Concept-based sampling of instances for metric learning (by concept
+        # instance classification task) and segmentation search
 
-            # For maintaining lists of concepts & exemplars as sampling candidates
-            conc_ontology = copy.deepcopy(self.ont_forest)
-            conc_exemplars = copy.deepcopy(self.index_conc)
+        # Shortcut abbreviations
+        K, N = self.num_exs_per_conc, self.num_concepts
 
-            while True:
-                if len(conc_ontology) < self.num_concepts:
-                    # Exhausted, cannot sample anymore
-                    return
+        # For maintaining lists of concepts & instances as sampling candidates
+        index_by_conc = copy.deepcopy(self.index_by_conc)
 
-                # First sample connected components in ontology, so as to avoid
-                # sampling from more than one from same comp
-                sampled_comps = random.sample(conc_ontology, self.num_concepts)
+        while True:
+            # Sequentially sample K instances of N concepts, ensuring samples of
+            # subsequent concepts do not contain any instances of concepts already
+            # sampled
+            sampled_concs = []; sampled_insts = []
+            candidate_concs = list(index_by_conc)
 
-                # Then sample one concept from each sampled component
-                sampled_concs = [random.sample(comp, 1)[0] for comp in sampled_comps]
+            while len(sampled_concs) < N:
+                # Rejection sampling: sample a concept, check if it has sufficient
+                # (i.e., >= K) number of instances that are not instances of
+                # concepts sampled so far for the batch
 
-                # Now sample K instances per sampled concepts
-                sampled_indices = [
-                    (random.sample(conc_exemplars[conc], self.num_exs_per_conc), conc)
-                    for conc in sampled_concs
+                # Sample a candidate concept
+                conc = random.sample(candidate_concs, 1)[0]
+
+                # Check if K instances can be sampled without choosing objects
+                # that are instances of concepts sampled so far
+                insts = []
+                rand_inds = list(range(len(index_by_conc[conc])))
+                random.shuffle(rand_inds)
+
+                while len(insts) < K:
+                    if len(rand_inds) == 0: break
+                    inst = index_by_conc[conc][rand_inds.pop()]
+                    inst_of_sampled = any(
+                        inst in index_by_conc[s_conc] for s_conc in sampled_concs
+                    )
+                    if not inst_of_sampled:
+                        insts.append(inst)
+
+                # Regardless whether the sampling was successful for not, remove
+                # the tested concept from the candidate queue
+                candidate_concs.remove(conc)
+
+                if len(insts) < K:
+                    # Failed to sample K instances, reject the candidate concept
+                    if len(candidate_concs) == 0:
+                        # Cannot sample anymore for the current sampling run
+                        break
+                else:
+                    # Successfully sampled K instances, add the concept and the set
+                    # of instances to the return list
+                    sampled_concs.append(conc)
+                    sampled_insts.append(insts)
+
+            if len(sampled_concs) == N:
+                # Sampling success, yield the sampled concepts and instances
+                batch = [
+                    (inst[0], inst[1], self.conc_type, conc)
+                    for conc, insts in zip(sampled_concs, sampled_insts)
+                    for inst in insts
                 ]
-                sampled_indices = [
-                    ind+(conc,) for inds, conc in sampled_indices for ind in inds
-                ]           # Flatten and attach concept labels
+                yield batch
 
-                if not self.with_replacement:
-                    # Pop instances from exemplar lists
-                    concepts_to_del = set()
-                    for img_id, obj_ids, conc in sampled_indices:
-                        conc_exemplars[conc].remove((img_id, obj_ids))
-
-                        if len(conc_exemplars[conc]) < self.num_exs_per_conc:
-                            # If number of instances drops below K, remove concept
-                            # from sample candidates
-                            concepts_to_del.add(conc)
-
-                    # Pop concepts to remove from ontology
-                    for conc in concepts_to_del:
-                        for comp in conc_ontology:
-                            if conc in comp: comp.remove(conc)
-                        del conc_exemplars[conc]        # Not necessary but my OCD
-                    conc_ontology = [comp for comp in conc_ontology if len(comp) > 0]
-
-                yield sampled_indices
-
-        if self.task_type == "fs_search":
-            # Concept-based sampling of images for few-shot search
-            images = list(self.index_img)
-            concepts_to_cover = set(self.index_conc)
-
-            while True:
-                if len(images) < self.batch_size:
-                    return
-
-                sampled_batch = []
-                while len(sampled_batch) < self.batch_size and len(images) > 0:
-                    if self.with_replacement:
-                        # Make sure the each concept is included at most every C
-                        # samples (where C is the total number of concepts)
-                        if len(concepts_to_cover) == 0:
-                            concepts_to_cover = set(self.index_conc)
-
-                        smp_conc = random.sample(concepts_to_cover, 1)[0]
-                        smp_img = random.sample(self.index_conc[smp_conc], 1)[0][0]
-                    else:
-                        smp_img = images.pop()
-
-                        # If self.compress flag is set to True, skip images that
-                        # only contain instances of concepts already covered, in
-                        # the interest of time
-                        if self.compress:
-                            if len(set(self.index_img[smp_img]) & concepts_to_cover) == 0:
-                                continue
-
-                    # Make sure many-to-one mapping is avoided by allowing only one
-                    # concept from each independent ontology tree
-                    belonging_trees_inds = {
-                        conc: [conc in tree for tree in self.ont_forest].index(True)
-                        for conc in self.index_img[smp_img]
-                        if any(conc in tree for tree in self.ont_forest)
-                    }
-                    concepts_by_belonging_trees = defaultdict(list)
-                    for conc, ti in belonging_trees_inds.items():
-                        concepts_by_belonging_trees[ti].append(conc)
-
-                    sampled_concepts = [
-                        random.sample(concs, 1)[0]
-                        for concs in concepts_by_belonging_trees.values()
-                    ]
-
-                    # Sample (at most) K exemplars from other images for each concept
-                    # included
-                    support_exs = {}
-                    for conc in sampled_concepts:
-                        exs_from_other_imgs = [
-                            (img_id, obj_ids)
-                            for img_id, obj_ids in self.index_conc[conc]
-                            if img_id != smp_img
-                        ]
-                        if len(exs_from_other_imgs) >= self.num_exs_per_conc:
-                            exs_from_other_imgs = random.sample(
-                                exs_from_other_imgs, self.num_exs_per_conc
-                            )
-                        else:
-                            # Not enough support instances from other images!
-                            concepts_to_cover -= {conc}
-                            continue
-
-                        support_exs[conc] = exs_from_other_imgs
-
-                    if len(support_exs) == 0:
-                        # Nothing to detect here
-                        continue
-
-                    concepts_to_cover -= set(sampled_concepts)
-                    sampled_batch.append((smp_img, support_exs))
-
-                if len(sampled_batch) < self.batch_size:
-                    continue
-
-                yield sampled_batch
+                if self.is_eval:
+                    # Sampling w/o replacement; remove the sampled instances from the sets
+                    for conc, insts in zip(sampled_concs, sampled_insts):
+                        for inst in insts:
+                            index_by_conc[conc].remove(inst)
+            else:
+                # Failed to sample N concepts; if eval (val or test), terminate the
+                # sampling loop (if training do nothing and start next loop iteration)
+                if self.is_eval: return
 
     def __len__(self):
-        raise NotImplementedError
-
-
-def _annotations_by_concept(annotations, metadata, conc_type, split):
-    """
-    Subroutine for filtering annotated images by specified concepts; returns
-    filtered list of images & index by concepts
-    """
-    index_by_concept = {
-        int(c): [
-            (int(img), (obj_ids,) if type(obj_ids) else tuple(obj_ids))
-            for img, insts_per_img in insts.items() for obj_ids in insts_per_img
-        ]
-        for c, insts in metadata[f"{conc_type}_instances"].items()
-        if int(c) in metadata[f"{conc_type}_{split}_split"]
-    }
-    occurring_img_ids = set.union(*[
-        {img_id for img_id, _ in insts} for insts in index_by_concept.values()
-    ])
-    annotations_filtered = {
-        img["image_id"]: img for img in annotations
-        if img["image_id"] in occurring_img_ids
-    }
-
-    # Object ids in annotation are read as str from metadata json; convert to int
-    for img in annotations:
-        img["annotations"] = {
-            int(obj_id): ann for obj_id, ann in img["annotations"].items()
-        }
-
-    return index_by_concept, annotations_filtered
+        return self.batch_size

@@ -1,104 +1,101 @@
 import os
-import random
 from collections import OrderedDict, defaultdict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pytorch_lightning as pl
-from torchvision.ops import box_convert, clip_boxes_to_image
-from transformers import AutoFeatureExtractor, DeformableDetrForObjectDetection
-from transformers.models.deformable_detr.modeling_deformable_detr import (
-    DeformableDetrMLPPredictionHead
-)
+from torchvision.ops import box_convert, clip_boxes_to_image, roi_align
+from transformers import SamModel, SamProcessor
+from transformers.activations import ACT2FN
+from transformers.models.sam.modeling_sam import SamFeedForward, SamLayerNorm
 
 from .detr_abridged import detr_enc_outputs, detr_dec_outputs
 from .few_shot import compute_fs_classify, compute_fs_search, few_shot_search_img
 
 
-class FewShotSceneGraphGenerator(pl.LightningModule):
+class VisualSceneAnalyzer(pl.LightningModule):
     """
-    Few-shot visual object detection & class/attribute classification model,
-    implemented by attaching lightweight MLP blocks for Deformable DETR model
-    outputs. MLP blocks embed DETR output vectors onto a metric space, learned
-    by few-shot training with NCA objective.
+    Few-shot visual object detection (concept recognition & segmentation) model,
+    implemented by attaching lightweight MLP blocks to pre-trained SAM (Meta's
+    Segment Anything Model) model.
     """
     def __init__(self, cfg):
         super().__init__()
 
         self.cfg = cfg
 
-        detr_model = self.cfg.vision.model.detr_model
+        sam_model = self.cfg.vision.model.sam_model
         assets_dir = self.cfg.paths.assets_dir
 
-        # Loading pre-trained deformable DETR to use as basis model
+        # Loading pre-trained SAM to use as basis model
         os.environ["TORCH_HOME"] = os.path.join(assets_dir, "vision_models", "torch")
-        self.feature_extractor = AutoFeatureExtractor.from_pretrained(
-            detr_model, cache_dir=os.path.join(assets_dir, "vision_models", "detr")
+        self.sam_processor = SamProcessor.from_pretrained(
+            sam_model, cache_dir=os.path.join(assets_dir, "vision_models", "sam")
         )
-        self.detr = DeformableDetrForObjectDetection.from_pretrained(
-            detr_model, cache_dir=os.path.join(assets_dir, "vision_models", "detr")
-        )
-
-        # New lightweight MLP heads for concept-type-specific embedding (for metric
-        # learning) - not included in original deformable DETR (thus not shipped in
-        # pre-trained model) and needs to be newly trained
-        detr_D = self.detr.config.d_model
-
-        # MLP heads to attach on top of decoder outputs for metric-based few-shot
-        # detection (classification)
-        self.fs_embed_cls = DeformableDetrMLPPredictionHead(
-            input_dim=detr_D, hidden_dim=detr_D, output_dim=detr_D, num_layers=2
-        )
-        self.fs_embed_att = DeformableDetrMLPPredictionHead(
-            input_dim=detr_D*2, hidden_dim=detr_D, output_dim=detr_D, num_layers=2
+        self.sam = SamModel.from_pretrained(
+            sam_model, cache_dir=os.path.join(assets_dir, "vision_models", "sam")
         )
 
-        # MLP heads to attach on top of encoder & decoder outputs for metric-based
-        # few-shot search (conditioned detection)
-        self.fs_spec_fuse = DeformableDetrMLPPredictionHead(
-            input_dim=detr_D*2, hidden_dim=detr_D, output_dim=detr_D, num_layers=2
-        )
-        self.fs_search_match_enc = DeformableDetrMLPPredictionHead(
-            input_dim=detr_D*2, hidden_dim=detr_D, output_dim=1, num_layers=2
-        )
-        self.fs_search_match_dec = DeformableDetrMLPPredictionHead(
-            input_dim=detr_D*2, hidden_dim=detr_D, output_dim=1, num_layers=2
-        )
-        self.fs_search_bbox = DeformableDetrMLPPredictionHead(
-            input_dim=detr_D*2, hidden_dim=detr_D, output_dim=4, num_layers=3
-        )
+        D = self.sam.config.vision_config.output_channels
 
-        # Initialize self.fs_search_bbox by copying parameters from the DETR model's
-        # decoder's last layer's bbox_embed (from 2nd~ layer)
-        fs_bb_layers = self.fs_search_bbox.layers[1:]
-        dec_last_bb_layers = self.detr.model.decoder.bbox_embed[-1].layers[1:]
-        for f_l, d_l in zip(fs_bb_layers, dec_last_bb_layers):
-            f_l.load_state_dict(d_l.state_dict())
+        # Feature extractors consisting of two levels of Conv2d layers (with LayerNorm
+        # and activation in between), for obtaining embeddings specific to concept types
+        # (class/attribute). To be applied after shape-guided RoIAlign outputs.
+        self.kernel_size = 5; self.stride = 2
+        self.roi_align_out = self.kernel_size + self.stride * (self.kernel_size-1)
+        def conv2dExtractor():
+            return nn.Sequential(
+                nn.Conv2d(D, D, kernel_size=self.kernel_size, stride=self.stride),
+                SamLayerNorm(D, data_format="channels_first"),
+                ACT2FN[self.sam.config.vision_config.hidden_act],
+                nn.Conv2d(D, D, kernel_size=self.kernel_size, stride=self.stride)
+            )
+        self.embed_cls = conv2dExtractor()
+        self.embed_att = conv2dExtractor()
 
-        # Freeze all parameters...
-        for prm in self.parameters():
-            prm.requires_grad = False
+        # Momentum encoder for maintaining memory keys computed from stably updating
+        # encoder; clone the base encoders' architecture and copy weights
+        self.embed_cls_momentum = conv2dExtractor()
+        self.embed_att_momentum = conv2dExtractor()
+        for param_base, param_mmt in zip(
+            self.embed_cls.parameters(), self.embed_cls_momentum.parameters()
+        ):
+            param_mmt.data.copy_(param_base.data)
+        for param_base, param_mmt in zip(
+            self.embed_att.parameters(), self.embed_att_momentum.parameters()
+        ):
+            param_mmt.data.copy_(param_base.data)
 
-        # ... except those required for training the specified task
-        if "task" in self.cfg.vision:
-            if self.cfg.vision.task == "fs_classify":
-                # Few-shot concept classification with decoder output embeddings
-                for prm in self.fs_embed_cls.parameters():
-                    prm.requires_grad = True
-                for prm in self.fs_embed_att.parameters():
-                    prm.requires_grad = True
-            elif self.cfg.vision.task == "fs_search":
-                # Few-shot search with encoder/decoder output embeddings
-                for prm in self.fs_spec_fuse.parameters():
-                    prm.requires_grad = True
-                for prm in self.fs_search_match_enc.parameters():
-                    prm.requires_grad = True
-                for prm in self.fs_search_match_dec.parameters():
-                    prm.requires_grad = True
-                for prm in self.fs_search_bbox.parameters():
-                    prm.requires_grad = True
+        # Create memory queue for computing LooK loss
+        M = 65536
+        self.register_buffer("queue", torch.randn(D, M))
+        self.queue = F.normalize(self.queue, dim=0)
+        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+
+        # MLP heads to encode sets of class/attibute concept exemplars into sparse
+        # prompts for SAM mask decoding, and associated 'tag' embeddings
+        self.prompt_encode_cls = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
+        self.prompt_encode_att = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
+        self.prompt_tag_cls = nn.Embedding(1, D)
+        self.prompt_tag_att = nn.Embedding(1, D)
+
+        for name, param in self.named_parameters():
+            if self.training:
+                # Freeze all parameters except ones that need training
+                param.requires_grad = any(
+                    name.startswith(to_train)
+                    for to_train in [
+                        "embed_cls.", "prompt_encode_cls.", "prompt_tag_cls.",
+                        "embed_att.", "prompt_encode_att.", "prompt_tag_att.",
+                    ]
+                )
             else:
-                raise ValueError("Invalid task type for training")
+                param.requires_grad = False
 
         self.save_hyperparameters()
 
@@ -108,8 +105,6 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
             loss, metrics = self._process_batch(batch)
 
             conc_type = batch[1]
-            if isinstance(conc_type, tuple):
-                conc_type = "+".join(conc_type)
 
             self.log(f"train_loss_{conc_type}", loss.item())
             for metric, val in metrics.items():
@@ -125,8 +120,6 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
                 loss_total += loss
 
                 conc_type = b[1]
-                if isinstance(conc_type, tuple):
-                    conc_type = "+".join(conc_type)
 
                 self.log(f"train_loss_{conc_type}", loss.item())
                 for metric, val in metrics.items():
@@ -150,8 +143,6 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
                 continue
 
             conc_type = outputs_per_dataloader[0][2]
-            if isinstance(conc_type, tuple):
-                conc_type = "+".join(conc_type)
 
             # Log epoch average loss
             avg_loss = torch.stack([
@@ -192,8 +183,6 @@ class FewShotSceneGraphGenerator(pl.LightningModule):
                 continue
 
             conc_type = outputs_per_dataloader[0][1]
-            if isinstance(conc_type, tuple):
-                conc_type = "+".join(conc_type)
 
             # Log epoch average metrics
             avg_metrics = defaultdict(list)

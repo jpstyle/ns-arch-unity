@@ -1,3 +1,3 @@
-from .module import FewShotSGGDataModule
+from .module import FewShotDataModule
 
-__all__ = ["FewShotSGGDataModule"]
+__all__ = ["FewShotDataModule"]

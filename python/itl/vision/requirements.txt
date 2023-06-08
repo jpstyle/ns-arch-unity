@@ -6,12 +6,11 @@ transformers
 timm
 scipy
 matplotlib
+pycocotools
 pytorch-lightning
 wandb
 hydra-core
 omegaconf
-nltk
-ijson
 
 # For visual analysis of exemplar vectors in low-dim space
 umap-learn

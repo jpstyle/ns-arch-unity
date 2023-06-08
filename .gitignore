@@ -1,5 +1,7 @@
 ## Root
 /outputs
+/datasets/*
+!/datasets/vg_image_data.json
 /assets/*
 !/assets/domain_knowledge/
 
