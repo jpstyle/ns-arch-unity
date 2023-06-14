@@ -1,7 +1,7 @@
 model:
-    sam_model: "facebook/sam-vit-huge"
+    sam_model: "facebook/sam-vit-large"
 
 data:
-    batch_size: 32
+    batch_size: 16
     num_exs_per_conc: 8
     num_loader_workers: 4

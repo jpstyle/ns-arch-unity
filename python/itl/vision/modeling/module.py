@@ -1,17 +1,20 @@
 import os
+import bz2
+import pickle
+from PIL import Image
 from collections import OrderedDict, defaultdict
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
-from torchvision.ops import box_convert, clip_boxes_to_image, roi_align
+from tqdm import tqdm
+from torch.optim import AdamW
+from torchvision.ops import box_convert, clip_boxes_to_image
 from transformers import SamModel, SamProcessor
 from transformers.activations import ACT2FN
 from transformers.models.sam.modeling_sam import SamFeedForward, SamLayerNorm
 
-from .detr_abridged import detr_enc_outputs, detr_dec_outputs
-from .few_shot import compute_fs_classify, compute_fs_search, few_shot_search_img
+from .process_batch import process_batch
 
 
 class VisualSceneAnalyzer(pl.LightningModule):
@@ -29,7 +32,6 @@ class VisualSceneAnalyzer(pl.LightningModule):
         assets_dir = self.cfg.paths.assets_dir
 
         # Loading pre-trained SAM to use as basis model
-        os.environ["TORCH_HOME"] = os.path.join(assets_dir, "vision_models", "torch")
         self.sam_processor = SamProcessor.from_pretrained(
             sam_model, cache_dir=os.path.join(assets_dir, "vision_models", "sam")
         )
@@ -49,95 +51,126 @@ class VisualSceneAnalyzer(pl.LightningModule):
                 nn.Conv2d(D, D, kernel_size=self.kernel_size, stride=self.stride),
                 SamLayerNorm(D, data_format="channels_first"),
                 ACT2FN[self.sam.config.vision_config.hidden_act],
-                nn.Conv2d(D, D, kernel_size=self.kernel_size, stride=self.stride)
+                nn.Conv2d(D, D, kernel_size=self.kernel_size, stride=self.stride),
+                SamLayerNorm(D, data_format="channels_first"),
+                ACT2FN[self.sam.config.vision_config.hidden_act],
+                nn.Flatten(),
+                nn.Linear(D, D)
             )
         self.embed_cls = conv2dExtractor()
         self.embed_att = conv2dExtractor()
+        # For feature-wise gating of RoI embeddings by class-centric embeddings,
+        # needed for obtaining attribute-centric embeddings; essentially conditioning
+        # by object class identity
+        # (cf. [Learning to Predict Visual Attributes in the Wild], Pham et al. 2021)
+        self.gate_compute = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
 
         # Momentum encoder for maintaining memory keys computed from stably updating
         # encoder; clone the base encoders' architecture and copy weights
+        self.momentum = 0.99
         self.embed_cls_momentum = conv2dExtractor()
         self.embed_att_momentum = conv2dExtractor()
-        for param_base, param_mmt in zip(
-            self.embed_cls.parameters(), self.embed_cls_momentum.parameters()
-        ):
-            param_mmt.data.copy_(param_base.data)
-        for param_base, param_mmt in zip(
-            self.embed_att.parameters(), self.embed_att_momentum.parameters()
-        ):
-            param_mmt.data.copy_(param_base.data)
+        self.gate_compute_momentum = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
+        self.base_mmt_pairs = [
+            (self.embed_cls, self.embed_cls_momentum),
+            (self.embed_att, self.embed_att_momentum),
+            (self.gate_compute, self.gate_compute_momentum)
+        ]
+        for base_module, mmt_module in self.base_mmt_pairs:
+            for base_param, mmt_param in zip(
+                base_module.parameters(), mmt_module.parameters()
+            ):
+                mmt_param.data.copy_(base_param.data)
+
+        # Additional MLP modules for predicting momentum encoder outputs
+        self.mmt_predict_cls = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
+        self.mmt_predict_att = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
 
         # Create memory queue for computing LooK loss
-        M = 65536
-        self.register_buffer("queue", torch.randn(D, M))
-        self.queue = F.normalize(self.queue, dim=0)
-        self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
+        M = 65536 - self.cfg.vision.data.batch_size
+        self.register_buffer("queue_embs_cls", torch.randn(M, D))
+        self.register_buffer("queue_embs_att", torch.randn(M, D))
+        self.register_buffer("queue_labels_cls", torch.full((M, 1), -1))
+        self.register_buffer("queue_labels_att", torch.full((M, 1), -1))
+        self.conc2ind = {
+            "class": defaultdict(lambda: len(self.conc2ind["class"])),
+            "attribute": defaultdict(lambda: len(self.conc2ind["attribute"]))
+        }
+
+        # For annealing the number of neighbors to consider when computing LooK loss
+        self.num_neighbors_range = (400, 40)
 
         # MLP heads to encode sets of class/attibute concept exemplars into sparse
         # prompts for SAM mask decoding, and associated 'tag' embeddings
-        self.prompt_encode_cls = SamFeedForward(
+        self.exs_prompt_encode_cls = SamFeedForward(
             input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
         )
-        self.prompt_encode_att = SamFeedForward(
+        self.exs_prompt_encode_att = SamFeedForward(
             input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
         )
-        self.prompt_tag_cls = nn.Embedding(1, D)
-        self.prompt_tag_att = nn.Embedding(1, D)
+        self.exs_prompt_tag_cls = nn.Embedding(1, D)
+        self.exs_prompt_tag_att = nn.Embedding(1, D)
 
-        for name, param in self.named_parameters():
-            if self.training:
-                # Freeze all parameters except ones that need training
+        if self.training:
+            # Freeze all parameters except ones that need training
+            self.to_train = [
+                "embed_cls.", "embed_att.",
+                "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
+                "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
+                "mmt_predict_cls.", "mmt_predict_att.",
+                "sam.mask_decoder."
+            ]
+            for name, param in self.named_parameters():
                 param.requires_grad = any(
-                    name.startswith(to_train)
-                    for to_train in [
-                        "embed_cls.", "prompt_encode_cls.", "prompt_tag_cls.",
-                        "embed_att.", "prompt_encode_att.", "prompt_tag_att.",
-                    ]
+                    name.startswith(train_param)
+                    for train_param in self.to_train
                 )
-            else:
-                param.requires_grad = False
+        else:
+            self.to_train = []
+        
+        # Loss component weights
+        self.loss_weights = { "look": 2, "focal": 20, "dice": 1, "iou": 1 }
 
         self.save_hyperparameters()
 
-    def training_step(self, batch, *_):
-        if isinstance(batch, tuple):
-            # Simpler case of single batch from single dataloader
-            loss, metrics = self._process_batch(batch)
+    def training_step(self, batch, batch_idx, *_):
+        losses, metrics = process_batch(self, batch, batch_idx)
 
-            conc_type = batch[1]
+        conc_type = batch[1]
 
-            self.log(f"train_loss_{conc_type}", loss.item())
-            for metric, val in metrics.items():
-                self.log(f"train_{metric}_{conc_type}", val)
+        # Log loss values per type
+        for name, val in losses.items():
+            self.log(f"train_loss_{name}_{conc_type}", val)
 
-            return loss
-        else:
-            # 'Batch' consists of batches from multiple dataloaders (most likely
-            # in fs_search task mode); process and log each
-            loss_total = 0
-            for b in batch:
-                loss, metrics = self._process_batch(b)
-                loss_total += loss
+        # Aggregate loss for the batch
+        total_loss = sum(
+            weight * losses[name] for name, weight in self.loss_weights.items()
+        )
+        self.log(f"train_loss_{conc_type}", total_loss)
 
-                conc_type = b[1]
+        # Log metric values per type
+        for name, val in metrics.items():
+            self.log(f"train_metric_{name}_{conc_type}", val)
 
-                self.log(f"train_loss_{conc_type}", loss.item())
-                for metric, val in metrics.items():
-                    self.log(f"train_{metric}_{conc_type}", val)
+        return total_loss
 
-            self.log(f"train_loss", loss_total.item())
-
-            return loss_total
-
-    def validation_step(self, batch, *_):
-        loss, metrics = self._process_batch(batch)
+    def validation_step(self, batch, batch_idx, *_):
+        loss, metrics = process_batch(self, batch, batch_idx)
         return loss, metrics, batch[1]
 
     def validation_epoch_end(self, outputs):
         if len(self.trainer.val_dataloaders) == 1:
             outputs = [outputs]
 
-        avg_losses = []
+        avg_total_losses = []
         for outputs_per_dataloader in outputs:
             if len(outputs_per_dataloader) == 0:
                 continue
@@ -145,33 +178,46 @@ class VisualSceneAnalyzer(pl.LightningModule):
             conc_type = outputs_per_dataloader[0][2]
 
             # Log epoch average loss
-            avg_loss = torch.stack([
-                loss for loss, _, _ in outputs_per_dataloader
-            ])
-            avg_loss = avg_loss.mean()
-            self.log(
-                f"val_loss_{conc_type}", avg_loss.item(), add_dataloader_idx=False
+            avg_losses = defaultdict(list)
+            for loss_type in outputs_per_dataloader[0][0]:
+                for losses, _, _ in outputs_per_dataloader:
+                    avg_losses[loss_type].append(losses[loss_type])
+
+            for loss_type, vals in avg_losses.items():
+                avg_val = sum(vals) / len(vals)
+                avg_losses[loss_type] = avg_val
+                self.log(
+                    f"val_loss_{loss_type}_{conc_type}", avg_val,
+                    add_dataloader_idx=False
+                )
+
+            avg_total_loss = sum(
+                weight * avg_losses[name] for name, weight in self.loss_weights.items()
             )
-            avg_losses.append(avg_loss.item())
+            self.log(
+                f"val_loss_{conc_type}", avg_total_loss.item(), add_dataloader_idx=False
+            )
+            avg_total_losses.append(avg_total_loss)
 
             # Log epoch average metrics
             avg_metrics = defaultdict(list)
             for metric_type in outputs_per_dataloader[0][1]:
                 for _, metrics, _ in outputs_per_dataloader:
                     avg_metrics[metric_type].append(metrics[metric_type])
-            
+
             for metric_type, vals in avg_metrics.items():
                 avg_val = sum(vals) / len(vals)
                 self.log(
-                    f"val_{metric_type}_{conc_type}", avg_val, add_dataloader_idx=False
+                    f"val_metric_{metric_type}_{conc_type}", avg_val,
+                    add_dataloader_idx=False
                 )
 
         # Total validation loss
-        final_avg_loss = sum(avg_losses) / len(avg_losses)
+        final_avg_loss = sum(avg_total_losses) / (len(avg_total_losses) / len(outputs))
         self.log(f"val_loss", final_avg_loss, add_dataloader_idx=False)
 
-    def test_step(self, batch, *_):
-        _, metrics = self._process_batch(batch)
+    def test_step(self, batch, batch_idx, *_):
+        _, metrics = process_batch(self, batch, batch_idx)
         return metrics, batch[1]
     
     def test_epoch_end(self, outputs):
@@ -201,20 +247,15 @@ class VisualSceneAnalyzer(pl.LightningModule):
         optim_kwargs = {}
         if "init_lr" in self.cfg.vision.optim:
             optim_kwargs["lr"] = self.cfg.vision.optim.init_lr
-        if self.cfg.vision.optim.algorithm == "SGD":
-            if "momentum_1m" in self.cfg.vision.optim:
-                optim_kwargs["momentum"] = 1-self.cfg.vision.optim.momentum_1m
-        if self.cfg.vision.optim.algorithm == "Adam":
-            if "beta1_1m" in self.cfg.vision.optim and "beta2_1m" in self.cfg.vision.optim:
-                optim_kwargs["betas"] = (
-                    1-self.cfg.vision.optim.beta1_1m, 1-self.cfg.vision.optim.beta2_1m
-                )
-            if "eps" in self.cfg.vision.optim:
-                optim_kwargs["eps"] = self.cfg.vision.optim.eps
+        if "beta1_1m" in self.cfg.vision.optim and "beta2_1m" in self.cfg.vision.optim:
+            optim_kwargs["betas"] = (
+                1-self.cfg.vision.optim.beta1_1m, 1-self.cfg.vision.optim.beta2_1m
+            )
+        if "eps" in self.cfg.vision.optim:
+            optim_kwargs["eps"] = self.cfg.vision.optim.eps
 
         # Construct optimizer instance
-        Optimizer = getattr(torch.optim, self.cfg.vision.optim.algorithm)
-        optim = Optimizer(self.parameters(), **optim_kwargs)
+        optim = AdamW(self.parameters(), **optim_kwargs)
 
         # Populate LR scheduler configs
         sched_kwargs = {}
@@ -339,88 +380,57 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
         return outputs_coords[topk_inds], outputs_scores[topk_inds]
 
-    def _process_batch(self, batch):
+    def cache_image_encodings(self):
         """
-        Shared subroutine for processing batch to obtain loss & performance metric
+        Preprocess dataset images with the image encoder and store to local disk
+        in advance, so that image encoding is not bottlenecked by the computationally
+        demanding process (but rather than by file I/O, which can be mitigated by
+        using multiple workers in dataloaders)
         """
-        self.detr.eval()        # DETR always eval mode
+        # Data input directory
+        dataset_path = self.cfg.vision.data.path
+        images_path = os.path.join(dataset_path, "images")
 
-        batch_data, conc_type = batch
+        # Embedding cache output directory
+        cache_path = self.cfg.paths.cache_dir
+        os.makedirs(cache_path, exist_ok=True)
 
-        if "image" in batch_data:
-            images = batch_data["image"]
-            bboxes = batch_data["bboxes"]
+        # Dataset name (e.g., 'vaw')
+        d_name = self.cfg.vision.data.name
 
-            bboxes = [box_convert(bbs, "xywh", "cxcywh") for bbs in bboxes]
-            bboxes = [
-                torch.stack([
-                    bbs[:,0] / images[i].width, bbs[:,1] / images[i].height,
-                    bbs[:,2] / images[i].width, bbs[:,3] / images[i].height,
-                ], dim=-1)
-                for i, bbs in enumerate(bboxes)
-            ]
+        # Process each image in images_path
+        all_images = os.listdir(images_path)
+        pbar = tqdm(all_images, total=len(all_images))
+        pbar.set_description("Pre-computing image embs")
 
-            # Batch size, number of "ways" and "shots" in few-shot episodes
-            B = len(images)
-        else:
-            assert "dec_out_cached" in batch_data
-            B = len(batch_data["dec_out_cached"])
+        # Need to move to cuda as this method is not handled by pytorch lightning Trainer
+        if torch.cuda.is_available():
+            self.cuda()
 
-        if self.cfg.vision.task == "fs_classify":
-            conc_labels = batch_data["concept_label"]
-            N = len(set(conc_labels))
-            K = B // N
+        for img in pbar:
+            # Load raw image
+            image_raw = Image.open(f"{images_path}/{img}")
+            image_id = img.split(".")[0]
 
-            # DETR Decoder output vectors, either computed from scratch or cached
-            # values retrieved
-            detr_dec_outs = []
-            if "dec_out_cached" in batch_data:
-                # Decoder outputs are pre-computed and retrieved
-                detr_dec_outs = batch_data["dec_out_cached"]
-            else:
-                # Need to compute from images in batch
+            # Load and preprocess raw image
+            processed_input = self.sam_processor(
+                image_raw,
+                return_tensors="pt"
+            ).to(self.device)
 
-                # Process each image with DETR - one-by-one
-                for img, bbs, bbis in zip(images, bboxes, zip(*batch_data["bb_inds"])):
-                    bbis = torch.stack(bbis)
-                    enc_out, dec_out = self.fvecs_from_image_and_bboxes(img, bbs)
-                    detr_dec_outs.append(dec_out[0,bbis])
+            # Obtain image embeddings from the raw pixel values
+            with torch.no_grad():
+                img_emb = self.sam.get_image_embeddings(processed_input["pixel_values"])
+                img_emb = img_emb.cpu().numpy()
 
-                detr_dec_outs = torch.stack(detr_dec_outs, dim=0)
-            
-            return compute_fs_classify(self, conc_type, detr_dec_outs, N, K)
-
-        else:
-            detr_enc_outs = []
-            # Few-shot search task needs encoder outputs (per-pixel vectors)
-            assert images is not None
-            for img in images:
-                enc_out = detr_enc_outputs(
-                    self.detr, img, self.feature_extractor
-                )
-                detr_enc_outs.append(enc_out)
-
-            return compute_fs_search(
-                self, conc_type, detr_enc_outs, bboxes,
-                batch_data["bb_inds"], batch_data["supp_vecs"]
-            )
-
-    def fvecs_from_image_and_bboxes(self, image, bboxes):
-        """
-        Subroutine for extracting feature vectors corresponding to image-bbox
-        pairs; code below is composed from snippets taken from huggingface's
-        original Deformable DETR code components, appropriately abridging unused
-        parts and making appropriate modifications to accommodate our needs
-        """
-        encoder_outputs_all = detr_enc_outputs(
-            self.detr, image, self.feature_extractor
-        )
-        encoder_outputs, valid_ratios, spatial_shapes, \
-            level_start_index, mask_flatten = encoder_outputs_all
-
-        decoder_outputs, _, _ = detr_dec_outputs(
-            self.detr, encoder_outputs, bboxes, True,
-            valid_ratios, spatial_shapes, level_start_index, mask_flatten
-        )
-
-        return encoder_outputs_all, decoder_outputs[:,:bboxes.shape[0]]
+            # Save embedding (along with metadata like original size, reshaped size)
+            # as compressed file
+            with bz2.BZ2File(f"{cache_path}/{d_name}_{image_id}.pbz2", "wb") as enc_f:
+                # Replace raw pixel values with the computed embeddings, then save
+                processed_input["embedding"] = img_emb
+                processed_input["original_sizes"] = \
+                    processed_input["original_sizes"][0].tolist()
+                processed_input["reshaped_input_sizes"] = \
+                    processed_input["reshaped_input_sizes"][0].tolist()
+                del processed_input["pixel_values"]
+                pickle.dump(processed_input, enc_f)

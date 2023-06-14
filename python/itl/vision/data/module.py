@@ -1,6 +1,8 @@
 import os
+import bz2
 import copy
 import json
+import pickle
 import random
 import logging
 from PIL import Image
@@ -34,7 +36,7 @@ class FewShotDataModule(pl.LightningDataModule):
     def prepare_data(self):
         # Create data directory at the specified path if not exists
         dataset_path = self.cfg.vision.data.path
-        images_path = os.path.join(dataset_path, "images")
+        images_path = f"{dataset_path}/images"
         os.makedirs(dataset_path, exist_ok=True)
         os.makedirs(images_path, exist_ok=True)
 
@@ -99,7 +101,10 @@ class FewShotDataModule(pl.LightningDataModule):
             def add_dataset_and_sampler(spl):
                 B = self.cfg.vision.data.batch_size
                 K = self.cfg.vision.data.num_exs_per_conc
-                self.datasets[spl] = _FewShot2DDataset(dict(annotations[spl]), dataset_path)
+                self.datasets[spl] = _FewShot2DDataset(
+                    dict(annotations[spl]), dataset_path,
+                    self.cfg.paths.cache_dir, self.cfg.vision.data.name
+                )
                 self.samplers[spl] = {
                     conc_type: _FewShot2DDataSampler(metadata, conc_type, spl, B, K)
                     for conc_type in ["class", "attribute"]
@@ -180,35 +185,55 @@ class _ChainedLoader:
 
 
 class _FewShot2DDataset(Dataset):
-    def __init__(self, annotations, dataset_path):
+    def __init__(self, annotations, dataset_path, cache_path, dataset_name):
         super().__init__()
         self.annotations = annotations
         self.dataset_path = dataset_path
+        self.cache_path = cache_path
+        self.name = dataset_name
 
     def __getitem__(self, idx):
         assert len(idx) == 4
         img_id, inst_id, conc_type, conc = idx
 
-        # Values to return: raw image, segmentation mask for the specified instance,
-        # and ground-truth segmentation binary map to predict as specified by conc
+        # Values to return: raw image or pre-computed image encodings + metadata,
+        # segmentation mask for the specified instance, and ground-truth segmentation
+        # binary map to predict as specified by conc
         data_dict = {}
 
-        # Raw image
-        images_path = os.path.join(self.dataset_path, "images")
-        image_raw = os.path.join(images_path, f"{img_id}.jpg")
-        image_raw = Image.open(image_raw)
+        images_path = f"{self.dataset_path}/images"
+        image_file = f"{images_path}/{img_id}.jpg"
+        cached_encoding_file = f"{self.cache_path}/{self.name}_{img_id}.pbz2"
 
-        if image_raw.mode != "RGB":
-            # Cast non-RGB images (e.g. grayscale) into RGB format
-            old_image_raw = image_raw
-            image_raw = Image.new("RGB", old_image_raw.size)
-            image_raw.paste(old_image_raw)
+        if os.path.exists(cached_encoding_file):
+            # Found pre-computed image encoding files
+            with bz2.BZ2File(cached_encoding_file) as enc_f:
+                processed_image = pickle.load(enc_f)
+            
+            data_dict["image_embedding"] = processed_image["embedding"][0]
+            data_dict["original_sizes"] = np.array(processed_image["original_sizes"])
+            data_dict["reshaped_input_sizes"] = np.array(processed_image["reshaped_input_sizes"])
+            img_size = {
+                "h": data_dict["original_sizes"][0],
+                "w": data_dict["original_sizes"][1]
+            }
 
-        data_dict["image"] = image_raw
+        else:
+            # Load raw image
+            image_raw = Image.open(image_file)
+
+            if image_raw.mode != "RGB":
+                # Cast non-RGB images (e.g. grayscale) into RGB format
+                old_image_raw = image_raw
+                image_raw = Image.new("RGB", old_image_raw.size)
+                image_raw.paste(old_image_raw)
+
+            data_dict["image"] = image_raw
+            img_size = { "h": image_raw.height, "w": image_raw.width }
 
         # Segmentation mask for the specified instance
         instance_mask = self.poly_to_mask(
-            image_raw, self.annotations[img_id][inst_id]["instance_mask"]
+            self.annotations[img_id][inst_id]["instance_mask"], img_size
         )
         data_dict["instance_mask"] = instance_mask
 
@@ -250,7 +275,7 @@ class _FewShot2DDataset(Dataset):
         # at most 3 'valid' segmentation masks for each (non-hybrid) prompt; we are sorting
         # by area in order to pick the most prominent instances if there are more than 3
         all_conc_inst_masks = sorted([
-            self.poly_to_mask(image_raw, data["instance_mask"])
+            self.poly_to_mask(data["instance_mask"], img_size)
             for data in all_conc_insts if data["instance_mask"] is not None
         ], key=np.sum, reverse=True) 
 
@@ -285,12 +310,12 @@ class _FewShot2DDataset(Dataset):
         return len(self.annotations)
 
     @staticmethod
-    def poly_to_mask(img, multipoly):
+    def poly_to_mask(multipoly, img_size):
         decoded = [
             # pycoco needs polygon vertex x/y-coordinates to be flattened into 1-dim
             [c for point in poly for c in point] for poly in multipoly
         ]
-        decoded = mask.decode(mask.frPyObjects(decoded, img.height, img.width))
+        decoded = mask.decode(mask.frPyObjects(decoded, img_size["h"], img_size["w"]))
         decoded = reduce(np.bitwise_or, [
             decoded[..., i] for i in range(decoded.shape[-1])
         ])      # Merging multiple regions into a single mask
@@ -326,7 +351,18 @@ class _FewShot2DDataSampler(Sampler):
         # exemplars per concept (equivalently, number of concepts or 'ways')
         assert self.batch_size % self.num_exs_per_conc == 0
 
+        # If is_eval, will terminate and can sample in advance; primarily for getting
+        # total length info
+        if self.is_eval:
+            self.sampled_in_advance = list(self.sample())
+
     def __iter__(self):
+        if self.is_eval:
+            yield from self.sampled_in_advance
+        else:
+            yield from self.sample()
+
+    def sample(self):
         # Concept-based sampling of instances for metric learning (by concept
         # instance classification task) and segmentation search
 
@@ -337,68 +373,37 @@ class _FewShot2DDataSampler(Sampler):
         index_by_conc = copy.deepcopy(self.index_by_conc)
 
         while True:
-            # Sequentially sample K instances of N concepts, ensuring samples of
-            # subsequent concepts do not contain any instances of concepts already
-            # sampled
-            sampled_concs = []; sampled_insts = []
-            candidate_concs = list(index_by_conc)
+            # Sequentially sample K instances of N concepts
+            candidate_concs = [
+                conc for conc, insts in index_by_conc.items() if len(insts) >= K
+            ]
 
-            while len(sampled_concs) < N:
-                # Rejection sampling: sample a concept, check if it has sufficient
-                # (i.e., >= K) number of instances that are not instances of
-                # concepts sampled so far for the batch
+            if len(candidate_concs) < N:
+                # Exhausted, stop sampling and return
+                assert self.is_eval     # Shouldn't happen when not eval
+                return
 
-                # Sample a candidate concept
-                conc = random.sample(candidate_concs, 1)[0]
+            sampled_concs = random.sample(candidate_concs, N)
+            sampled_insts = [
+                random.sample(index_by_conc[conc], K) for conc in sampled_concs
+            ]
 
-                # Check if K instances can be sampled without choosing objects
-                # that are instances of concepts sampled so far
-                insts = []
-                rand_inds = list(range(len(index_by_conc[conc])))
-                random.shuffle(rand_inds)
+            # Sampling success, yield the sampled concepts and instances
+            batch = [
+                (inst[0], inst[1], self.conc_type, conc)
+                for conc, insts in zip(sampled_concs, sampled_insts)
+                for inst in insts
+            ]
+            yield batch
 
-                while len(insts) < K:
-                    if len(rand_inds) == 0: break
-                    inst = index_by_conc[conc][rand_inds.pop()]
-                    inst_of_sampled = any(
-                        inst in index_by_conc[s_conc] for s_conc in sampled_concs
-                    )
-                    if not inst_of_sampled:
-                        insts.append(inst)
-
-                # Regardless whether the sampling was successful for not, remove
-                # the tested concept from the candidate queue
-                candidate_concs.remove(conc)
-
-                if len(insts) < K:
-                    # Failed to sample K instances, reject the candidate concept
-                    if len(candidate_concs) == 0:
-                        # Cannot sample anymore for the current sampling run
-                        break
-                else:
-                    # Successfully sampled K instances, add the concept and the set
-                    # of instances to the return list
-                    sampled_concs.append(conc)
-                    sampled_insts.append(insts)
-
-            if len(sampled_concs) == N:
-                # Sampling success, yield the sampled concepts and instances
-                batch = [
-                    (inst[0], inst[1], self.conc_type, conc)
-                    for conc, insts in zip(sampled_concs, sampled_insts)
-                    for inst in insts
-                ]
-                yield batch
-
-                if self.is_eval:
-                    # Sampling w/o replacement; remove the sampled instances from the sets
-                    for conc, insts in zip(sampled_concs, sampled_insts):
-                        for inst in insts:
-                            index_by_conc[conc].remove(inst)
-            else:
-                # Failed to sample N concepts; if eval (val or test), terminate the
-                # sampling loop (if training do nothing and start next loop iteration)
-                if self.is_eval: return
+            if self.is_eval:
+                # Sampling w/o replacement; remove the sampled instances from the sets
+                for conc, insts in zip(sampled_concs, sampled_insts):
+                    for inst in insts:
+                        index_by_conc[conc].remove(inst)
 
     def __len__(self):
-        return self.batch_size
+        if self.is_eval:
+            return len(self.sampled_in_advance)
+        else:
+            return NotImplementedError

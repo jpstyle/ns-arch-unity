@@ -14,7 +14,7 @@ class SemanticParser:
     """
     def __init__(self, grammar, ace_bin):
         self.grammar = grammar
-        self.ace_bin = os.path.join(ace_bin, "ace")
+        self.ace_bin = f"{ace_bin}/ace"
 
         # For redirecting ACE's stderr (so that messages don't print on console)
         self.null_sink = open(os.devnull, "w")

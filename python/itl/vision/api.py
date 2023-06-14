@@ -498,14 +498,24 @@ class VisionModule:
         # Prepare DataModule from data config
         dm = FewShotDataModule(self.cfg)
 
+        # Configure W&B logger
+        wb_kwargs = {
+            "project": os.environ.get("WANDB_PROJECT"),
+            "entity": os.environ.get("WANDB_ENTITY"),
+            "save_dir": self.cfg.paths.outputs_dir
+        }
+        # Whether to run offline
+        if self.cfg.vision.offline:
+            wb_kwargs["offline"] = True
+        else:
+            wb_kwargs["log_model"] = True
+        # Whether to resume training from previous few-shot components
+        if "fs_model" in self.cfg.vision.model:
+            wb_kwargs["id"] = self.cfg.vision.model.fs_model[len(WB_PREFIX):]
+            wb_kwargs["resume"] = "must"
+        wb_logger = WandbLogger(**wb_kwargs)
+
         # Configure and run trainer
-        wb_logger = WandbLogger(
-            offline=True,           # Uncomment for offline run (comment out log_model)
-            # log_model=True,         # Uncomment for online run (comment out offline)
-            project=os.environ.get("WANDB_PROJECT"),
-            entity=os.environ.get("WANDB_ENTITY"),
-            save_dir=self.cfg.paths.outputs_dir
-        )
         trainer = pl.Trainer(
             accelerator="auto",
             max_steps=self.cfg.vision.optim.max_steps,
@@ -533,16 +543,23 @@ class VisionModule:
         # Prepare DataModule from data config
         dm = FewShotDataModule(self.cfg)
 
-        if self.cfg.vision.model.fs_model.startswith(WB_PREFIX):
-            wb_logger = WandbLogger(
-                # offline=True,           # Uncomment for offline run (comment out log_model)
-                project=os.environ.get("WANDB_PROJECT"),
-                entity=os.environ.get("WANDB_ENTITY"),
-                id=self.cfg.vision.model.fs_model[len(WB_PREFIX):],
-                save_dir=self.cfg.paths.outputs_dir,
-                resume="must"
-            )
-            logger = wb_logger
+        if "fs_model" in self.cfg.vision.model:
+            if self.cfg.vision.model.fs_model.startswith(WB_PREFIX):
+                # Configure W&B logger
+                wb_kwargs = {
+                    "project": os.environ.get("WANDB_PROJECT"),
+                    "entity": os.environ.get("WANDB_ENTITY"),
+                    "save_dir": self.cfg.paths.outputs_dir,
+                    "id": self.cfg.vision.model.fs_model[len(WB_PREFIX):],
+                    "resume": "must"
+                }
+                # Whether to run offline
+                if self.cfg.vision.offline:
+                    wb_kwargs["offline"] = True
+
+                logger = WandbLogger(**wb_kwargs)
+            else:
+                logger = False
         else:
             logger = False
 

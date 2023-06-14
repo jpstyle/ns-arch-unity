@@ -101,45 +101,55 @@ def extract_metadata(dataset_path):
         "val": defaultdict(list),
         "test": defaultdict(list)
     }
-    index_by_att_neg = {
-        "train": defaultdict(list),
-        "val": defaultdict(list),
-        "test": defaultdict(list)
-    }
 
-    # Process annotation data per split
-    for data_name in ["train_part1", "train_part2", "val", "test"]:
-        # Data split: one of 'train', 'val', 'test'
-        spl = data_name.split("_")[0]
-
-        # Load annotation file
-        with open(f"{dataset_path}/{data_name}.json") as anno_f:
-            anno_data = json.load(anno_f)
-
-        # Process each entry, extracting image IDs to download and indexing entries
-        for entry in anno_data:
-            # Some entry has null value for the segmentation field, ignore them
-            if entry["instance_polygon"] is None: continue
-
-            img_id = int(entry["image_id"])
-            instance_id = int(entry["instance_id"])
-
-            image_ids.add(img_id)
-            index_by_cls[spl][entry["object_name"]].append((img_id, instance_id))
-            for att_pos in entry["positive_attributes"]:
-                index_by_att_pos[spl][att_pos].append((img_id, instance_id))
-            # We don't make any use of negative attribute labels here
-
-    # Write metadata to JSON file
-    with open(f"{dataset_path}/metadata.json", "w") as meta_f:
-        metadata = {
-            "instances_class": {
-                k: dict(v) for k, v in index_by_cls.items()
-            },
-            "instances_attribute": {
-                k: dict(v) for k, v in index_by_att_pos.items()
+    if os.path.exists(f"{dataset_path}/metadata.json"):
+        # Dataset is already processed and metadata is extracted, just return
+        # list of image IDs that need to be present
+        with open(f"{dataset_path}/metadata.json") as meta_f:
+            image_ids = {
+                img
+                for per_conc_type in json.load(meta_f).values()
+                for per_split in per_conc_type.values()
+                for per_conc in per_split.values()
+                for img, _ in per_conc
             }
-        }
-        json.dump(metadata, meta_f)
+    else:
+        # Metadata not present, annotation data must be processed to extract and
+        # store metadata
+
+        # Process annotation data per split
+        for data_name in ["train_part1", "train_part2", "val", "test"]:
+            # Data split: one of 'train', 'val', 'test'
+            spl = data_name.split("_")[0]
+
+            # Load annotation file
+            with open(f"{dataset_path}/{data_name}.json") as anno_f:
+                anno_data = json.load(anno_f)
+
+            # Process each entry, extracting image IDs to download and indexing entries
+            for entry in anno_data:
+                # Some entry has null value for the segmentation field, ignore them
+                if entry["instance_polygon"] is None: continue
+
+                img_id = int(entry["image_id"])
+                instance_id = int(entry["instance_id"])
+
+                image_ids.add(img_id)
+                index_by_cls[spl][entry["object_name"]].append((img_id, instance_id))
+                for att_pos in entry["positive_attributes"]:
+                    index_by_att_pos[spl][att_pos].append((img_id, instance_id))
+                # We don't make any use of negative attribute labels here
+
+        # Write metadata to JSON file
+        with open(f"{dataset_path}/metadata.json", "w") as meta_f:
+            metadata = {
+                "instances_class": {
+                    k: dict(v) for k, v in index_by_cls.items()
+                },
+                "instances_attribute": {
+                    k: dict(v) for k, v in index_by_att_pos.items()
+                }
+            }
+            json.dump(metadata, meta_f)
 
     return image_ids
