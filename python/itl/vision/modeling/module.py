@@ -283,13 +283,16 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
     def on_save_checkpoint(self, checkpoint):
         """
-        No need to save weights for DETR; del DETR weights to leave param weights
-        for the newly added prediction heads only
+        No need to save weights for SAM image & propmt encoder components; del their
+        weights to leave params for the newly added components only
         """
         state_dict_filtered = OrderedDict()
         for k, v in checkpoint["state_dict"].items():
-            if k.startswith("fs_"):
-                state_dict_filtered[k] = v
+            if k.startswith("sam.vision_encoder."):
+                continue
+            if k.startswith("sam.prompt_encoder."):
+                continue
+            state_dict_filtered[k] = v
         checkpoint["state_dict"] = state_dict_filtered
 
     def forward(self, image, bboxes=None, lock_provided_boxes=True):
