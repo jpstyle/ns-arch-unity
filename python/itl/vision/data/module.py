@@ -237,25 +237,32 @@ class _FewShot2DDataset(Dataset):
         )
         data_dict["instance_mask"] = instance_mask
 
-        # Additional training signals for augmenting each training data point with
-        # two additional hybrid prompts: 1) support examples + bbox and 2) support
-        # examples + (near)-centroid coordinate
-        nonzero_inds_y, nonzero_inds_x = instance_mask.nonzero()
+        if instance_mask.sum() > 0:
+            # Additional training signals for augmenting each training data point with
+            # two additional hybrid prompts: 1) support examples + bbox and 2) support
+            # examples + (near)-centroid coordinate
+            nonzero_inds_y, nonzero_inds_x = instance_mask.nonzero()
 
-        # Axis-aligned bounding box from min/max indices for nonzero value in mask
-        data_dict["instance_bbox"] = np.array([
-            nonzero_inds_x.min(), nonzero_inds_y.min(),
-            nonzero_inds_x.max(), nonzero_inds_y.max()
-        ])
+            # Axis-aligned bounding box from min/max indices for nonzero value in mask
+            data_dict["instance_bbox"] = np.array([
+                nonzero_inds_x.min(), nonzero_inds_y.min(),
+                nonzero_inds_x.max(), nonzero_inds_y.max()
+            ])
 
-        # (Near-)Centroid, as a point in mask closest to 'center of mass'
-        mass_center = (nonzero_inds_x.mean(), nonzero_inds_y.mean())
-        distances_to_center = np.transpose([nonzero_inds_x, nonzero_inds_y])
-        distances_to_center = np.linalg.norm(distances_to_center - mass_center, axis=1)
-        centroid_ind = distances_to_center.argmin()
-        data_dict["instance_centroid"] = np.array([
-            nonzero_inds_x[centroid_ind], nonzero_inds_y[centroid_ind]
-        ])
+            # (Near-)Centroid, as a point in mask closest to 'center of mass'
+            mass_center = (nonzero_inds_x.mean(), nonzero_inds_y.mean())
+            distances_to_center = np.transpose([nonzero_inds_x, nonzero_inds_y])
+            distances_to_center = np.linalg.norm(distances_to_center - mass_center, axis=1)
+            centroid_ind = distances_to_center.argmin()
+            data_dict["instance_centroid"] = np.array([
+                nonzero_inds_x[centroid_ind], nonzero_inds_y[centroid_ind]
+            ])
+        else:
+            # instance_mask.sum() == 0; segmentation mask too small that the decoded
+            # binary mask doesn't have any nonzero entry... This item doesn't serve
+            # as a valid training signal
+            data_dict["instance_bbox"] = np.zeros(4)
+            data_dict["instance_centroid"] = np.zeros(2)
 
         # Ground-truth segmentation binary maps for any instances of the specified
         # 'focus' concept, 

@@ -89,6 +89,12 @@ def process_batch(model, batch, batch_idx):
             gc.collect(); torch.cuda.empty_cache()      # Some stress relief for GPU
         img_embs = torch.cat(img_embs, dim=0)
 
+    # If a box's dimensions are all zeros, it means it's an invalid entity (primarily
+    # due to having a segmentation mask so small or invalid that its decoded binary
+    # mask has no nonzero values); use this boolean flag array later to screen out
+    # invalid values
+    valid_entries = batch_data["instance_bbox"].sum(dim=-1) > 0
+
     # roi_align needs consistent dtypes
     processed_input["input_boxes"] = processed_input["input_boxes"].to(img_embs.dtype)
 
@@ -196,6 +202,9 @@ def process_batch(model, batch, batch_idx):
             queue_labels, (0,max_label_count-queue_labels.shape[-1]), value=-1
         )
 
+    # Screen out labels for invalid entries by replacing with 'null' values
+    inst_labels[~valid_entries] = -1
+
     # Pass the embeddings from the base encoder through the projector module
     predicted_inst_embs_mmt = mmt_predict(inst_embs)
 
@@ -249,18 +258,19 @@ def process_batch(model, batch, batch_idx):
         [torch.any(pair.unique(return_counts=True)[1] > 1) for pair in per_entry]
         for per_entry in nonpad_intersections
     ], device=model.device)
-    has_pos_neighbors = pos_mask[:,1:].sum(dim=-1) > 0
+    has_pos_neighbors_and_valid = pos_mask[:,1:].sum(dim=-1) > 0
+    has_pos_neighbors_and_valid[~valid_entries] = False
 
     # Compute LooK loss and precision@K metric
     softmax_weights = F.softmax(-k_nearest_dists_sq) * pos_mask
     # Dividing self/neighbors and assigning equal significance
     loss_by_self = -(softmax_weights[:,0] + EPS).log()
     loss_by_neighbors = -(softmax_weights[:,1:].sum(dim=-1) + EPS).log()
-    loss_by_neighbors = loss_by_neighbors[has_pos_neighbors]
-    losses["look"] = loss_by_self.mean()
+    loss_by_neighbors = loss_by_neighbors[has_pos_neighbors_and_valid]
+    losses["look"] = loss_by_self[valid_entries].mean()
     if len(loss_by_neighbors) > 0:
         losses["look"] += loss_by_neighbors.mean()
-    metrics["precision@K"] = (pos_mask[:,:K].sum(dim=-1) / K).mean()
+    metrics["precision@K"] = (pos_mask[:,:K].sum(dim=-1) / K)[valid_entries].mean()
 
     # Update memory queue
     with torch.no_grad():
@@ -284,10 +294,19 @@ def process_batch(model, batch, batch_idx):
     img_positional_embs = model.sam.get_image_wide_positional_embeddings()
     img_positional_embs = img_positional_embs.repeat(B, 1, 1, 1)
 
-    # Obtain prototypes as leave-one-out averages of support example vectors
+    # Obtain prototypes as leave-one-out averages of support example vectors (while
+    # screening out embeddings at indices of invalid entries)
     inst_embs_per_conc = inst_embs.view(N, K, -1)
-    prototypes = inst_embs_per_conc.sum(dim=1, keepdims=True) - inst_embs_per_conc
-    prototypes = (prototypes / (K-1)).view(B, -1)
+    valid_entries_per_conc = valid_entries.view(N, K)
+    prototypes = [
+        per_conc[valid_entries_per_conc[i]].sum(dim=0, keepdims=True) - per_conc
+        for i, per_conc in enumerate(inst_embs_per_conc)
+    ]
+    prototypes = [
+        per_conc / (K-1-(~valid_entries_per_conc[i]).sum().item())
+        for i, per_conc in enumerate(prototypes)
+    ]
+    prototypes = torch.stack(prototypes).view(B, -1)
 
     # Encode the prototypes into decoder prompt tokens
     proto_tokens = exs_prompt_encode(prototypes) + exs_prompt_tag.weight
@@ -352,55 +371,64 @@ def process_batch(model, batch, batch_idx):
             ]
 
             # Collect & rearrange predictions and ground truths according to the matches
-            pred_masks_fetched = torch.cat([
+            pred_masks_matched = torch.cat([
                 pred_masks[i,0,match[0]] for i, match in enumerate(best_matching)
             ])
-            pred_ious_fetched = torch.cat([
+            pred_ious_matched = torch.cat([
                 pred_ious[i,0,match[0]] for i, match in enumerate(best_matching)
             ])
-            gt_masks_fetched = torch.cat([
+            gt_masks_matched = torch.cat([
                 gt_masks[i,match[1]] for i, match in enumerate(best_matching)
             ])
             # Gather (possibly duplicate) copies of image pad masks as needed
-            img_pad_masks_fetched = torch.stack([
+            img_pad_masks_matched = torch.stack([
                 img_pad_masks[i] for i, match in enumerate(best_matching) for _ in match[0]
             ])
 
             # Fetch appropriate dice coefficients to be cast into dice loss
             # Compute pairwise dice coefficients between predictions vs. ground truths
-            dice_coeffs_fetched = torch.cat([
+            dice_coeffs_matched = torch.cat([
                 dice_coeffs[i,match[0],match[1]] for i, match in enumerate(best_matching)
+            ])
+
+            # And don't forget the valid entry mask
+            valid_entries_matched = torch.stack([
+                valid_entries[i] for i, match in enumerate(best_matching) for _ in match[0]
             ])
         else:
             # Compute dice coefficients between the sole predictions vs. first ground
             # truths, per batch entry
 
             # All used as-is, just readjust dimensions for downstream computations
-            pred_masks_fetched = pred_masks[:,0,0]
-            pred_ious_fetched = pred_ious[:,0,0]
-            gt_masks_fetched = gt_masks[:,0]
-            img_pad_masks_fetched = img_pad_masks
+            pred_masks_matched = pred_masks[:,0,0]
+            pred_ious_matched = pred_ious[:,0,0]
+            gt_masks_matched = gt_masks[:,0]
+            img_pad_masks_matched = img_pad_masks
 
             # All the dice coefficients computed will be cast into dice loss
-            dice_coeffs_fetched = dice_coeffs
+            dice_coeffs_matched = dice_coeffs
+
+            # Ditto
+            valid_entries_matched = valid_entries
 
         # Compute dice & focal loss values
-        dice_loss = -dice_coeffs_fetched.log().mean()
-        dice_metric = dice_coeffs_fetched.mean()
+        dice_loss = -dice_coeffs_matched[valid_entries_matched].log().mean()
+        dice_metric = dice_coeffs_matched[valid_entries_matched].mean()
         focal_loss = _sigmoid_focal_loss(
-            pred_masks_fetched, gt_masks_fetched, img_pad_masks_fetched
+            pred_masks_matched, gt_masks_matched, img_pad_masks_matched
         )
+        focal_loss = focal_loss[valid_entries_matched].mean()
 
         # Compute IoUs between predictions vs. ground truths, cast into both loss and
         # metric values
         with torch.no_grad():
-            pred_probs = pred_masks_fetched.sigmoid()
-            soft_intersections = torch.min(pred_probs, gt_masks_fetched).sum(dim=(-2,-1))
-            soft_unions = torch.max(pred_probs, gt_masks_fetched).sum(dim=(-2,-1))
+            pred_probs = pred_masks_matched.sigmoid()
+            soft_intersections = torch.min(pred_probs, gt_masks_matched).sum(dim=(-2,-1))
+            soft_unions = torch.max(pred_probs, gt_masks_matched).sum(dim=(-2,-1))
             gt_ious = soft_intersections / soft_unions
 
-        iou_loss = F.mse_loss(pred_ious_fetched, gt_ious)
-        iou_metric = gt_ious.mean()
+        iou_loss = F.mse_loss(pred_ious_matched, gt_ious)
+        iou_metric = gt_ious[valid_entries_matched].mean()
 
         # Update losses & metrics
         if multimask:
@@ -509,7 +537,6 @@ def _sigmoid_focal_loss(inputs, targets, img_pad_masks, alpha=0.25, gamma=2):
     # Take sum and divide by numbers of pixels to obtain per-entry average losses,
     # then take mean across batch to obtain final loss
     focal_loss = loss.sum(dim=(-2,-1)) / (~img_pad_masks).sum(dim=(-2,-1))
-    focal_loss = focal_loss.mean()
 
     return focal_loss
 
