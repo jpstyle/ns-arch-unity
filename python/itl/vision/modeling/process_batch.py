@@ -18,6 +18,8 @@ from torchvision.transforms.functional import resize
 from transformers.image_processing_utils import BatchFeature
 
 
+EPS = 1e-8              # Value used for numerical stabilization
+
 def process_batch(model, batch, batch_idx):
     """
     Shared subroutine for processing batch to obtain loss & performance metric
@@ -166,12 +168,13 @@ def process_batch(model, batch, batch_idx):
     if model.training:
         # Annealed by progress (0~1)
         progress = batch_idx / model.cfg.vision.optim.max_steps
-        num_neighbors = model.num_neighbors_range[0] + \
-            progress * (model.num_neighbors_range[1]-model.num_neighbors_range[0])
-        num_neighbors = int(num_neighbors)
     else:
         # End value
-        num_neighbors = model.num_neighbors_range[1]
+        progress = 1.0
+
+    num_neighbors = model.num_neighbors_range[0] + \
+        progress * (model.num_neighbors_range[1]-model.num_neighbors_range[0])
+    num_neighbors = int(num_neighbors)
 
     # Instance label sets for the batch, with string names mapped to int indices
     inst_labels = [
@@ -201,9 +204,29 @@ def process_batch(model, batch, batch_idx):
     search_space_embs = torch.cat([inst_embs_mmt, queue_embs])
     search_space_labels = torch.cat([inst_labels, queue_labels])
     dists_sq = torch.cdist(predicted_inst_embs_mmt, search_space_embs, p=2.0) ** 2
+
+    # Each entry will always be in the identical category as itself's, no matter
+    # how fine-grained the concepts are. Thus, will always include self-self as
+    # positive pairs, treating them with certain 'privilege' that they always
+    # contribute to the loss. In other words, each entry will always pull self,
+    # and other positive pairs in k-NN (excluding self) where possible.
+
+    # Clone and cache the diagonals, replace the diagonals with inf.
+    self_dists_sq = torch.diagonal(dists_sq).clone()
+    dists_sq.fill_diagonal_(float("inf"))
+
+    # Compute k-NNs, then attach the reflexive (i.e. self-self) square distances
+    # and indices to the k-NNs
     k_nearest_dists_sq, k_nearest_inds = torch.topk(
         dists_sq, num_neighbors, dim=-1, largest=False
     )
+    k_nearest_dists_sq = torch.cat([
+        self_dists_sq[:,None], k_nearest_dists_sq
+    ], dim=1)
+    k_nearest_inds = torch.cat([
+        torch.arange(B)[:,None].to(model.device), k_nearest_inds
+    ], dim=1)
+
     # Positive pair mask; (batch instance, memory queue instance) pair is positive
     # iff the memory instance's label set includes the 'focus' label of the batch
     # instance
@@ -226,10 +249,17 @@ def process_batch(model, batch, batch_idx):
         [torch.any(pair.unique(return_counts=True)[1] > 1) for pair in per_entry]
         for per_entry in nonpad_intersections
     ], device=model.device)
+    has_pos_neighbors = pos_mask[:,1:].sum(dim=-1) > 0
 
     # Compute LooK loss and precision@K metric
-    losses["look"] = F.softmax(-k_nearest_dists_sq) * pos_mask
-    losses["look"] = -losses["look"].sum(dim=-1).log().mean()
+    softmax_weights = F.softmax(-k_nearest_dists_sq) * pos_mask
+    # Dividing self/neighbors and assigning equal significance
+    loss_by_self = -(softmax_weights[:,0] + EPS).log()
+    loss_by_neighbors = -(softmax_weights[:,1:].sum(dim=-1) + EPS).log()
+    loss_by_neighbors = loss_by_neighbors[has_pos_neighbors]
+    losses["look"] = loss_by_self.mean()
+    if len(loss_by_neighbors) > 0:
+        losses["look"] += loss_by_neighbors.mean()
     metrics["precision@K"] = (pos_mask[:,:K].sum(dim=-1) / K).mean()
 
     # Update memory queue
@@ -356,6 +386,7 @@ def process_batch(model, batch, batch_idx):
 
         # Compute dice & focal loss values
         dice_loss = -dice_coeffs_fetched.log().mean()
+        dice_metric = dice_coeffs_fetched.mean()
         focal_loss = _sigmoid_focal_loss(
             pred_masks_fetched, gt_masks_fetched, img_pad_masks_fetched
         )
@@ -368,18 +399,27 @@ def process_batch(model, batch, batch_idx):
             soft_unions = torch.max(pred_probs, gt_masks_fetched).sum(dim=(-2,-1))
             gt_ious = soft_intersections / soft_unions
 
-            iou_loss = F.mse_loss(pred_ious_fetched, gt_ious)
-            iou_metric = gt_ious.mean()
+        iou_loss = F.mse_loss(pred_ious_fetched, gt_ious)
+        iou_metric = gt_ious.mean()
 
         # Update losses & metrics
-        losses["focal"] += focal_loss
-        losses["dice"] += dice_loss
-        losses["iou"] += iou_loss
-        metrics["IoU"] += iou_metric
+        if multimask:
+            # Twice the importance
+            losses["focal"] += focal_loss * 2
+            losses["dice"] += dice_loss * 2
+            losses["iou"] += iou_loss * 2
+            metrics["dice"] += dice_metric * 2
+            metrics["iou"] += iou_metric * 2
+        else:
+            losses["focal"] += focal_loss
+            losses["dice"] += dice_loss
+            losses["iou"] += iou_loss
+            metrics["dice"] += dice_metric
+            metrics["iou"] += iou_metric
 
     # To be updated by increments
     losses["focal"] = 0; losses["dice"] = 0; losses["iou"] = 0
-    metrics["IoU"] = 0
+    metrics["dice"] = 0; metrics["iou"] = 0
 
     # First prompt: Support examples only, predict at most 3 masks if applicable
     segm_preds_1 = mask_decode(proto_tokens, True)
@@ -409,8 +449,8 @@ def process_batch(model, batch, batch_idx):
 
     # Divide the segmentation loss & metric values by three (one for each prompt)
     # to obtain average
-    losses["focal"] /= 3; losses["dice"] /= 3; losses["iou"] /= 3
-    metrics["IoU"] /= 3
+    losses["focal"] /= 4; losses["dice"] /= 4; losses["iou"] /= 4
+    metrics["dice"] /= 4; metrics["iou"] /= 4
 
     return losses, metrics
 
@@ -424,11 +464,11 @@ def _compute_conc_embs(model, sg_roi_embs, conc_type, momentum=False):
     if momentum:
         embed_cls = model.embed_cls_momentum
         embed_att = model.embed_att_momentum
-        gate_compute = model.gate_compute_momentum
+        condition_by_cls = model.condition_by_cls_momentum
     else:
         embed_cls = model.embed_cls
         embed_att = model.embed_att
-        gate_compute = model.gate_compute
+        condition_by_cls = model.condition_by_cls
 
     # Compute class-centric embeddings
     cls_embs = embed_cls(sg_roi_embs)
@@ -439,12 +479,12 @@ def _compute_conc_embs(model, sg_roi_embs, conc_type, momentum=False):
     else:
         assert conc_type == "attribute"
 
-        # Obtain gated RoI embeddings
-        feature_gate = gate_compute(cls_embs).sigmoid()
-        sg_roi_embs_gated = sg_roi_embs * feature_gate[...,None,None]
+        # Obtain conditioned RoI embeddings
+        feature_modulator = condition_by_cls(cls_embs).sigmoid()
+        sg_roi_embs_conditioned = sg_roi_embs + feature_modulator[...,None,None]
 
         # Compute attribute-centric embeddings
-        att_embs = embed_att(sg_roi_embs_gated)
+        att_embs = embed_att(sg_roi_embs_conditioned)
 
     return cls_embs, att_embs
 

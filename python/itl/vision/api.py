@@ -533,7 +533,7 @@ class VisionModule:
                 LearningRateMonitor(logging_interval='step')
             ]
         )
-        trainer.validate(self.model, datamodule=dm)
+        # trainer.validate(self.model, datamodule=dm)
         trainer.fit(self.model, datamodule=dm)
 
     def evaluate(self):

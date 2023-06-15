@@ -59,11 +59,9 @@ class VisualSceneAnalyzer(pl.LightningModule):
             )
         self.embed_cls = conv2dExtractor()
         self.embed_att = conv2dExtractor()
-        # For feature-wise gating of RoI embeddings by class-centric embeddings,
-        # needed for obtaining attribute-centric embeddings; essentially conditioning
-        # by object class identity
-        # (cf. [Learning to Predict Visual Attributes in the Wild], Pham et al. 2021)
-        self.gate_compute = SamFeedForward(
+        # For feature-wise conditioning of RoI embeddings by class-centric embeddings,
+        # needed for obtaining attribute-centric embeddings
+        self.condition_by_cls = SamFeedForward(
             input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
         )
 
@@ -72,13 +70,13 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.momentum = 0.99
         self.embed_cls_momentum = conv2dExtractor()
         self.embed_att_momentum = conv2dExtractor()
-        self.gate_compute_momentum = SamFeedForward(
+        self.condition_by_cls_momentum = SamFeedForward(
             input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
         )
         self.base_mmt_pairs = [
             (self.embed_cls, self.embed_cls_momentum),
             (self.embed_att, self.embed_att_momentum),
-            (self.gate_compute, self.gate_compute_momentum)
+            (self.condition_by_cls, self.condition_by_cls_momentum)
         ]
         for base_module, mmt_module in self.base_mmt_pairs:
             for base_param, mmt_param in zip(
@@ -106,7 +104,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
         }
 
         # For annealing the number of neighbors to consider when computing LooK loss
-        self.num_neighbors_range = (400, 40)
+        self.num_neighbors_range = (400, 100)
 
         # MLP heads to encode sets of class/attibute concept exemplars into sparse
         # prompts for SAM mask decoding, and associated 'tag' embeddings
@@ -121,23 +119,24 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
         if self.training:
             # Freeze all parameters except ones that need training
-            self.to_train = [
+            self.to_train_prefixes = [
                 "embed_cls.", "embed_att.",
                 "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
                 "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
                 "mmt_predict_cls.", "mmt_predict_att.",
+                "condition_by_cls.",
                 "sam.mask_decoder."
             ]
             for name, param in self.named_parameters():
                 param.requires_grad = any(
                     name.startswith(train_param)
-                    for train_param in self.to_train
+                    for train_param in self.to_train_prefixes
                 )
         else:
-            self.to_train = []
+            self.to_train_prefixes = []
         
         # Loss component weights
-        self.loss_weights = { "look": 2, "focal": 20, "dice": 1, "iou": 1 }
+        self.loss_weights = { "look": 1, "focal": 20, "dice": 1, "iou": 1 }
 
         self.save_hyperparameters()
 
