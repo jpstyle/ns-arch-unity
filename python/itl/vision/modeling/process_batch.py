@@ -133,156 +133,71 @@ def process_batch(model, batch, batch_idx):
     # class-centric embeddings are needed for batches of both conc_types
     cls_embs, att_embs = _compute_conc_embs(model, sg_roi_embs, conc_type)
 
-    # Momentum encoder processing under no_grad
-    with torch.no_grad():
-        if model.training:
-            # Update momentum encoder weights, by mixing with ratio defined by momentum
-            for base_module, mmt_module in model.base_mmt_pairs:
-                for base_param, mmt_param in zip(
-                    base_module.parameters(), mmt_module.parameters()
-                ):
-                    mmt_param.data = mmt_param.data * model.momentum + \
-                        base_param.data * (1 - model.momentum)
-
-        # Compute embeddings with momendum encoder as well
-        cls_embs_mmt, att_embs_mmt = _compute_conc_embs(
-            model, sg_roi_embs, conc_type, momentum=True
-        )
-
     # Determine appropriate values and modules to use in computation by conc_type
     if conc_type == "class":
         inst_embs = cls_embs
-        inst_embs_mmt = cls_embs_mmt
-        mmt_predict = model.mmt_predict_cls
-        queue_embs = model.queue_embs_cls
-        queue_labels = model.queue_labels_cls
         exs_prompt_encode = model.exs_prompt_encode_cls
         exs_prompt_tag = model.exs_prompt_tag_cls
     else:
         assert conc_type == "attribute"
         inst_embs = att_embs
-        inst_embs_mmt = att_embs_mmt
-        mmt_predict = model.mmt_predict_att
-        queue_embs = model.queue_embs_att
-        queue_labels = model.queue_labels_att
         exs_prompt_encode = model.exs_prompt_encode_att
         exs_prompt_tag = model.exs_prompt_tag_att
 
     ## Encoding-direction (i.e., <Image, Instance => Concepts>)
-
-    # Number of nearest neighbors to consider when computing LooK loss
-    if model.training:
-        # Annealed by progress (0~1)
-        progress = batch_idx / model.cfg.vision.optim.max_steps
-    else:
-        # End value
-        progress = 1.0
-
-    num_neighbors = model.num_neighbors_range[0] + \
-        progress * (model.num_neighbors_range[1]-model.num_neighbors_range[0])
-    num_neighbors = int(num_neighbors)
 
     # Instance label sets for the batch, with string names mapped to int indices
     inst_labels = [
         [model.conc2ind[conc_type][conc] for conc in [fc]+aux]
         for fc, aux in conc_labels
     ]
-    # Pad labels for both batch & memory queue entries by current maximum label
-    # count (cf. for VAW, will be consistent for classes with only one label per
-    # entry, but may differ for attributes)
-    max_label_count = max(
-        max(len(ls) for ls in inst_labels), queue_labels.shape[-1]
-    )
+    # Pad labels for entries by current maximum label count (cf. for VAW, will
+    # be consistent for classes with only one label per entry, but may differ
+    # for attributes)
+    max_label_count = max(len(ls) for ls in inst_labels)
     inst_labels = torch.tensor(
         [ls+[-1]*(max_label_count-len(ls)) for ls in inst_labels],
         dtype=torch.long, device=model.device
     )
-    if queue_labels.shape[-1] < max_label_count:
-        queue_labels = F.pad(
-            queue_labels, (0,max_label_count-queue_labels.shape[-1]), value=-1
-        )
 
     # Screen out labels for invalid entries by replacing with 'null' values
     inst_labels[~valid_entries] = -1
 
-    # Pass the embeddings from the base encoder through the projector module
-    predicted_inst_embs_mmt = mmt_predict(inst_embs)
+    # Obtain pairwise distances (squared) between examples
+    dists_sq = torch.cdist(inst_embs, inst_embs, p=2.0) ** 2
 
-    # Find nearest neighbors from the memory queue for computing LooK loss
-    # value, alongside the current input batch
-    search_space_embs = torch.cat([inst_embs_mmt, queue_embs])
-    search_space_labels = torch.cat([inst_labels, queue_labels])
-    dists_sq = torch.cdist(predicted_inst_embs_mmt, search_space_embs, p=2.0) ** 2
-
-    # Each entry will always be in the identical category as itself's, no matter
-    # how fine-grained the concepts are. Thus, will always include self-self as
-    # positive pairs, treating them with certain 'privilege' that they always
-    # contribute to the loss. In other words, each entry will always pull self,
-    # and other positive pairs in k-NN (excluding self) where possible.
-
-    # Clone and cache the diagonals, replace the diagonals with inf.
-    self_dists_sq = torch.diagonal(dists_sq).clone()
+    # Replace the diagonals with inf so as not to consider reflexive distances
+    # in NCA loss
     dists_sq.fill_diagonal_(float("inf"))
 
-    # Compute k-NNs, then attach the reflexive (i.e. self-self) square distances
-    # and indices to the k-NNs
-    k_nearest_dists_sq, k_nearest_inds = torch.topk(
-        dists_sq, num_neighbors, dim=-1, largest=False
-    )
-    k_nearest_dists_sq = torch.cat([
-        self_dists_sq[:,None], k_nearest_dists_sq
-    ], dim=1)
-    k_nearest_inds = torch.cat([
-        torch.arange(B)[:,None].to(model.device), k_nearest_inds
-    ], dim=1)
-
-    # Positive pair mask; (batch instance, memory queue instance) pair is positive
-    # iff the memory instance's label set includes the 'focus' label of the batch
-    # instance
-    gather_input_size = [B]+list(search_space_labels.shape)
-    gather_index_size = list(k_nearest_inds.shape)+[search_space_labels.shape[-1]]
-    k_nearest_labels = torch.gather(
-        search_space_labels[None].expand(gather_input_size),
-        1,      # dim [1] spans across whole memory bank
-        k_nearest_inds[...,None].expand(gather_index_size)
-    )
+    # Positive pair mask needed for NCA loss computation; the more concept labels
+    # agree, the higher weights such pairs receive
     nonpad_intersections = [
-        # For each batch entry, concat lists of non-pad labels between instance vs.
-        # each of its k-nearest neighbors fetched
-        [torch.cat([i_ls[i_ls!=-1], n_ls[n_ls!=-1]]) for n_ls in knn_ls]
-        for i_ls, knn_ls in zip(inst_labels, k_nearest_labels)
+        [torch.cat([labs_i[labs_i!=-1], labs_j[labs_j!=-1]]) for labs_j in inst_labels]
+        for labs_i in inst_labels
     ]
-    pos_mask = torch.tensor([
-        # If the occurrence count is larger than 1 for any label, we have non-zero
-        # intersections (i.e. shared concept labels), thus positive pairs
-        [torch.any(pair.unique(return_counts=True)[1] > 1) for pair in per_entry]
+    nonpad_intersections = torch.tensor([
+        [(pair.unique(return_counts=True)[1] > 1).sum() for pair in per_entry]
         for per_entry in nonpad_intersections
     ], device=model.device)
-    has_pos_neighbors_and_valid = pos_mask[:,1:].sum(dim=-1) > 0
-    has_pos_neighbors_and_valid[~valid_entries] = False
+    pos_mask = nonpad_intersections > 0
 
-    # Compute LooK loss and precision@K metric
-    softmax_weights = F.softmax(-k_nearest_dists_sq) * pos_mask
-    # Dividing self/neighbors and assigning equal significance
-    loss_by_self = -(softmax_weights[:,0] + EPS).log()
-    loss_by_neighbors = -(softmax_weights[:,1:].sum(dim=-1) + EPS).log()
-    loss_by_neighbors = loss_by_neighbors[has_pos_neighbors_and_valid]
-    losses["look"] = loss_by_self[valid_entries].mean()
-    if len(loss_by_neighbors) > 0:
-        losses["look"] += loss_by_neighbors.mean()
-    metrics["precision@K"] = (pos_mask[:,:K].sum(dim=-1) / K)[valid_entries].mean()
+    # Compute NCA loss adjusted for multilabel scenarios: i.e., softmax weight in
+    # a way such that entries sharing more labels are pulled stronger
+    exps = (-dists_sq + dists_sq.min(dim=-1).values).exp()
+    exp_weights = torch.max(nonpad_intersections, torch.ones_like(nonpad_intersections))
+    weighted_exps_all = exps * exp_weights
+    weighted_exps_pos = exps * nonpad_intersections
+    losses["nca"] = weighted_exps_pos.sum(dim=-1) / weighted_exps_all.sum(dim=-1)
+    losses["nca"] = -(losses["nca"] + EPS).log()
+    losses["nca"] = losses["nca"][valid_entries].mean()
 
-    # Update memory queue
-    with torch.no_grad():
-        new_queue_embs = torch.cat([inst_embs_mmt, queue_embs[:-B]])
-        new_queue_labels = torch.cat([inst_labels, queue_labels[:-B]])
-        if conc_type == "class":
-            model.queue_embs_cls = new_queue_embs
-            model.queue_labels_cls = new_queue_labels
-        else:
-            assert conc_type == "attribute"
-            model.queue_embs_att = new_queue_embs
-            model.queue_labels_att = new_queue_labels
+    # Compute precision@K metric
+    topk_closest_exs = dists_sq.topk(K-1, largest=False, dim=-1).indices
+    metrics["precision@K"] = torch.stack([
+        pm[inds].float().mean()
+        for pm, inds in zip(pos_mask, topk_closest_exs)
+    ])[valid_entries].mean()
 
     ## Decoding-direction (i.e., <Image, Concept => Instances>)
 
@@ -483,23 +398,10 @@ def process_batch(model, batch, batch_idx):
     return losses, metrics
 
 
-def _compute_conc_embs(model, sg_roi_embs, conc_type, momentum=False):
-    """
-    Factored out [conc_type]-specific embedding computation logic, which is shared
-    by both base & momentum encoders
-    """
-    # Choosse encoder modules
-    if momentum:
-        embed_cls = model.embed_cls_momentum
-        embed_att = model.embed_att_momentum
-        condition_by_cls = model.condition_by_cls_momentum
-    else:
-        embed_cls = model.embed_cls
-        embed_att = model.embed_att
-        condition_by_cls = model.condition_by_cls
-
+def _compute_conc_embs(model, sg_roi_embs, conc_type):
+    """ Factored out [conc_type]-specific embedding computation logic """
     # Compute class-centric embeddings
-    cls_embs = embed_cls(sg_roi_embs)
+    cls_embs = model.embed_cls(sg_roi_embs)
 
     # Compute attribute-centric embeddings (as needed)
     if conc_type == "class":
@@ -508,11 +410,13 @@ def _compute_conc_embs(model, sg_roi_embs, conc_type, momentum=False):
         assert conc_type == "attribute"
 
         # Obtain conditioned RoI embeddings
-        feature_modulator = condition_by_cls(cls_embs).sigmoid()
-        sg_roi_embs_conditioned = sg_roi_embs + feature_modulator[...,None,None]
+        modulator_multiplicative = model.condition_cls_mult(cls_embs).sigmoid()
+        modulator_additive = model.condition_cls_add(cls_embs)
+        sg_roi_embs_conditioned = sg_roi_embs * modulator_multiplicative[...,None,None]
+        sg_roi_embs_conditioned = sg_roi_embs_conditioned + modulator_additive[...,None,None]
 
         # Compute attribute-centric embeddings
-        att_embs = embed_att(sg_roi_embs_conditioned)
+        att_embs = model.embed_att(sg_roi_embs_conditioned)
 
     return cls_embs, att_embs
 

@@ -36,19 +36,19 @@ def download_from_url(url, target_path):
             bar.update(size)
 
 
-def download_vg_images(images_path, vg_img_data, imgs_to_download):
+def download_vg_images(vg_img_data, imgs_to_download, images_path, cache_path, prefix):
     """
     Download image files designated by the `imgs_to_download` argument, which is a list
     of image IDs per Visual Genome v1.4
     """
-    url_path_pairs = [
-        (img["url"], os.path.join(images_path, img["url"].split("/")[-1]))
+    indiv_args = [
+        (img["url"], images_path, cache_path, prefix)
         for img in vg_img_data if img["image_id"] in imgs_to_download
     ]
 
     num_workers = multiprocessing.cpu_count()
     dl_queues = ThreadPool(num_workers).imap_unordered(
-        _download_indiv_image, url_path_pairs
+        _download_indiv_image, indiv_args
     )
 
     pbar = tqdm(enumerate(dl_queues), total=len(imgs_to_download))
@@ -60,25 +60,30 @@ def download_vg_images(images_path, vg_img_data, imgs_to_download):
     logger.info(f"{downloaded} images downloaded")
 
 
-def _download_indiv_image(url_and_path):
+def _download_indiv_image(url_and_paths):
     """
     Helper method for downloading individual images, to be called from download_images()
     by multiple threads in parallel
     """
-    url, path = url_and_path
+    url, images_path, cache_path, prefix = url_and_paths
+    img_file = url.split("/")[-1]
+    img_id = img_file.split(".")[-2]
+    img_path = f"{images_path}/{img_file}"
+    cached_emb_path = f"{cache_path}/{prefix}_{img_id}.gz"
 
-    if not os.path.exists(path):
+    if os.path.exists(img_path) or os.path.exists(cached_emb_path):
+        # Either original raw image or cached processed data exists, no need to download
+        return False
+    else:
         try:
-            urlretrieve(url, path)
+            urlretrieve(url, img_path)
         except URLError as e:
             logger.info(f"{e}: Retrying download {url}...")
-            _download_indiv_image(url_and_path)
+            _download_indiv_image(url_and_paths)
         except e:
             raise e
 
         return True
-    else:
-        return False
 
 
 def extract_metadata(dataset_path):

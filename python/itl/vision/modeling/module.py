@@ -1,5 +1,5 @@
 import os
-import bz2
+import gzip
 import pickle
 from PIL import Image
 from collections import OrderedDict, defaultdict
@@ -61,50 +61,18 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.embed_att = conv2dExtractor()
         # For feature-wise conditioning of RoI embeddings by class-centric embeddings,
         # needed for obtaining attribute-centric embeddings
-        self.condition_by_cls = SamFeedForward(
+        self.condition_cls_mult = SamFeedForward(
+            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
+        )
+        self.condition_cls_add = SamFeedForward(
             input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
         )
 
-        # Momentum encoder for maintaining memory keys computed from stably updating
-        # encoder; clone the base encoders' architecture and copy weights
-        self.momentum = 0.99
-        self.embed_cls_momentum = conv2dExtractor()
-        self.embed_att_momentum = conv2dExtractor()
-        self.condition_by_cls_momentum = SamFeedForward(
-            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
-        )
-        self.base_mmt_pairs = [
-            (self.embed_cls, self.embed_cls_momentum),
-            (self.embed_att, self.embed_att_momentum),
-            (self.condition_by_cls, self.condition_by_cls_momentum)
-        ]
-        for base_module, mmt_module in self.base_mmt_pairs:
-            for base_param, mmt_param in zip(
-                base_module.parameters(), mmt_module.parameters()
-            ):
-                mmt_param.data.copy_(base_param.data)
-
-        # Additional MLP modules for predicting momentum encoder outputs
-        self.mmt_predict_cls = SamFeedForward(
-            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
-        )
-        self.mmt_predict_att = SamFeedForward(
-            input_dim=D, hidden_dim=D, output_dim=D, num_layers=2
-        )
-
-        # Create memory queue for computing LooK loss
-        M = 65536 - self.cfg.vision.data.batch_size
-        self.register_buffer("queue_embs_cls", torch.randn(M, D))
-        self.register_buffer("queue_embs_att", torch.randn(M, D))
-        self.register_buffer("queue_labels_cls", torch.full((M, 1), -1))
-        self.register_buffer("queue_labels_att", torch.full((M, 1), -1))
+        # Maintaining consistent indexing by concept string name
         self.conc2ind = {
             "class": defaultdict(lambda: len(self.conc2ind["class"])),
             "attribute": defaultdict(lambda: len(self.conc2ind["attribute"]))
         }
-
-        # For annealing the number of neighbors to consider when computing LooK loss
-        self.num_neighbors_range = (400, 100)
 
         # MLP heads to encode sets of class/attibute concept exemplars into sparse
         # prompts for SAM mask decoding, and associated 'tag' embeddings
@@ -123,8 +91,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
                 "embed_cls.", "embed_att.",
                 "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
                 "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
-                "mmt_predict_cls.", "mmt_predict_att.",
-                "condition_by_cls.",
+                "condition_cls_mult.", "condition_cls_add.",
                 "sam.mask_decoder."
             ]
             for name, param in self.named_parameters():
@@ -136,7 +103,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
             self.to_train_prefixes = []
         
         # Loss component weights
-        self.loss_weights = { "look": 1, "focal": 20, "dice": 1, "iou": 1 }
+        self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 1 }
 
         self.save_hyperparameters()
 
@@ -152,6 +119,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # Aggregate loss for the batch
         total_loss = sum(
             weight * losses[name] for name, weight in self.loss_weights.items()
+            if name in losses
         )
         self.log(f"train_loss_{conc_type}", total_loss)
 
@@ -192,6 +160,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
             avg_total_loss = sum(
                 weight * avg_losses[name] for name, weight in self.loss_weights.items()
+                if name in avg_losses
             )
             self.log(
                 f"val_loss_{conc_type}", avg_total_loss.item(), add_dataloader_idx=False
@@ -427,7 +396,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
             # Save embedding (along with metadata like original size, reshaped size)
             # as compressed file
-            with bz2.BZ2File(f"{cache_path}/{d_name}_{image_id}.pbz2", "wb") as enc_f:
+            with gzip.open(f"{cache_path}/{d_name}_{image_id}.gz", "wb") as enc_f:
                 # Replace raw pixel values with the computed embeddings, then save
                 processed_input["embedding"] = img_emb
                 processed_input["original_sizes"] = \

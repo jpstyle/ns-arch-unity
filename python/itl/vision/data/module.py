@@ -1,7 +1,7 @@
 import os
-import bz2
 import copy
 import json
+import gzip
 import pickle
 import random
 import logging
@@ -37,6 +37,7 @@ class FewShotDataModule(pl.LightningDataModule):
         # Create data directory at the specified path if not exists
         dataset_path = self.cfg.vision.data.path
         images_path = f"{dataset_path}/images"
+        cache_path = self.cfg.paths.cache_dir
         os.makedirs(dataset_path, exist_ok=True)
         os.makedirs(images_path, exist_ok=True)
 
@@ -65,7 +66,9 @@ class FewShotDataModule(pl.LightningDataModule):
 
             # Download image files, reformat & save VG annotations
             imgs_to_download = extract_metadata(dataset_path)
-            download_vg_images(images_path, vg_img_data, imgs_to_download)
+            download_vg_images(
+                vg_img_data, imgs_to_download, images_path, cache_path, "vaw"
+            )
 
     def setup(self, stage):
         # Prepare dataset & samplers according to task type
@@ -143,6 +146,7 @@ class FewShotDataModule(pl.LightningDataModule):
             dataset=self.datasets[spl],
             batch_sampler=self.samplers[spl][conc_type],
             num_workers=self.cfg.vision.data.num_loader_workers,
+            pin_memory=True,
             collate_fn=self._collate_fn
         )
 
@@ -203,11 +207,11 @@ class _FewShot2DDataset(Dataset):
 
         images_path = f"{self.dataset_path}/images"
         image_file = f"{images_path}/{img_id}.jpg"
-        cached_encoding_file = f"{self.cache_path}/{self.name}_{img_id}.pbz2"
+        cached_encoding_file = f"{self.cache_path}/{self.name}_{img_id}.gz"
 
         if os.path.exists(cached_encoding_file):
             # Found pre-computed image encoding files
-            with bz2.BZ2File(cached_encoding_file) as enc_f:
+            with gzip.open(cached_encoding_file) as enc_f:
                 processed_image = pickle.load(enc_f)
             
             data_dict["image_embedding"] = processed_image["embedding"][0]
@@ -261,8 +265,8 @@ class _FewShot2DDataset(Dataset):
             # instance_mask.sum() == 0; segmentation mask too small that the decoded
             # binary mask doesn't have any nonzero entry... This item doesn't serve
             # as a valid training signal
-            data_dict["instance_bbox"] = np.zeros(4)
-            data_dict["instance_centroid"] = np.zeros(2)
+            data_dict["instance_bbox"] = np.zeros(4, dtype=np.int64)
+            data_dict["instance_centroid"] = np.zeros(2, dtype=np.int64)
 
         # Ground-truth segmentation binary maps for any instances of the specified
         # 'focus' concept, 
