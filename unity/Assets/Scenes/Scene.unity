@@ -511,12 +511,12 @@ MonoBehaviour:
   m_CameraSensor:
     rid: 7528994970335444992
   m_Labelers:
-  - rid: 7528994975118262272
+  - rid: 6784594850814099456
   m_LayerMask:
     serializedVersion: 2
     m_Bits: 4294967295
-  id: bb2dLabeler
-  description: bounding box extractor
+  id: segmLabeler
+  description: instance segmentation mask extractor
   captureRgbImages: 0
   firstCaptureFrame: 0
   captureTriggerMode: 1
@@ -530,19 +530,19 @@ MonoBehaviour:
   references:
     version: 2
     RefIds:
+    - rid: 6784594850814099456
+      type: {class: InstanceSegmentationLabeler, ns: UnityEngine.Perception.GroundTruth.Labelers,
+        asm: Unity.Perception.Runtime}
+      data:
+        enabled: 1
+        annotationId: instance segmentation
+        idLabelConfig: {fileID: 11400000, guid: f787131a0a5e4fc60b971c569e2b9a9b,
+          type: 2}
     - rid: 7528994970335444992
       type: {class: UnityCameraSensor, ns: UnityEngine.Perception.GroundTruth.Sensors,
         asm: Unity.Perception.Runtime}
       data:
         superSamplingFactor: 1
-    - rid: 7528994975118262272
-      type: {class: BoundingBox2DLabeler, ns: UnityEngine.Perception.GroundTruth.Labelers,
-        asm: Unity.Perception.Runtime}
-      data:
-        enabled: 1
-        annotationId: bounding box
-        idLabelConfig: {fileID: 11400000, guid: f787131a0a5e4fc60b971c569e2b9a9b,
-          type: 2}
 --- !u!1 &705507993
 GameObject:
   m_ObjectHideFlags: 0
@@ -1337,7 +1337,7 @@ MonoBehaviour:
     hasUpgradedBrainParametersWithActionSpec: 1
   m_Model: {fileID: 0}
   m_InferenceDevice: 0
-  m_BehaviorType: 0
+  m_BehaviorType: 1
   m_BehaviorName: TeacherBehavior
   TeamId: 0
   m_UseChildSensors: 1
@@ -1642,7 +1642,7 @@ MonoBehaviour:
     - rid: 7528994997093793793
       type: {class: StorageEndpoint, ns: , asm: Assembly-CSharp}
       data:
-        boxesUpToDate: 0
+        annotationsUpToDate: 0
 --- !u!4 &1862703091
 Transform:
   m_ObjectHideFlags: 3

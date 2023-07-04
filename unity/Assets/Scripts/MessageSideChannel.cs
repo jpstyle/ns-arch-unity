@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
-using UnityEngine.Assertions;
 using Unity.MLAgents.SideChannels;
 
 public class MessageSideChannel : SideChannel
@@ -21,8 +21,8 @@ public class MessageSideChannel : SideChannel
         var utterance = msg.ReadString();
 
         // Retrieve any demonstrative references (map from substring indices to
-        // relative box coordinates on visual observation image) until end of the
-        // current message is reached (signalled by -1)
+        // segmentation mask image, having same dimension as scene image perceived
+        // by sensor) until end of the current message is reached (signalled by -1)
         var demRefs = new Dictionary<(int, int), EntityRef>();
         while (true)
         {
@@ -32,20 +32,11 @@ public class MessageSideChannel : SideChannel
             
             var start = intMessage;
             var end = msg.ReadInt32();
-            var refByBBox = msg.ReadBoolean();
-            if (refByBBox)
-            {
-                var boxCoordinates = msg.ReadFloatList();
-                var bbox = new Rect(
-                    boxCoordinates[0], boxCoordinates[1],
-                    boxCoordinates[2], boxCoordinates[3]
-                );
-                demRefs[(start, end)] = new EntityRef(bbox);
-            }
+            var refByMask = msg.ReadBoolean();
+            if (refByMask)
+                demRefs[(start, end)] = new EntityRef(msg.ReadFloatList().ToArray());
             else
-            {
                 demRefs[(start, end)] = new EntityRef(msg.ReadString());
-            }
         }
 
         // Put processed message data into incoming buffer
@@ -65,22 +56,17 @@ public class MessageSideChannel : SideChannel
 
         // (If any) Encode demonstrative references as two consecutive ints (marking
         // start & end of corresponding demonstrative pronoun substring) and either
-        // float[4] (marking box coordinates relative to visual obs) or string (direct
-        // reference by string name of EnvEntity)
+        // float[] ((soft) segmentation mask) or string (direct reference by string
+        // name of EnvEntity)
         foreach (var (range, demRef) in demRefs)
         {
             var (start, end) = range;
             msgOut.WriteInt32(start); msgOut.WriteInt32(end);
             switch (demRef.refType)
             {
-                case EntityRefType.BBox:
+                case EntityRefType.Mask:
                     msgOut.WriteBoolean(true);
-                    msgOut.WriteFloatList(
-                        new[] {
-                            demRef.bboxRef.x, demRef.bboxRef.y,
-                            demRef.bboxRef.width, demRef.bboxRef.height
-                        }
-                    );
+                    msgOut.WriteFloatList(demRef.maskRef);
                     break;
                 case EntityRefType.String:
                     msgOut.WriteBoolean(false);

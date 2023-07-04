@@ -232,10 +232,9 @@ public class DialogueUI : MonoBehaviour
             foreach (var (range, refEntId) in _demonstrativeReferences)
             {
                 if (toDelete.Contains(range)) continue;     // Omit in new dictionary
-                if (toLShift.ContainsKey(range))
+                if (toLShift.TryGetValue(range, out var offset))
                 {
                     var (start, end) = range;
-                    var offset = toLShift[range];
                     newDict.Add((start + offset, end + offset), refEntId);
                 }
                 else
@@ -257,7 +256,7 @@ public class DialogueUI : MonoBehaviour
         
         var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)
-            pUI.HighlightBox(highlightEnt);
+            pUI.HighlightMask(highlightEnt);
     }
 
     private void RemoveReferenceHighlight(PointerOutLinkTagEvent evt)

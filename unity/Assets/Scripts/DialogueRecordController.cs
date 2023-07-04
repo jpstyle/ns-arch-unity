@@ -98,7 +98,7 @@ public class DialogueRecordController
         
         var pointerUIs = Object.FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)
-            pUI.HighlightBox(highlightEnt);
+            pUI.HighlightMask(highlightEnt);
     }
 
     private void RemoveReferenceHighlight(PointerOutLinkTagEvent evt)

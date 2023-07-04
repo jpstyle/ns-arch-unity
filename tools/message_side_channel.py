@@ -37,7 +37,7 @@ class StringMsgChannel(SideChannel):
                 end = msg.read_int32()
                 ref_by_bbox = msg.read_bool()
                 if ref_by_bbox:
-                    # Reference by bounding box coordinates (list of ffloats)
+                    # Reference by segmentation mask (list of floats in 0~1)
                     dem_refs[(start, end)] = msg.read_float32_list()
                 else:
                     # Reference by string name
@@ -58,8 +58,8 @@ class StringMsgChannel(SideChannel):
         for (start, end), ref in dem_refs.items():
             msg.write_int32(start); msg.write_int32(end)
             if isinstance(ref, list):
-                # Reference by bounding box coordinates (list of ffloats)
-                assert len(ref)==4 and all(isinstance(x, float) for x in ref)
+                # Reference by segmentation mask (list of floats in 0~1)
+                assert all(isinstance(x, float) and x>=0 and x<=1 for x in ref)
                 msg.write_bool(True)
                 msg.write_float32_list(ref)
             else:

@@ -43,8 +43,8 @@ public class DialogueAgent : Agent
     // running; for preventing multiple invocation of Utter coroutine 
     private bool _uttering;
     
-    // Analogous flag for CaptureBox method
-    private bool _boxCapturing;
+    // Analogous flag for CaptureMask method
+    private bool _maskCapturing;
 
     // For controlling minimal update interval, to allow visual inspection during runs
     private float _nextTimeToAct;
@@ -92,16 +92,16 @@ public class DialogueAgent : Agent
                 // Fetch single message record from queue
                 var incomingMessage = incomingMsgBuffer.Dequeue();
                 
-                // (If any) Translate EnvEntity reference by UID to box coordinates w.r.t.
+                // (If any) Translate EnvEntity reference by UID to segmentation mask w.r.t.
                 // this agent's camera sensor
                 var demRefs = new Dictionary<(int, int), EntityRef>();
                 foreach (var (range, entUid) in incomingMessage.demonstrativeReferences)
                 {
-                    // Retrieve referenced EnvEntity and fetch absolute box coordinates w.r.t.
-                    // this agent's camera's target display screen
+                    // Retrieve referenced EnvEntity and fetch segmentation mask in absolute scale
+                    // w.r.t. this agent's camera's target display screen
                     var refEnt = EnvEntity.FindByUid(entUid);
-                    var screenAbsRect = refEnt.boxes[_cameraSensor.Camera.targetDisplay];
-                    demRefs[range] = new EntityRef(ScreenAbsRectToSensorRelRect(screenAbsRect));
+                    var screenMask = refEnt.masks[_cameraSensor.Camera.targetDisplay];
+                    demRefs[range] = new EntityRef(MaskCoordinateSwitch(screenMask, true));
                 }
 
                 // Send message via side channel
@@ -135,21 +135,21 @@ public class DialogueAgent : Agent
         }
 
         // Check if any of the messages has non-empty demonstrative references and
-        // thus bounding boxes need to be captured
-        var boxesNeeded = messagesToUtter
+        // thus segmentation masks need to be captured
+        var masksNeeded = messagesToUtter
             .Select(m => m.Item2)
             .Any(rfs => rfs is not null && rfs.Count > 0);
 
-        // If needed, synchronously wait until boxes are updated and captured
-        if (boxesNeeded)
-            yield return StartCoroutine(CaptureBoxes());
+        // If needed, synchronously wait until masks are updated and captured
+        if (masksNeeded)
+            yield return StartCoroutine(CaptureMasks());
 
         // Now utter individual messages
         foreach (var (utterance, demRefs) in messagesToUtter)
         {
             if (demRefs is not null && demRefs.Count > 0)
             {
-                // Need to resolve demonstrative reference boxes to corresponding EnvEntity (uid)
+                // Need to resolve demonstrative reference masks to corresponding EnvEntity (uid)
                 var demRefsResolved = new Dictionary<(int, int), string>();
                 var targetDisplay = _cameraSensor.Camera.targetDisplay;
 
@@ -157,9 +157,9 @@ public class DialogueAgent : Agent
                 {
                     switch (demRef.refType)
                     {
-                        case EntityRefType.BBox:
-                            var screenAbsRect = SensorRelRectToScreenAbsRect(demRef.bboxRef);
-                            demRefsResolved[range] = EnvEntity.FindByBox(screenAbsRect, targetDisplay).uid;
+                        case EntityRefType.Mask:
+                            var screenAbsMask = MaskCoordinateSwitch(demRef.maskRef, false);
+                            demRefsResolved[range] = EnvEntity.FindByMask(screenAbsMask, targetDisplay).uid;
                             break;
                         case EntityRefType.String:
                             demRefsResolved[range] = EnvEntity.FindByObjectPath(demRef.stringRef).uid;
@@ -181,12 +181,12 @@ public class DialogueAgent : Agent
         _uttering = false;
     }
 
-    protected IEnumerator CaptureBoxes()
+    protected IEnumerator CaptureMasks()
     {
         // If a coroutine invocation is still running, do not start another; else,
         // set flag
-        if (_boxCapturing) yield break;
-        _boxCapturing = true;
+        if (_maskCapturing) yield break;
+        _maskCapturing = true;
 
         // First send a request for a capture to the PerceptionCamera component of the
         // Camera to which the CameraSensorComponent is attached
@@ -194,61 +194,65 @@ public class DialogueAgent : Agent
         _perCam.RequestCapture();
 
         // Wait until annotations are ready in the storage endpoint for retrieval
-        yield return new WaitUntil(() => EnvEntity.annotationStorage.boxesUpToDate);
+        yield return new WaitUntil(() => EnvEntity.annotationStorage.annotationsUpToDate);
 
-        // Finally, update bounding boxes of all EnvEntity instances based on the data
+        // Finally, update segmentation masks of all EnvEntity instances based on the data
         // stored in the endpoint
-        EnvEntity.UpdateBoxesAll();
+        EnvEntity.UpdateMasksAll();
 
         // Reset flag on exit
-        _boxCapturing = false;
+        _maskCapturing = false;
     }
 
-    private Rect ScreenAbsRectToSensorRelRect(Rect screenAbsRect)
+    private float[] MaskCoordinateSwitch(float[] screenMask, bool screenToSensor)
     {
         var targetDisplay = _cameraSensor.Camera.targetDisplay;
         var screenWidth = Display.displays[targetDisplay].renderingWidth;
         var screenHeight = Display.displays[targetDisplay].renderingHeight;
 
-        // To screen-relative coordinates
-        var screenRelRectX = screenAbsRect.x / screenWidth;
-        var screenRelRectY = screenAbsRect.y / screenHeight;
-        var screenRelRectWidth = screenAbsRect.width / screenWidth;
-        var screenRelRectHeight = screenAbsRect.height / screenHeight;
-                    
-        // To CameraSensor-relative coordinates; transform x-coordinates according to
-        // ratio of aspect ratios, while leaving y-coordinates untouched
-        var screenAspectRatio = (float)screenWidth / screenHeight;
-        var sensorAspectRatio = (float)_cameraSensor.Width / _cameraSensor.Height;
-        var arRatio = screenAspectRatio / sensorAspectRatio;
-        var sensorRelRectX = (screenRelRectX - 0.5f) * arRatio + 0.5f;
-        var sensorRelRectWidth = screenRelRectWidth * arRatio;
+        // Texture2D representation of the provided mask to be manipulated, in the
+        // screen coordinate
+        var screenTexture = new Texture2D(
+            screenWidth, screenHeight, TextureFormat.RHalf, false
+        );
+        screenTexture.SetPixelData(screenMask, 0);
 
-        return new Rect(sensorRelRectX, screenRelRectY, sensorRelRectWidth, screenRelRectHeight);
-    }
-    
-    private Rect SensorRelRectToScreenAbsRect(Rect sensorRelRect)
-    {
-        var targetDisplay = _cameraSensor.Camera.targetDisplay;
-        var screenWidth = Display.displays[targetDisplay].renderingWidth;
-        var screenHeight = Display.displays[targetDisplay].renderingHeight;
+        // To CameraSensor-relative coordinate; resize by height ratio
+        var heightRatio = _cameraSensor.Height / screenHeight;
+        var newWidth = screenWidth * heightRatio;
+        screenTexture.Reinitialize(newWidth, _cameraSensor.Height);
+        var resizedMask = screenTexture.GetPixelData<float>(0).ToArray();
 
-        // To screen-relative coordinates; transform x-coordinates according to
-        // ratio of aspect ratios, while leaving y-coordinates untouched
-        var screenAspectRatio = (float)screenWidth / screenHeight;
-        var sensorAspectRatio = (float)_cameraSensor.Width / _cameraSensor.Height;
-        var arRatio = screenAspectRatio / sensorAspectRatio;
-        var screenRelRectX = (sensorRelRect.x - 0.5f) / arRatio + 0.5f;
-        var screenRelRectY = sensorRelRect.y;
-        var screenRelRectWidth = sensorRelRect.width / arRatio;
-        var screenRelRectHeight = sensorRelRect.height;
+        // X-axis offset for copying over mask data
+        var xOffset = (newWidth - _cameraSensor.Width) / 2;
 
-        // To screen-absolute coordinates
-        var screenAbsRectX = screenRelRectX * screenWidth;
-        var screenAbsRectY = screenRelRectY * screenHeight;
-        var screenAbsRectWidth = screenRelRectWidth * screenWidth;
-        var screenAbsRectHeight = screenRelRectHeight * screenHeight;
+        // New Texture2D representation of the mask in the sensor coordinate; read
+        // values from the resized screenTexture, row by row 
+        var sensorTexture = new Texture2D(
+            _cameraSensor.Width, _cameraSensor.Height, TextureFormat.RHalf, false
+        );
+        for (var i = 0; i < _cameraSensor.Height; i++)
+        {
+            int sourceStart, sourceEnd, targetStart;
+            if (xOffset > 0)
+            {
+                // Screen is 'wider' in aspect ratio, read with the x-axis offset
+                sourceStart = i * _cameraSensor.Width + xOffset;
+                sourceEnd = sourceStart + _cameraSensor.Width;
+                targetStart = i * _cameraSensor.Width;
+            }
+            else
+            {
+                // Screen is 'narrower' in aspect ratio, write with the x-axis offset
+                sourceStart = i * _cameraSensor.Width;
+                sourceEnd = sourceStart + _cameraSensor.Width;
+                targetStart = i * _cameraSensor.Width - xOffset;
+            }
 
-        return new Rect(screenAbsRectX, screenAbsRectY, screenAbsRectWidth, screenAbsRectHeight);
+            var rowData = resizedMask[sourceStart..sourceEnd];
+            sensorTexture.SetPixelData(rowData, 0, targetStart);
+        }
+
+        return sensorTexture.GetPixelData<float>(0).ToArray();
     }
 }

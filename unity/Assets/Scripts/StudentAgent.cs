@@ -30,9 +30,9 @@ public class StudentAgent : DialogueAgent
 
     public override void Heuristic(in ActionBuffers actionBuffers)
     {
-        // Update box info whenever needed
-        if (!EnvEntity.annotationStorage.boxesUpToDate)
-            StartCoroutine(CaptureBoxes());
+        // Update annotation info whenever needed
+        if (!EnvEntity.annotationStorage.annotationsUpToDate)
+            StartCoroutine(CaptureMasks());
 
         // 'Utter' any outgoing messages
         if (outgoingMsgBuffer.Count > 0)

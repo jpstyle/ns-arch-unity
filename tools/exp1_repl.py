@@ -51,14 +51,14 @@ def main(cfg):
         # Each dict contains concepts to be tested and taught in a single episode,
         # with string concept names as key and Unity GameObject string name handle
         # as value
-        { "base truck": "/truck" },
-        { "dump truck": "/truck" },
-        { "fire truck": "/truck" },
-        { "missile truck": "/truck" }
-        # { "truck": "/truck" },
-        # { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
-        # { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
-        # { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+        # { "base truck": "/truck" },
+        # { "dump truck": "/truck" },
+        # { "fire truck": "/truck" },
+        # { "missile truck": "/truck" }
+        { "truck": "/truck" },
+        { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
+        { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
+        { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
     ]
 
     # Student/teacher-side string message communication side channels
@@ -72,7 +72,7 @@ def main(cfg):
     # Start communication with Unity
     env = UnityEnvironment(
         # Uncomment next line when running with Unity linux build
-        f"{cfg.paths.root_dir}/unity/Builds/truck_domain.x86_64",
+        # f"{cfg.paths.root_dir}/unity/Builds/truck_domain.x86_64",
         side_channels=[student_channel, teacher_channel, env_par_channel],
         timeout_wait=600, seed=cfg.seed
     )

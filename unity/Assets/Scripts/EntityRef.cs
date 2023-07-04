@@ -3,13 +3,13 @@ using UnityEngine;
 public class EntityRef
 {
     public readonly string stringRef;
-    public readonly Rect bboxRef;
+    public readonly float[] maskRef;
     public readonly EntityRefType refType;
 
-    public EntityRef(Rect reference)
+    public EntityRef(float[] reference)
     {
-        bboxRef = reference;
-        refType = EntityRefType.BBox;
+        maskRef = reference;
+        refType = EntityRefType.Mask;
     }
     public EntityRef(string reference)
     {
@@ -18,4 +18,4 @@ public class EntityRef
     }
 }
 
-public enum EntityRefType { String, BBox }
+public enum EntityRefType { String, Mask }

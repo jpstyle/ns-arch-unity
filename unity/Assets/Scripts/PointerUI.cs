@@ -5,7 +5,8 @@ using UnityEngine.UIElements;
 
 public class PointerUI : MonoBehaviour
 {
-    // Highlights object with smallest bounding box on hover; defined per display
+    // Highlights object with smallest bounding box + segmentation mask on hover;
+    // defined per display
 
     // Associate with this dialogue UI instance; demonstrative pointing will add
     // to the current input data
@@ -64,7 +65,7 @@ public class PointerUI : MonoBehaviour
 
         // Find boxes that the mouse is currently hovering over
         var entitiesHovering = _envEntities.FindAll(
-            ent => ent.boxes.Count > 0 && ent.boxes[_displayId].Contains(currentPosition)
+            ent => ent.masks.Count > 0 && ent.boxes[_displayId].Contains(currentPosition)
         );
 
         EnvEntity newFocus = null;
@@ -96,7 +97,7 @@ public class PointerUI : MonoBehaviour
             if (_currentFocus is null)
                 RemoveHighlight();
             else
-                HighlightBox(_currentFocus);
+                HighlightMask(_currentFocus);
         }
     }
 
@@ -110,16 +111,32 @@ public class PointerUI : MonoBehaviour
         _envEntities.Remove(ent);
     }
 
-    public void HighlightBox(EnvEntity ent)
+    public void HighlightMask(EnvEntity ent)
     {
         // Highlight the target ent by setting display to Flex and changing style
         _pointerRect.style.display = DisplayStyle.Flex;
+        var dw = Display.displays[_displayId].renderingWidth;
+        var dh = Display.displays[_displayId].renderingHeight;
 
         var highlightBox = ent.boxes[_displayId];
-        _pointerRect.style.left = new StyleLength(highlightBox.x);
-        _pointerRect.style.top = new StyleLength(highlightBox.y);
-        _pointerRect.style.width = new StyleLength(highlightBox.width);
-        _pointerRect.style.height = new StyleLength(highlightBox.height);
+        var bx = (int) highlightBox.x;
+        var by = (int) highlightBox.y;
+        var bw = (int) highlightBox.width;
+        var bh = (int) highlightBox.height;
+        _pointerRect.style.left = new StyleLength(bx);
+        _pointerRect.style.top = new StyleLength(by);
+        _pointerRect.style.width = new StyleLength(bw);
+        _pointerRect.style.height = new StyleLength(bh);
+
+        var highlightMask = ent.masks[_displayId]
+            .Select((v, i) => (v, i % dw, dh - i / dw))
+            .Where(v => v.Item2 >= bx && v.Item2 < bx+bw && v.Item3 > by && v.Item3 <= by+bh)
+            .Select(v => new Color(1f, 0.588f, 0f, v.Item1 * 0.8f))
+            .ToArray();
+        var highlightTexture = new Texture2D((int)highlightBox.width, (int)highlightBox.height);
+        highlightTexture.SetPixels(highlightMask);
+        highlightTexture.Apply();
+        _pointerRect.style.backgroundImage = new StyleBackground(highlightTexture);
 
         _targetNameLabel.text = ent.gameObject.name;
     }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -7,14 +8,14 @@ using UnityEngine.Perception.GroundTruth.Labelers;
 
 public class StorageEndpoint : IConsumerEndpoint
 {
-    // Boolean flag indicating whether boxes for all entities are processed
+    // Boolean flag indicating whether annotations for all entities are processed
     // up-to-date; false at the beginning, and during processing frames
     [HideInInspector]
-    public bool boxesUpToDate;
+    public bool annotationsUpToDate;
     
     // Storage implemented as a nested dictionary; outer mapping from PerceptionCamera ID,
-    // to inner mapping from instance ID to bounding box
-    public Dictionary<string, Dictionary<string, BoundingBox>> boxStorage;
+    // to inner mapping from instance ID to annotation
+    public Dictionary<string, Dictionary<string, float[]>> maskStorage;
 
     public string description => "Endpoint that stores latest annotations instead of writing out to disk";
 
@@ -33,7 +34,7 @@ public class StorageEndpoint : IConsumerEndpoint
     public void SimulationStarted(SimulationMetadata metadata)
     {
         // Initialize annotation storage
-        boxStorage = new Dictionary<string, Dictionary<string, BoundingBox>>();
+        maskStorage = new Dictionary<string, Dictionary<string, float[]>>();
     }
 
     public void SensorRegistered(SensorDefinition sensor)
@@ -53,25 +54,40 @@ public class StorageEndpoint : IConsumerEndpoint
 
     public void FrameGenerated(Frame frame)
     {
-        // Retrieve the bounding box labeler, then the annotation list
-        var boxLabeler = frame.sensors.OfType<RgbSensor>().Single();
-        var boxAnnotations = boxLabeler.annotations.OfType<BoundingBoxAnnotation>().Single();
+        // Retrieve the labeler, then the annotation list
+        var labeler = frame.sensors.OfType<RgbSensor>().Single();
+        var maskAnnotations =
+            labeler.annotations.OfType<InstanceSegmentationAnnotation>().Single();
+
+        // Instance segmentation map of whole scene view
+        var segMap = new Texture2D(2, 2);
+        segMap.LoadImage(maskAnnotations.buffer);
+        var colorMap = segMap.GetPixels32();
 
         // Initialize inner mapping if not already initialized
-        if (!boxStorage.ContainsKey(boxLabeler.id))
-            boxStorage[boxLabeler.id] = new Dictionary<string, BoundingBox>();
-        
-        // Store the box annotations
-        foreach (var ann in boxAnnotations.boxes)
-            boxStorage[boxLabeler.id][$"ent_{ann.instanceId}"] = ann;
+        if (!maskStorage.ContainsKey(labeler.id))
+            maskStorage[labeler.id] = new Dictionary<string, float[]>();
 
-        boxesUpToDate = true;
+        // Store the annotations
+        foreach (var ann in maskAnnotations.instances)
+        {
+            // Color match to get boolean (2d) array, then convert to float
+            var msk = colorMap
+                .Select(
+                    c => c.r == ann.color.r && c.g == ann.color.g && c.b == ann.color.b
+                )
+                .Select(Convert.ToSingle)
+                .ToArray();
+            maskStorage[labeler.id][$"ent_{ann.instanceId}"] = msk;
+        }
+
+        annotationsUpToDate = true;
     }
 
     public void SimulationCompleted(SimulationMetadata metadata)
     {
         // Release elements, clear storage
-        boxStorage.Clear();
+        maskStorage.Clear();
     }
 
     public (string, int) ResumeSimulationFromCrash(int maxFrameCount)

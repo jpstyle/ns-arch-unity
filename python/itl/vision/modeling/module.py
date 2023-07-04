@@ -101,7 +101,10 @@ class VisualSceneAnalyzer(pl.LightningModule):
                 )
         else:
             self.to_train_prefixes = []
-        
+
+        self.validation_step_outputs = defaultdict(list)
+        self.test_step_outputs = defaultdict(list)
+
         # Loss component weights
         self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 1 }
 
@@ -129,13 +132,14 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
         return total_loss
 
-    def validation_step(self, batch, batch_idx, *_):
+    def validation_step(self, batch, batch_idx, dataloader_idx):
         loss, metrics = process_batch(self, batch, batch_idx)
-        return loss, metrics, batch[1]
+        pred = loss, metrics, batch[1]
+        self.validation_step_outputs[dataloader_idx].append(pred)
+        return pred
 
-    def validation_epoch_end(self, outputs):
-        if len(self.trainer.val_dataloaders) == 1:
-            outputs = [outputs]
+    def on_validation_epoch_end(self):
+        outputs = list(self.validation_step_outputs.values())
 
         avg_total_losses = []
         for outputs_per_dataloader in outputs:
@@ -184,13 +188,14 @@ class VisualSceneAnalyzer(pl.LightningModule):
         final_avg_loss = sum(avg_total_losses) / (len(avg_total_losses) / len(outputs))
         self.log(f"val_loss", final_avg_loss, add_dataloader_idx=False)
 
-    def test_step(self, batch, batch_idx, *_):
+    def test_step(self, batch, batch_idx, dataloader_idx):
         _, metrics = process_batch(self, batch, batch_idx)
-        return metrics, batch[1]
+        pred = metrics, batch[1]
+        self.test_step_outputs[dataloader_idx].append(pred)
+        return pred
     
-    def test_epoch_end(self, outputs):
-        if len(self.trainer.test_dataloaders) == 1:
-            outputs = [outputs]
+    def test_epoch_end(self):
+        outputs = list(self.test_step_outputs.values())
 
         for outputs_per_dataloader in outputs:
             if len(outputs_per_dataloader) == 0:

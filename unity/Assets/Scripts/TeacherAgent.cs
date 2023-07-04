@@ -137,8 +137,8 @@ public class TeacherAgent : DialogueAgent
         }
         Physics.simulationMode = SimulationMode.FixedUpdate;
 
-        // Currently stored bounding box info is now obsolete
-        EnvEntity.annotationStorage.boxesUpToDate = false;
+        // Currently stored annotation info is now obsolete
+        EnvEntity.annotationStorage.annotationsUpToDate = false;
 
         // Clean dialogue history and add new episode header record
         dialogueUI.ClearHistory();
@@ -156,9 +156,9 @@ public class TeacherAgent : DialogueAgent
 
     public override void Heuristic(in ActionBuffers actionBuffers)
     {
-        // Update box info whenever needed
-        if (!EnvEntity.annotationStorage.boxesUpToDate)
-            StartCoroutine(CaptureBoxes());
+        // Update annotation whenever needed
+        if (!EnvEntity.annotationStorage.annotationsUpToDate)
+            StartCoroutine(CaptureMasks());
 
         // 'Utter' any outgoing messages
         if (outgoingMsgBuffer.Count > 0)

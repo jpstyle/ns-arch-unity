@@ -49,8 +49,8 @@ def process_batch(model, batch, batch_idx):
         # provided original size info
         processed_points = model.sam_processor._check_and_preprocess_points(
             input_points=batch_data["instance_centroid"].cpu(),
-            input_labels=torch.ones(B, dtype=torch.long),
-            input_boxes=batch_data["instance_bbox"].cpu(),
+            input_labels=torch.ones(B, 1, dtype=torch.long),
+            input_boxes=batch_data["instance_bbox"][:,None,:].cpu(),
         )
 
         processed_input = model.sam_processor._normalize_and_convert(
@@ -75,8 +75,8 @@ def process_batch(model, batch, batch_idx):
         processed_input = model.sam_processor(
             batch_data["image"],
             input_points=batch_data["instance_centroid"].cpu(),
-            input_labels=torch.ones(B, dtype=torch.long),
-            input_boxes=batch_data["instance_bbox"].cpu(),
+            input_labels=torch.ones(B, 1, dtype=torch.long),
+            input_boxes=batch_data["instance_bbox"][:,None,:].cpu(),
             return_tensors="pt"
         ).to(model.device)
 
@@ -371,7 +371,7 @@ def process_batch(model, batch, batch_idx):
     # Second prompt: Support + centroid (hybrid), predict 1 mask
     centroid_tokens, _ = model.sam.prompt_encoder(
         processed_input["input_points"][:,:,None],
-        processed_input["input_labels"][:,:,None],
+        processed_input["input_labels"],
         None,
         None
     )

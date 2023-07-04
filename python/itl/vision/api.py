@@ -511,8 +511,10 @@ class VisionModule:
             wb_kwargs["log_model"] = True
         # Whether to resume training from previous few-shot components
         if "fs_model" in self.cfg.vision.model:
-            wb_kwargs["id"] = self.cfg.vision.model.fs_model[len(WB_PREFIX):]
-            wb_kwargs["resume"] = "must"
+            if self.cfg.vision.model.fs_model.startswith(WB_PREFIX):
+                wb_path = self.cfg.vision.model.fs_model[len(WB_PREFIX):].split(":")
+                wb_kwargs["id"] = wb_path[0]
+                wb_kwargs["resume"] = "must"
         wb_logger = WandbLogger(**wb_kwargs)
 
         # Configure and run trainer
@@ -545,12 +547,14 @@ class VisionModule:
 
         if "fs_model" in self.cfg.vision.model:
             if self.cfg.vision.model.fs_model.startswith(WB_PREFIX):
+                wb_path = self.cfg.vision.model.fs_model[len(WB_PREFIX):].split(":")
+
                 # Configure W&B logger
                 wb_kwargs = {
                     "project": os.environ.get("WANDB_PROJECT"),
                     "entity": os.environ.get("WANDB_ENTITY"),
                     "save_dir": self.cfg.paths.outputs_dir,
-                    "id": self.cfg.vision.model.fs_model[len(WB_PREFIX):],
+                    "id": wb_path[0],
                     "resume": "must"
                 }
                 # Whether to run offline

@@ -3,6 +3,7 @@ Helper methods for preparing VAW dataset for training/validation/testing vision
 module, to be called by prepare_data() in PyTorch Lightning DataModule.
 """
 import os
+import time
 import json
 import logging
 import requests
@@ -77,11 +78,10 @@ def _download_indiv_image(url_and_paths):
     else:
         try:
             urlretrieve(url, img_path)
-        except URLError as e:
-            logger.info(f"{e}: Retrying download {url}...")
+        except:
+            time.sleep(3)
+            logger.info(f"Retrying download {url}...")
             _download_indiv_image(url_and_paths)
-        except e:
-            raise e
 
         return True
 
