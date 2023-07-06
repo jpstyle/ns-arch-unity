@@ -158,8 +158,8 @@ public class DialogueAgent : Agent
                     switch (demRef.refType)
                     {
                         case EntityRefType.Mask:
-                            var screenAbsMask = MaskCoordinateSwitch(demRef.maskRef, false);
-                            demRefsResolved[range] = EnvEntity.FindByMask(screenAbsMask, targetDisplay).uid;
+                            var screenMask = MaskCoordinateSwitch(demRef.maskRef, false);
+                            demRefsResolved[range] = EnvEntity.FindByMask(screenMask, targetDisplay).uid;
                             break;
                         case EntityRefType.String:
                             demRefsResolved[range] = EnvEntity.FindByObjectPath(demRef.stringRef).uid;
