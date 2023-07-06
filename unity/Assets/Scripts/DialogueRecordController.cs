@@ -92,7 +92,7 @@ public class DialogueRecordController
         }
     }
 
-    private void HighlightReference(PointerOverLinkTagEvent evt)
+    private static void HighlightReference(PointerOverLinkTagEvent evt)
     {
         var highlightEnt = EnvEntity.FindByUid(evt.linkID);
         
@@ -101,7 +101,7 @@ public class DialogueRecordController
             pUI.HighlightMask(highlightEnt);
     }
 
-    private void RemoveReferenceHighlight(PointerOutLinkTagEvent evt)
+    private static void RemoveReferenceHighlight(PointerOutLinkTagEvent evt)
     {
         var pointerUIs = Object.FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)

@@ -133,7 +133,7 @@ public class PointerUI : MonoBehaviour
             .Where(v => v.Item2 >= bx && v.Item2 < bx+bw && v.Item3 > by && v.Item3 <= by+bh)
             .Select(v => new Color(1f, 0.588f, 0f, v.Item1 * 0.8f))
             .ToArray();
-        var highlightTexture = new Texture2D((int)highlightBox.width, (int)highlightBox.height);
+        var highlightTexture = new Texture2D((int) highlightBox.width, (int) highlightBox.height);
         highlightTexture.SetPixels(highlightMask);
         highlightTexture.Apply();
         _pointerRect.style.backgroundImage = new StyleBackground(highlightTexture);

@@ -204,55 +204,80 @@ public class DialogueAgent : Agent
         _maskCapturing = false;
     }
 
-    private float[] MaskCoordinateSwitch(float[] screenMask, bool screenToSensor)
+    private float[] MaskCoordinateSwitch(float[] sourceMask, bool screenToSensor)
     {
         var targetDisplay = _cameraSensor.Camera.targetDisplay;
         var screenWidth = Display.displays[targetDisplay].renderingWidth;
         var screenHeight = Display.displays[targetDisplay].renderingHeight;
+        var sensorWidth = _cameraSensor.Width;
+        var sensorHeight = _cameraSensor.Height;
+
+        int sourceWidth, sourceHeight, targetWidth, targetHeight;
+        if (screenToSensor)
+        {
+            sourceWidth = screenWidth; sourceHeight = screenHeight;
+            targetWidth = sensorWidth; targetHeight = sensorHeight;
+        }
+        else
+        {
+            sourceWidth = sensorWidth; sourceHeight = sensorHeight;
+            targetWidth = screenWidth; targetHeight = screenHeight;
+        }
 
         // Texture2D representation of the provided mask to be manipulated, in the
         // screen coordinate
-        var screenTexture = new Texture2D(
-            screenWidth, screenHeight, TextureFormat.RHalf, false
+        var sourceTexture = new Texture2D(sourceWidth, sourceHeight);
+        sourceTexture.SetPixels(
+            sourceMask.Select(v => new Color(1f, 1f, 1f, v)).ToArray()
         );
-        screenTexture.SetPixelData(screenMask, 0);
 
-        // To CameraSensor-relative coordinate; resize by height ratio
-        var heightRatio = _cameraSensor.Height / screenHeight;
-        var newWidth = screenWidth * heightRatio;
-        screenTexture.Reinitialize(newWidth, _cameraSensor.Height);
-        var resizedMask = screenTexture.GetPixelData<float>(0).ToArray();
+        // To target coordinate, rescale by height ratio
+        // (For some reason it's freakishly inconvenient to resize images in Unity)
+        var heightRatio = (float) targetHeight / sourceHeight;
+        var newWidth = (int) (sourceWidth * heightRatio);
+        var rescaledSourceTexture = new Texture2D(newWidth, targetHeight);
+        for (var i = 0; i < newWidth; i++)
+        {
+            var u = (float) i / newWidth;
+            for (var j = 0; j < targetHeight; j++)
+            {
+                var v = (float) j / targetHeight;
+                var interpolatedPixel = sourceTexture.GetPixelBilinear(u, v);
+                rescaledSourceTexture.SetPixel(i, targetHeight-j, interpolatedPixel);
+                    // Flip y-axis
+            }
+        }
+        var rescaledMask = rescaledSourceTexture.GetPixels();
 
         // X-axis offset for copying over mask data
-        var xOffset = (newWidth - _cameraSensor.Width) / 2;
+        var xOffset = (newWidth - targetWidth) / 2;
 
-        // New Texture2D representation of the mask in the sensor coordinate; read
-        // values from the resized screenTexture, row by row 
-        var sensorTexture = new Texture2D(
-            _cameraSensor.Width, _cameraSensor.Height, TextureFormat.RHalf, false
-        );
-        for (var i = 0; i < _cameraSensor.Height; i++)
+        // Read values from the rescaled sourceTexture, row by row, to obtain the
+        // final mask transformation
+        var targetMask = new float[targetWidth * targetHeight];
+        for (var j = 0; j < targetHeight; j++)
         {
             int sourceStart, sourceEnd, targetStart;
             if (xOffset > 0)
             {
-                // Screen is 'wider' in aspect ratio, read with the x-axis offset
-                sourceStart = i * _cameraSensor.Width + xOffset;
-                sourceEnd = sourceStart + _cameraSensor.Width;
-                targetStart = i * _cameraSensor.Width;
+                // Source is 'wider' in aspect ratio, read with the x-axis offset
+                sourceStart = j * newWidth + xOffset;
+                sourceEnd = sourceStart + targetWidth;
+                targetStart = j * targetWidth;
             }
             else
             {
-                // Screen is 'narrower' in aspect ratio, write with the x-axis offset
-                sourceStart = i * _cameraSensor.Width;
-                sourceEnd = sourceStart + _cameraSensor.Width;
-                targetStart = i * _cameraSensor.Width - xOffset;
+                // Source is 'narrower' in aspect ratio, write with the x-axis offset
+                sourceStart = j * newWidth;
+                sourceEnd = sourceStart + targetWidth;
+                targetStart = j * targetWidth - xOffset;
             }
 
-            var rowData = resizedMask[sourceStart..sourceEnd];
-            sensorTexture.SetPixelData(rowData, 0, targetStart);
+            for (var i = 0; i < sourceEnd-sourceStart; i++)
+                targetMask[i+targetStart] = rescaledMask[i+sourceStart].a;
         }
 
-        return sensorTexture.GetPixelData<float>(0).ToArray();
+        return targetMask;
     }
 }
+

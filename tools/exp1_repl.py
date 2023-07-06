@@ -142,7 +142,7 @@ def main(cfg):
                                 }
                                 agent_loop_input["l_usr_in"].append(utterance)
                                 agent_loop_input["pointing"].append(dem_refs)
-                        
+
                         # ITL agent loop: process input and generate output (action)
                         act_out = student.loop(**agent_loop_input, new_scene=new_scene)
 
