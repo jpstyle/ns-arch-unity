@@ -1,10 +1,9 @@
-import torch
-import torchvision
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib.widgets import RectangleSelector
 
+from ..vision.utils import mask_iou
+
+
+IOU_THRES = 0.8
 
 class DialogueManager:
     """Maintain dialogue state and handle NLU, NLG in context"""
@@ -38,36 +37,29 @@ class DialogueManager:
         """ Export the current dialogue information state as a dict """
         return vars(self)
 
-    def dem_point(self, dem_bbox):
+    def dem_point(self, dem_mask):
         """
-        Provided a bounding box specification, return reference (by object id) to
-        an appropriate environment entity recognized, potentially creating one if
-        not already explicitly aware of it as object.
+        Provided a segmentation mask specification, return reference (by object id)
+        to an appropriate environment entity recognized, potentially creating one
+        if not already explicitly aware of it as object.
         """
         if len(self.referents["env"]) > 0:
-            # First check if there's any existing high-IoU bounding box; by 'high'
-            # we refer to some arbitrary threshold -- let's use 0.8 here
-            env_ref_bboxes = torch.stack(
-                [torch.tensor(e["bbox"]) for e in self.referents["env"].values()]
-            )
+            # First check if there's any existing high-IoU segmentation mask; by
+            # 'high' we refer to the threshold we set as global constant above
+            env_ref_masks = np.stack([e["mask"] for e in self.referents["env"].values()])
+            ious = mask_iou(dem_mask[None], env_ref_masks)[0]
+            best_match = ious.argmax()
 
-            iou_thresh = 0.7
-            ious = torchvision.ops.box_iou(
-                torch.tensor(dem_bbox)[None,:], env_ref_bboxes
-            )
-            best_match = ious.max(dim=-1)
-
-            if best_match.values.item() > iou_thresh:
-                # Assume the 'pointed' entity is actually this one
-                max_ind = best_match.indices.item()
-                pointed = list(self.referents["env"].keys())[max_ind]
+            if ious[best_match] > IOU_THRES:
+                # Presume the 'pointed' entity is actually this one
+                pointed = list(self.referents["env"].keys())[best_match]
             else:
                 # Register the entity as a novel environment referent
-                pointed = f"o{len(env_ref_bboxes)}"
+                pointed = f"o{len(env_ref_masks)}"
 
                 self.referents["env"][pointed] = {
-                    "bbox": dem_bbox,
-                    "area": (dem_bbox[2]-dem_bbox[0]) * (dem_bbox[3]-dem_bbox[1])
+                    "mask": dem_mask,
+                    "area": dem_mask.sum().item()
                 }
                 self.referent_names[pointed] = pointed
         else:
@@ -75,8 +67,8 @@ class DialogueManager:
             pointed = "o0"
 
             self.referents["env"][pointed] = {
-                "bbox": dem_bbox,
-                "area": (dem_bbox[2]-dem_bbox[0]) * (dem_bbox[3]-dem_bbox[1])
+                "mask": dem_mask,
+                "area": dem_mask.sum().item()
             }
             self.referent_names[pointed] = pointed
 

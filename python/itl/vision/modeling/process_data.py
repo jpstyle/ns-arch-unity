@@ -1,6 +1,6 @@
 """
-Helper methods factored out, which perform computations required for two tasks
-with 'opposite' directions:
+Helper methods factored out, which are needed for performing computations for two
+tasks with 'opposite' directions:
     1) embedding (to be classified later) instances in input image given their
         references by segmentation
     2) searching instances of specified concept in input image given its support
@@ -20,7 +20,7 @@ from transformers.image_processing_utils import BatchFeature
 
 EPS = 1e-8              # Value used for numerical stabilization
 
-def process_batch(model, batch, batch_idx):
+def process_batch(model, batch):
     """
     Shared subroutine for processing batch to obtain loss & performance metric
     """
@@ -42,43 +42,12 @@ def process_batch(model, batch, batch_idx):
 
     if "image_embedding" in batch_data:
         # Passed pre-computed image encodings
-        assert "original_sizes" in batch_data
-        assert "reshaped_input_sizes" in batch_data
-
-        # Run part of SamProcessor.__call__ method except image processing with
-        # provided original size info
-        processed_points = model.sam_processor._check_and_preprocess_points(
-            input_points=batch_data["instance_centroid"].cpu(),
-            input_labels=torch.ones(B, 1, dtype=torch.long),
-            input_boxes=batch_data["instance_bbox"][:,None,:].cpu(),
-        )
-
-        processed_input = model.sam_processor._normalize_and_convert(
-            BatchFeature({
-                "original_sizes": batch_data["original_sizes"],
-                "reshaped_input_sizes": batch_data["reshaped_input_sizes"]
-            }),
-            batch_data["original_sizes"].cpu().numpy(),
-            input_points=processed_points[0],
-            input_labels=processed_points[1],
-            input_boxes=processed_points[2],
-            return_tensors="pt",
-        ).to(model.device)
-
+        processed_input = preprocess_input(model, batch_data, False)
         img_embs = batch_data["image_embedding"]
 
     else:
         # Passed raw images, need to compute their encodings
-        assert "image" in batch_data
-
-        # Preprocess input images and points & box annotations
-        processed_input = model.sam_processor(
-            batch_data["image"],
-            input_points=batch_data["instance_centroid"].cpu(),
-            input_labels=torch.ones(B, 1, dtype=torch.long),
-            input_boxes=batch_data["instance_bbox"][:,None,:].cpu(),
-            return_tensors="pt"
-        ).to(model.device)
+        processed_input = preprocess_input(model, batch_data, True)
 
         # Obtain image embeddings from the raw pixel values (one-by-one, due to harsh
         # memory consumption of the image encoder)
@@ -93,45 +62,22 @@ def process_batch(model, batch, batch_idx):
     # due to having a segmentation mask so small or invalid that its decoded binary
     # mask has no nonzero values); use this boolean flag array later to screen out
     # invalid values
-    valid_entries = batch_data["instance_bbox"].sum(dim=-1) > 0
+    valid_entries = batch_data["instance_bbox"].sum(dim=(-2,-1)) > 0
 
     # roi_align needs consistent dtypes
     processed_input["input_boxes"] = processed_input["input_boxes"].to(img_embs.dtype)
 
-    # Pad and resize instance masks to match the downsampled feature map size,
-    # needed for shape-guided RoIAlign
-    pad_target_sizes = [max(mask.shape) for mask in batch_data["instance_mask"]]
-    pad_specs = [
-        (0,0,0,tgt_size-org_size[0].item())
-            if org_size[0] < tgt_size else (0,tgt_size-org_size[1].item())
-        for tgt_size, org_size in zip(
-            pad_target_sizes, processed_input["original_sizes"]
-        )
-    ]
-    masks_resized = [
-        F.pad(mask, p_spec, value=0).to(torch.float)
-        for mask, p_spec in zip(batch_data["instance_mask"], pad_specs)
-    ]
-    masks_resized = torch.stack([
-        resize(mask[None], img_emb.shape[1:])
-        for mask, img_emb in zip(masks_resized, img_embs)
-    ])
-
-    # Shape-guided RoIAlign; amplify feature map areas corresponding to the masks,
-    # then run roi_align to obtain fixed-sized feature maps for each instance
-    # (cf. [Deeply Shape-guided Cascade for Instance Segmentation], Ding et al. 2021)
-    img_embs_amplified = img_embs * (1 + masks_resized)
-    patch_size = model.sam.config.vision_config.patch_size
-    resize_size = model.sam.config.vision_config.image_size
-    sg_roi_embs = roi_align(
-        img_embs_amplified, list(processed_input["input_boxes"]),
-        output_size=model.roi_align_out,
-        spatial_scale=patch_size / resize_size,
+    # Shape-guided RoIAlign
+    sg_roi_embs = shape_guided_roi_align(
+        model, img_embs,
+        batch_data["instance_mask"],
+        processed_input["input_boxes"],
+        processed_input["original_sizes"]
     )
 
     # Embed the fixed-sized feature maps into 1-D [conc_type]-centric embeddings;
     # class-centric embeddings are needed for batches of both conc_types
-    cls_embs, att_embs = _compute_conc_embs(model, sg_roi_embs, conc_type)
+    cls_embs, att_embs = compute_conc_embs(model, sg_roi_embs, conc_type)
 
     # Determine appropriate values and modules to use in computation by conc_type
     if conc_type == "class":
@@ -232,8 +178,16 @@ def process_batch(model, batch, batch_idx):
     no_mask_dense_embs = no_mask_dense_embs[...,None,None].expand_as(img_embs)
 
     # Ground truth masks resized (again) to match decoder output sizes
-    # (4 corresponds to two 2x deconvolutions in mask decoder)
+    # (4 for low_size corresponds to two 2x deconvolutions in mask decoder)
+    patch_size = model.sam.config.vision_config.patch_size
+    resize_size = model.sam.config.vision_config.image_size
     low_size = resize_size // patch_size * 4
+    pad_target_sizes = [max(msk.shape) for msk in batch_data["instance_mask"]]
+    pad_specs = [
+        (0,0,0,tgt_size-org_size[0].item())
+            if org_size[0] < tgt_size else (0,tgt_size-org_size[1].item())
+        for tgt_size, org_size in zip(pad_target_sizes, processed_input["original_sizes"])
+    ]
     gt_masks = [
         [F.pad(mask, p_spec, value=0) for mask in masks]
         for masks, p_spec in zip(batch_data["concept_masks"], pad_specs)
@@ -370,7 +324,7 @@ def process_batch(model, batch, batch_idx):
 
     # Second prompt: Support + centroid (hybrid), predict 1 mask
     centroid_tokens, _ = model.sam.prompt_encoder(
-        processed_input["input_points"][:,:,None],
+        processed_input["input_points"],
         processed_input["input_labels"],
         None,
         None
@@ -398,8 +352,106 @@ def process_batch(model, batch, batch_idx):
     return losses, metrics
 
 
-def _compute_conc_embs(model, sg_roi_embs, conc_type):
-    """ Factored out [conc_type]-specific embedding computation logic """
+def preprocess_input(model, batch_data, img_prompt_together):
+    """ Input preprocessing logic factored out and exposed """
+    # Massage input prompts into appropriate formats
+    if "instance_point" in batch_data:
+        B = batch_data["instance_point"].shape[0]
+        N_O = batch_data["instance_point"].shape[1]
+        N_P = batch_data["instance_point"].shape[2]
+        input_points = batch_data["instance_point"].cpu()
+        input_labels = torch.ones(B, N_O, N_P, dtype=torch.long)
+    else:
+        input_points = input_labels = None
+    
+    if "instance_bbox" in batch_data:
+        input_boxes = batch_data["instance_bbox"].cpu()
+    else:
+        input_boxes = None
+
+    if img_prompt_together:
+        # Passed raw images, need to compute their encodings
+        assert "image" in batch_data
+
+        processed_input = model.sam_processor(
+            batch_data["image"],
+            input_points=input_points,
+            input_labels=input_labels,
+            input_boxes=input_boxes,
+            return_tensors="pt"
+        ).to(model.device)
+
+    else:    
+        # Passed pre-computed image encodings
+        assert "original_sizes" in batch_data
+
+        # Run part of SamProcessor.__call__ method except image processing with
+        # provided original size info
+        processed_points = model.sam_processor._check_and_preprocess_points(
+            input_points=input_points,
+            input_labels=input_labels,
+            input_boxes=input_boxes,
+        )
+
+        base_features = {
+            "original_sizes": batch_data["original_sizes"]
+        }
+        if "reshaped_input_sizes" in batch_data:
+            base_features["reshaped_input_sizes"] = batch_data["reshaped_input_sizes"]
+        processed_input = model.sam_processor._normalize_and_convert(
+            BatchFeature(base_features),
+            batch_data["original_sizes"].cpu().numpy(),
+            input_points=processed_points[0],
+            input_labels=processed_points[1],
+            input_boxes=processed_points[2],
+            return_tensors="pt",
+        ).to(model.device)
+
+    return processed_input
+
+
+def shape_guided_roi_align(model, img_embs, masks, boxes, orig_sizes):
+    """
+    Shape-guided RoIAlign; amplify feature map areas corresponding to the masks,
+    then run roi_align to obtain fixed-sized feature maps for each instance
+    (cf. [Deeply Shape-guided Cascade for Instance Segmentation], Ding et al. 2021)
+    """
+    # Sync devices and to list
+    masks = [msk.to(img_embs.device) for msk in masks]
+    boxes = [box.to(img_embs.device) for box in boxes]
+
+    # Pad and resize instance masks to match the downsampled feature map size,
+    # needed for shape-guided RoIAlign
+    pad_target_sizes = [max(msk.shape) for msk in masks]
+    pad_specs = [
+        (0, 0, 0, tgt_size-org_size[0])
+            if org_size[0] < tgt_size else (0, tgt_size-org_size[1])
+        for tgt_size, org_size in zip(pad_target_sizes, orig_sizes)
+    ]
+    masks_resized = [
+        F.pad(msk, p_spec, value=0).to(torch.float)
+        for msk, p_spec in zip(masks, pad_specs)
+    ]
+    masks_resized = torch.stack([
+        resize(msk[None], img_emb.shape[1:])
+        for msk, img_emb in zip(masks_resized, img_embs)
+    ])
+
+    # RoI-align on feature maps where features in regions covered by the provided
+    # masks are further amplified
+    img_embs_amplified = img_embs * (0.5 + masks_resized)
+    patch_size = model.sam.config.vision_config.patch_size
+    resize_size = model.sam.config.vision_config.image_size
+    sg_roi_embs = roi_align(
+        img_embs_amplified, boxes,
+        output_size=model.roi_align_out, spatial_scale=patch_size/resize_size
+    )
+
+    return sg_roi_embs
+
+
+def compute_conc_embs(model, sg_roi_embs, conc_type):
+    """ [conc_type]-specific embedding computation logic factored out and exposed """
     # Compute class-centric embeddings
     cls_embs = model.embed_cls(sg_roi_embs)
 

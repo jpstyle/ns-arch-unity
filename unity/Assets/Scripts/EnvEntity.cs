@@ -13,8 +13,8 @@ public class EnvEntity : MonoBehaviour
     // a unique identifier, 2) obtaining instance segmentation masks whenever needed
 
     // Storage of segmentation masks, maintained as dictionary from target display
-    // id to binary maps
-    public Dictionary<int, float[]> masks;
+    // id to corresponding color32
+    public Dictionary<int, Color32[]> masks;
     // Storage of axis-aligned bounding boxes (AABBs), inferred from the segmentation
     // masks; also dictionary from display id to boxes
     public Dictionary<int, Rect> boxes;
@@ -35,7 +35,7 @@ public class EnvEntity : MonoBehaviour
 
     // Boolean flag whether this entity has its up-to-date segmentation masks (per camera)
     // computed and ready
-    private bool _masksUpdated;
+    private bool _annotationsUpdated;
     
     // List of cameras for each of which masks should be computed and stored for
     // the entity; dictionary mapping from PerceptionCamera ID to target display
@@ -44,7 +44,7 @@ public class EnvEntity : MonoBehaviour
     private void Awake()
     {
         // Initialize the dictionary for storing masks & boxes
-        masks = new Dictionary<int, float[]>();
+        masks = new Dictionary<int, Color32[]>();
         boxes = new Dictionary<int, Rect>();
 
         UpdateClosestChildren();        // Invoked at awake
@@ -104,14 +104,17 @@ public class EnvEntity : MonoBehaviour
         return closestChildren;
     }
     
-    // Call to update the storage of Camera->float[] (mask) mapping; may be recursively evoked
-    // by a parent EnvEntity, make sure mask is computed once and only once for the frame!
-    private void UpdateMasks()
+    // Call to update the storage of Camera->annotation (mask or box) mapping; may be
+    // recursively evoked by a parent EnvEntity, make sure annotations are computed once
+    // and only once for the frame!
+    private void UpdateAnnotations()
     {
-        if (_masksUpdated) return;      // Already computed for this frame
+        if (_annotationsUpdated) return;      // Already computed for this frame
 
         if (isAtomic)
         {
+            // Not updated if entirely occluded by some other entity and thus not
+            // visible to the PerceptionCamera
             foreach (var (perCamID, perCamMasks) in annotationStorage.maskStorage)
             {
                 var displayId = _perCamIDToDisplay[perCamID];
@@ -119,67 +122,87 @@ public class EnvEntity : MonoBehaviour
                 if (perCamMasks.TryGetValue(uid, out var msk))
                 {
                     // Entity found, being visible from the PerceptionCamera
-                    masks[displayId] = msk;
+                    masks[displayId] = new[] {msk};
                 }
-                // Not updated if entirely occluded by some other entity and thus not
-                // visible to the PerceptionCamera
+            }
+            foreach (var (perCamID, perCamBoxes) in annotationStorage.boxStorage)
+            {
+                var targetDisplay = _perCamIDToDisplay[perCamID];
+
+                if (perCamBoxes.TryGetValue(uid, out var box))
+                {
+                    // Entity found, being visible from the PerceptionCamera
+                    boxes[targetDisplay] = new Rect(
+                        box.origin.x, box.origin.y,box.dimension.x, box.dimension.y
+                    );
+                }
             }
         }
         else
         {
-            // Iterate through closest children EnvEntity instances to compute the segmentation
-            // mask enclosing all of them, per display
-            var newMaskPerDisplay = new Dictionary<int, float[]>();
+            // Iterate through closest children EnvEntity instances to compute the corresponding
+            // annotations, per display
+            var extremitiesPerDisplay = new Dictionary<int, (float, float, float, float)>();
+            var newMaskPerDisplay = new Dictionary<int,Color32[]>();
+
             foreach (var cEnt in _closestChildren)
             {
                 // Recursively call for the child entity to ensure its mask is computed
-                cEnt.UpdateMasks();
+                cEnt.UpdateAnnotations();
 
+                // Computing masks; simply merge arrays of Color32s
                 foreach (var (displayId, msk) in cEnt.masks)
                 {
                     if (newMaskPerDisplay.ContainsKey(displayId))
                     {
-                        // Compare with current extremities and take min/max to obtain
-                        // minimally enclosing mask
+                        // Merge Color32 lists
                         var currentMask = newMaskPerDisplay[displayId];
-                        newMaskPerDisplay[displayId] = 
-                            currentMask.Zip(msk, (v1, v2) => v1+v2).ToArray();
+                        newMaskPerDisplay[displayId] = currentMask.Concat(msk).ToArray();
                     }
                     else
                     {
-                        // First entry, initialize with this mask 
+                        // First entry, initialize with this Color32 list 
                         newMaskPerDisplay[displayId] = msk;
                     }
                 }
+                // Computing boxes; find the minimal bounding box enclosing all boxes
+                foreach (var (displayId, rect) in cEnt.boxes)
+                {
+                    if (extremitiesPerDisplay.ContainsKey(displayId))
+                    {
+                        // Compare with current extremities and take min/max to obtain
+                        // minimally enclosing rect
+                        var currentExtremities = extremitiesPerDisplay[displayId];
+                        extremitiesPerDisplay[displayId] = (
+                            Math.Min(currentExtremities.Item1, rect.x),
+                            Math.Min(currentExtremities.Item2, rect.y),
+                            Math.Max(currentExtremities.Item3, rect.x+rect.width),
+                            Math.Max(currentExtremities.Item4, rect.y+rect.height)
+                        );
+                    }
+                    else
+                    {
+                        // First entry, initialize extremity values with this 
+                        extremitiesPerDisplay[displayId] = (
+                            rect.x, rect.y, rect.x+rect.width, rect.y+rect.height
+                        ); 
+                    }
+                }
             }
-
-            // Now register the discovered minimal segmentation mask; cap values higher
-            // than 1.0 at 1.0 ceiling
-            foreach (var (displayId, newMask) in newMaskPerDisplay)
-                masks[displayId] = newMask.Select(v => Math.Min(v, 1f)).ToArray();
-        }
-
-        // Obtain bounding boxes and store as Rect as well; consumed by pointer UI
-        foreach (var (displayId, msk) in masks)
-        {
-            var screenWidth = Display.displays[displayId].renderingWidth;
-            var screenHeight = Display.displays[displayId].renderingHeight;
-            var nonzeroPixels = msk
-                .Select((v, i) => (v, i))
-                .Where(v => v.Item1 > 0)
-                .Select(v => (v.Item2 % screenWidth, screenHeight - v.Item2 / screenWidth))
-                .ToArray();
-
-            var xMin = nonzeroPixels.Select(v => v.Item1).Min();
-            var xMax = nonzeroPixels.Select(v => v.Item1).Max();
-            var yMin = nonzeroPixels.Select(v => v.Item2).Min();
-            var yMax = nonzeroPixels.Select(v => v.Item2).Max();
-            boxes[displayId] = new Rect(xMin, yMin, xMax-xMin, yMax-yMin);
+            
+            // Now register the discovered masks and boxes
+            foreach (var (displayId, colors) in newMaskPerDisplay)
+                masks[displayId] = colors;
+            foreach (var (displayId, extremities) in extremitiesPerDisplay)
+            {
+                var (xMin, yMin, xMax, yMax) = extremities;
+                boxes[displayId] = new Rect(xMin, yMin, xMax - xMin, yMax - yMin);
+            }
         }
 
         // Set this flag to true after computing masks, so that this method is not invoked
         // again when the masks are already updated 
-        _masksUpdated = true;
+        _annotationsUpdated = true;
     }
 
     // Initialize static fields (in Unity, this is preferred rather than using the standard
@@ -251,9 +274,26 @@ public class EnvEntity : MonoBehaviour
 
     public static EnvEntity FindByMask(float[] msk, int displayId)
     {
-        // Fetch EnvEntity with highest mask IoU on specified provided display (if exists)
+        // Fetch EnvEntity with highest box-IoU on specified provided display (if exists).
+        // Ideally we would use mask-IoU but it takes too long and box-IoU is sufficiently
+        // accurate for our use cases.
         EnvEntity refEnt = null;
         var maxIoU = 0f;
+
+        // Compute tightly enclosing bounding box from provided mask
+        var screenWidth = Display.displays[displayId].renderingWidth;
+        var screenHeight = Display.displays[displayId].renderingHeight;
+        var nonzeroPixels = msk
+            .Select((v, i) => (v, i))
+            .Where(v => v.Item1 > 0)
+            .Select(v => (v.Item2 % screenWidth, screenHeight - v.Item2 / screenWidth))
+            .ToArray();
+
+        var xMin = nonzeroPixels.Select(v => v.Item1).Min();
+        var xMax = nonzeroPixels.Select(v => v.Item1).Max();
+        var yMin = nonzeroPixels.Select(v => v.Item2).Min();
+        var yMax = nonzeroPixels.Select(v => v.Item2).Max();
+        var box = new Rect(xMin, yMin, xMax-xMin, yMax-yMin);
 
         var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
         foreach (var ent in allEntities)
@@ -261,22 +301,27 @@ public class EnvEntity : MonoBehaviour
             if (!ent.enabled) continue;
             if (!ent.masks.ContainsKey(displayId)) continue;
 
-            var entMask = ent.masks[displayId];
-            
-            // Intersection & union of two masks
-            var maskIntersection = entMask.Zip(msk, (v1, v2) => v1 * v2).ToArray();
-            var maskUnion = entMask.Zip(msk, (v1, v2) => v1 + v2)
-                .Select(v => Math.Min(v, 1f)).ToArray();
+            var entBox = ent.boxes[displayId];
+            if (!entBox.Overlaps(box)) continue;
 
-            // Continue if sum of intersection is not larger than zero (i.e., no overlap)
-            var overlaps = maskIntersection.Sum() > 0;
-            if (!overlaps) continue;
+            // Compute box intersection then IoU
+            var intersectionX1 = Math.Max(entBox.x, box.x);
+            var intersectionY1 = Math.Max(entBox.y, box.y);
+            var intersectionX2 = Math.Min(entBox.x+entBox.width, box.x+box.width);
+            var intersectionY2 = Math.Min(entBox.y+entBox.height, box.y+box.height);
+            var intersection = new Rect(
+                intersectionX1, intersectionY1,
+                intersectionX2 - intersectionX1, intersectionY2 - intersectionY1
+            );
 
-            // Compute mask IoU
-            var maskIoU = maskIntersection.Sum() / maskUnion.Sum();
-            if (maskIoU > maxIoU)
+            var entBoxArea = entBox.width * entBox.height;
+            var boxArea = box.width * box.height;
+            var intersectionArea = intersection.width * intersection.height;
+
+            var boxIoU = intersectionArea / (entBoxArea+boxArea-intersectionArea);
+            if (boxIoU > maxIoU)
             {
-                maxIoU = maskIoU;
+                maxIoU = boxIoU;
                 refEnt = ent;
             }
         }
@@ -284,15 +329,15 @@ public class EnvEntity : MonoBehaviour
         return refEnt;
     }
 
-    public static void UpdateMasksAll()
+    public static void UpdateAnnotationsAll()
     {
-        // Static method for running UpdateMasks for all existing EnvEntity instances
+        // Static method for running UpdateAnnotations for all existing EnvEntity instances
 
         // Set flags for all instances that their masks are currently being updated 
         var allEntities = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None);
-        Array.ForEach(allEntities, e => { e._masksUpdated = false; });
+        Array.ForEach(allEntities, e => { e._annotationsUpdated = false; });
 
         foreach (var ent in allEntities)
-            ent.UpdateMasks();
+            ent.UpdateAnnotations();
     }
 }

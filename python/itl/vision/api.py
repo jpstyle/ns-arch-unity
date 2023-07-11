@@ -16,10 +16,11 @@ import pytorch_lightning as pl
 from dotenv import find_dotenv, load_dotenv
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from torchvision.ops import box_convert, nms, box_area
+from torchvision.ops import box_convert, box_area
 
 from .data import FewShotDataModule
 from .modeling import VisualSceneAnalyzer
+from .utils import mask_nms
 from .utils.visualize import visualize_sg_predictions
 
 logger = logging.getLogger(__name__)
@@ -87,16 +88,20 @@ class VisionModule:
                 wb_run_id, wb_alias = wb_path
 
             wb_full_path = f"{wb_entity}/{wb_project}/model-{wb_run_id}:{wb_alias}"
-            local_ckpt_path = wandb.Api().artifact(wb_full_path).download(
-                root=os.path.join(
-                    self.cfg.paths.assets_dir, "vision_models", "wandb", wb_run_id
+            local_model_root_path = os.path.join(
+                self.cfg.paths.assets_dir, "vision_models", "wandb", wb_run_id
+            )
+            local_ckpt_path = os.path.join(local_model_root_path, f"model_{wb_alias}.ckpt")
+            if not os.path.exists(local_ckpt_path):
+                # Download if needed (remove current file if want to re-download)
+                local_ckpt_path = wandb.Api().artifact(wb_full_path).download(
+                    root=local_model_root_path
                 )
-            )
-            os.rename(
-                os.path.join(local_ckpt_path, f"model.ckpt"),
-                os.path.join(local_ckpt_path, f"model_{wb_alias}.ckpt")
-            )
-            local_ckpt_path = os.path.join(local_ckpt_path, f"model_{wb_alias}.ckpt")
+                os.rename(
+                    os.path.join(local_ckpt_path, f"model.ckpt"),
+                    os.path.join(local_ckpt_path, f"model_{wb_alias}.ckpt")
+                )
+                local_ckpt_path = os.path.join(local_ckpt_path, f"model_{wb_alias}.ckpt")
             logger.info(f"Loading few-shot component weights from {wb_full_path}")
         else:
             local_ckpt_path = self.fs_model_path
@@ -107,14 +112,14 @@ class VisionModule:
 
 
     def predict(
-        self, image, exemplars, bboxes=None, specs=None, visualize=True, lexicon=None
+        self, image, exemplars, masks=None, specs=None, visualize=True, lexicon=None
     ):
         """
         Model inference in either one of three modes:
             1) full scene graph generation mode, where the module is only given
                 an image and needs to return its estimation of the full scene
                 graph for the input
-            2) instance classification mode, where a number of bboxes are given
+            2) instance classification mode, where a number of masks are given
                 along with the image and category predictions are made for only
                 those instances
             3) instance search mode, where a specification is provided in the
@@ -123,9 +128,11 @@ class VisionModule:
 
         2) and 3) are 'incremental' in the sense that they should add to an existing
         scene graph which is already generated with some previous execution of this
-        method. Provide bboxes arg to run in 2) mode, or spec arg to run in 3) mode.
+        method. Provide masks arg to run in 2) mode, or spec arg to run in 3) mode.
         """
-        if bboxes is None and specs is None:
+        masks_provided = masks is not None
+        specs_provided = specs is not None
+        if not (masks_provided or specs_provided):
             assert image is not None    # Image must be provided for ensemble prediction
 
         if image is not None:
@@ -134,70 +141,55 @@ class VisionModule:
             else:
                 assert isinstance(image, Image.Image)
 
+        # Helper methods factored out for few-shot concept probability estimation
+        def fs_conc_pred(emb, conc_type):
+            conc_inventory_count = getattr(self.inventories, conc_type)
+            if conc_inventory_count > 0:
+                # Non-empty concept inventory, most cases
+                predictions = []
+                for ci in range(conc_inventory_count):
+                    if exemplars.binary_classifiers[conc_type][ci] is not None:
+                        # Binary classifier induced from pos/neg exemplars exists
+                        clf = exemplars.binary_classifiers[conc_type][ci]
+                        pred = clf.predict_proba(emb[None])[0]
+                        predictions.append(pred)
+                    else:
+                        # No binary classifier exists due to lack of either positive
+                        # or negative exemplars, fall back to some default estimation
+                        conc_pos_exs = exemplars.exemplars_pos[conc_type][ci]
+                        if len(conc_pos_exs) > 0:
+                            fallback_pred = np.array([1.0-DEF_CON, DEF_CON])
+                        else:
+                            fallback_pred = np.array([DEF_CON, 1.0-DEF_CON])
+                        predictions.append(fallback_pred)
+                return np.stack(predictions)[:,1]
+            else:
+                # Empty concept inventory, likely at the very beginning of training
+                # an agent from scratch,
+                return np.empty(0, dtype=np.float32)
+
         self.model.eval()
         with torch.no_grad():
             # Prediction modes
-            if bboxes is None and specs is None:
+            if not (masks_provided or specs_provided):
                 # Full (ensemble) prediction
-                cls_embeddings, att_embeddings, bboxes_out, objectness_scores \
-                    = self.model(image)
-                cls_embeddings = cls_embeddings.cpu().numpy()
-                att_embeddings = att_embeddings.cpu().numpy()
-                bboxes_out = box_convert(bboxes_out, "xywh", "xyxy")
+                cls_embs, att_embs, masks_out, objectness_scores \
+                    = self.model(image, grid=(3, 3))
 
                 self.last_input = image
 
-                # Let's compute 'objectness scores' (with which NMS is run below) by
-                # making per-concept prediction on the returned embeddings, and taking
-                # max across class concepts. This essentially implements closed-set
-                # prediction... Later I could simply add objectness predictor head.
-                if self.inventories.cls > 0:
-                    cls_probs = [None] * self.inventories.cls
-                    for ci, clf in exemplars.binary_classifiers["cls"].items():
-                        if clf is not None:
-                            cls_probs[ci] = torch.tensor(
-                                clf.predict_proba(cls_embeddings)[:,1]
-                            )
-                        else:
-                            # If binary classifier is None, either positive or negative
-                            # exemplar set doesn't exist... Fall back to some default
-                            # confidence
-                            cls_probs[ci] = torch.full((cls_embeddings.shape[0],), DEF_CON) \
-                                if len(exemplars.exemplars_pos["cls"][ci]) > 0 \
-                                else torch.full((cls_embeddings.shape[0],), 1-DEF_CON)
-                    cls_probs = torch.stack(cls_probs, dim=-1)
-
-                    # Overwrite the intermediate objectness_scores from encoder with max values
-                    # of probabilities across classes
-                    objectness_scores = cls_probs.max(dim=-1).values.to(self.model.device)
-                else:
-                    # Quite rare edge case where class inventory is empty, for robustness' sake
-                    cls_probs = torch.empty(objectness_scores.shape[0], 0).to(self.model.device)
-                    # No need to overwrite objectness_scores here
-
                 # Run NMS and leave top k predictions
-                kept_indices = nms(bboxes_out, objectness_scores, self.NMS_THRES)
-                topk_inds = [int(i) for i in kept_indices][:self.K]
+                kept_indices = mask_nms(masks_out, objectness_scores, self.NMS_THRES)
+                topk_inds = kept_indices[:self.K]
 
                 # Newly compose a scene graph with the output; filter patches to leave top-k
                 # detections
                 self.scene = {
                     f"o{i}": {
-                        "pred_box": bboxes_out[det_ind].cpu().numpy(),
-                        # "pred_objectness": objectness_scores[det_ind].cpu().numpy(),
-                        "pred_classes": cls_probs[det_ind].cpu().numpy(),
-                        "pred_attributes": np.stack([
-                            exemplars.binary_classifiers["att"][ai].predict_proba(
-                                att_embeddings[det_ind, None]
-                            )[0]
-                            if exemplars.binary_classifiers["att"][ai] is not None
-                            else (
-                                np.array([1.0-DEF_CON, DEF_CON])
-                                if len(exemplars.exemplars_pos["att"][ai]) > 0
-                                else np.array([DEF_CON, 1.0-DEF_CON])
-                            )
-                            for ai in range(self.inventories.att)
-                        ])[:,1],
+                        "pred_mask": masks_out[det_ind],
+                        "pred_objectness": objectness_scores[det_ind],
+                        "pred_classes": fs_conc_pred(cls_embs[det_ind], "cls"),
+                        "pred_attributes": fs_conc_pred(att_embs[det_ind], "att"),
                         "pred_relations": {
                             f"o{j}": np.zeros(self.inventories.rel)
                             for j in range(len(topk_inds)) if i != j
@@ -206,12 +198,12 @@ class VisionModule:
                     for i, det_ind in enumerate(topk_inds)
                 }
                 self.f_vecs = {
-                    oi: (cls_embeddings[det_ind], att_embeddings[det_ind])
+                    oi: (cls_embs[det_ind], att_embs[det_ind])
                     for oi, det_ind in zip(self.scene, topk_inds)
                 }
 
                 for oi, obj_i in self.scene.items():
-                    oi_bb = obj_i["pred_box"]
+                    oi_msk = obj_i["pred_mask"]
 
                     # Relation concepts (Only for "have" concept, manually determined
                     # by the geomtrics of the bounding boxes; note that this is quite
@@ -219,41 +211,35 @@ class VisionModule:
                     # open-vocabulary and neurally predicted...)
                     for oj, obj_j in self.scene.items():
                         if oi==oj: continue     # Dismiss self-self object pairs
-                        oj_bb = obj_j["pred_box"]
+                        oj_msk = obj_j["pred_mask"]
 
-                        x1_int, y1_int, x2_int, y2_int = _box_intersection(oi_bb, oj_bb)
+                        intersection_A = np.minimum(oi_msk, oj_msk).sum()
+                        mask2_A = oj_msk.sum()
 
-                        bbox_intersection = (x2_int - x1_int) * (y2_int - y1_int) \
-                            if x2_int > x1_int and y2_int > y1_int else 0.0
-                        bbox2_A = (oj_bb[2] - oj_bb[0]) * (oj_bb[3] - oj_bb[1])
-
-                        obj_i["pred_relations"][oj][0] = bbox_intersection / bbox2_A
+                        obj_i["pred_relations"][oj][0] = intersection_A / mask2_A
 
             else:
                 # Incremental scene graph expansion
-                if bboxes is not None:
+                if masks_provided:
                     # Instance classification mode
-                    bboxes_in = torch.stack([
-                        box_convert(torch.tensor(bb["bbox"]), bb["bbox_mode"], "xywh")
-                        for bb in bboxes.values()
-                    ]).to(self.model.device)
-                    cls_embeddings, att_embeddings, bboxes_out, _ = self.model(
-                        self.last_input, bboxes_in
+                    incr_preds = self.model(
+                        None, masks=[torch.tensor(msk) for msk in masks.values()]
                     )
-                    incr_cls_embeddings = cls_embeddings[:len(bboxes)].cpu().numpy()
-                    incr_att_embeddings = att_embeddings[:len(bboxes)].cpu().numpy()
-                    incr_bboxes_out = box_convert(bboxes_out[:len(bboxes)], "xywh", "xyxy")
+                    incr_cls_embs = incr_preds[0]
+                    incr_att_embs = incr_preds[1]
+                    incr_masks_out = incr_preds[2]
+                    incr_objectness_scores = incr_preds[3]
 
                 else:
-                    assert specs is not None
+                    assert specs_provided
                     # Instance search mode
 
                     # Mapping between existing entity IDs and their numeric indexing
                     exs_idx_map = { i: ent for i, ent in enumerate(self.scene) }
                     exs_idx_map_inv = { ent: i for i, ent in enumerate(self.scene) }
 
-                    incr_cls_embeddings = []
-                    incr_att_embeddings = []
+                    incr_cls_embs = []
+                    incr_att_embs = []
                     incr_bboxes_out = []
 
                     # Prepare search conditions to feed into model.search() method
@@ -280,11 +266,11 @@ class VisionModule:
                         proposals = box_convert(proposals[:,0,:], "xyxy", "xywh")
 
                         # Predict on the proposals
-                        cls_embeddings, att_embeddings, bboxes_out, _ = self.model(
+                        cls_embs, att_embs, bboxes_out, _ = self.model(
                             self.last_input, proposals, lock_provided_boxes=False
                         )
-                        cls_embeddings = cls_embeddings[:len(proposals)].cpu().numpy()
-                        att_embeddings = att_embeddings[:len(proposals)].cpu().numpy()
+                        cls_embs = cls_embs[:len(proposals)].cpu().numpy()
+                        att_embs = att_embs[:len(proposals)].cpu().numpy()
                         bboxes_out = box_convert(bboxes_out[:len(proposals)], "xywh", "xyxy")
 
                         # Then test each candidate to select the one that's most compatible
@@ -301,17 +287,17 @@ class VisionModule:
                                 clf = exemplars.binary_classifiers[conc_type][conc_ind]
                                 if clf is not None:
                                     if conc_type == "cls":
-                                        comp_scores = clf.predict_proba(cls_embeddings)[:,1]
+                                        comp_scores = clf.predict_proba(cls_embs)[:,1]
                                     else:
-                                        comp_scores = clf.predict_proba(att_embeddings)[:,1]
+                                        comp_scores = clf.predict_proba(att_embs)[:,1]
 
                                     comp_scores = torch.tensor(
                                         comp_scores, device=self.model.device
                                     )
                                 else:
-                                    comp_scores = torch.full((cls_embeddings.shape[0],), DEF_CON) \
+                                    comp_scores = torch.full((cls_embs.shape[0],), DEF_CON) \
                                         if len(exemplars.exemplars_pos[conc_type][conc_ind]) > 0 \
-                                        else torch.full((cls_embeddings.shape[0],), 1-DEF_CON)
+                                        else torch.full((cls_embs.shape[0],), 1-DEF_CON)
                             else:
                                 assert conc_type == "rel"
 
@@ -371,62 +357,37 @@ class VisionModule:
 
                         # Finally choose and keep the best search output
                         best_match_ind = agg_compatibility_scores.max(dim=0).indices
-                        incr_cls_embeddings.append(cls_embeddings[best_match_ind])
-                        incr_att_embeddings.append(att_embeddings[best_match_ind])
+                        incr_cls_embs.append(cls_embs[best_match_ind])
+                        incr_att_embs.append(att_embs[best_match_ind])
                         incr_bboxes_out.append(bboxes_out[best_match_ind])
 
-                    incr_cls_embeddings = np.stack(incr_cls_embeddings)
-                    incr_att_embeddings = np.stack(incr_att_embeddings)
+                    incr_cls_embs = np.stack(incr_cls_embs)
+                    incr_att_embs = np.stack(incr_att_embs)
                     incr_bboxes_out = torch.stack(incr_bboxes_out)
 
                 # Incrementally update the existing scene graph with the output with the
                 # detections best complying with the conditions provided
                 existing_objs = list(self.scene)
-                if bboxes is not None:
-                    new_objs = list(bboxes)
+                if masks_provided:
+                    new_objs = list(masks.keys())
                 else:
-                    new_objs = sum(list(specs), ())
+                    new_objs = sum(list(specs.keys()), [])
 
                 for oi, oj in product(existing_objs, new_objs):
                     # Add new relation score slots for existing objects
                     self.scene[oi]["pred_relations"][oj] = np.zeros(self.inventories.rel)
 
                 update_data = list(zip(
-                    new_objs, incr_cls_embeddings, incr_att_embeddings, incr_bboxes_out
+                    new_objs, incr_cls_embs, incr_att_embs,
+                    incr_masks_out, incr_objectness_scores
                 ))
-                for oi, cls_emb, att_emb, bb in update_data:
+                for oi, cls_emb, att_emb, msk, score in update_data:
                     # Register new objects into the existing scene
                     self.scene[oi] = {
-                        "pred_box": bb.cpu().numpy(),
-
-                        "pred_classes": np.stack([
-                            exemplars.binary_classifiers["cls"][ci].predict_proba(
-                                cls_emb[None]
-                            )[0]
-                            if exemplars.binary_classifiers["cls"][ci] is not None
-                            else (
-                                np.array([1.0-DEF_CON, DEF_CON])
-                                if len(exemplars.exemplars_pos["cls"][ci]) > 0
-                                else np.array([DEF_CON, 1.0-DEF_CON])
-                            )
-                            for ci in range(self.inventories.cls)
-                        ])[:,1]
-                        if self.inventories.cls > 0 else np.empty(0, dtype=np.float32),
-
-                        "pred_attributes": np.stack([
-                            exemplars.binary_classifiers["att"][ai].predict_proba(
-                                att_emb[None]
-                            )[0]
-                            if exemplars.binary_classifiers["att"][ai] is not None
-                            else (
-                                np.array([1.0-DEF_CON, DEF_CON])
-                                if len(exemplars.exemplars_pos["att"][ai]) > 0
-                                else np.array([DEF_CON, 1.0-DEF_CON])
-                            )
-                            for ai in range(self.inventories.att)
-                        ])[:,1]
-                        if self.inventories.att > 0 else np.empty(0, dtype=np.float32),
-
+                        "pred_mask": msk,
+                        "pred_objectness": score,
+                        "pred_classes": fs_conc_pred(cls_emb, "cls"),
+                        "pred_attributes": fs_conc_pred(att_emb, "att"),
                         "pred_relations": {
                             **{
                                 oj: np.zeros(self.inventories.rel)
@@ -440,39 +401,33 @@ class VisionModule:
                     }
 
                 for oi in new_objs:
-                    oi_bb = self.scene[oi]["pred_box"]
+                    oi_msk = self.scene[oi]["pred_mask"]
 
                     # Relation concepts (Within new detections)
                     for oj in new_objs:
                         if oi==oj: continue     # Dismiss self-self object pairs
-                        oj_bb = self.scene[oj]["pred_box"]
+                        oj_msk = self.scene[oj]["pred_mask"]
 
-                        x1_int, y1_int, x2_int, y2_int = _box_intersection(oi_bb, oj_bb)
+                        intersection_A = np.minimum(oi_msk, oj_msk).sum()
+                        mask2_A = oj_msk.sum()
 
-                        bbox_intersection = (x2_int - x1_int) * (y2_int - y1_int) \
-                            if x2_int > x1_int and y2_int > y1_int else 0.0
-                        bbox2_A = (oj_bb[2] - oj_bb[0]) * (oj_bb[3] - oj_bb[1])
+                        self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
 
-                        self.scene[oi]["pred_relations"][oj][0] = bbox_intersection / bbox2_A
-                    
                     # Relation concepts (Between existing detections)
                     for oj in existing_objs:
-                        oj_bb = self.scene[oj]["pred_box"]
+                        oj_msk = self.scene[oj]["pred_mask"]
 
-                        x1_int, y1_int, x2_int, y2_int = _box_intersection(oi_bb, oj_bb)
+                        intersection_A = np.minimum(oi_msk, oj_msk).sum()
+                        mask1_A = oi_msk.sum()
+                        mask2_A = oj_msk.sum()
 
-                        bbox_intersection = (x2_int - x1_int) * (y2_int - y1_int) \
-                            if x2_int > x1_int and y2_int > y1_int else 0.0
-                        bbox1_A = (oi_bb[2] - oi_bb[0]) * (oi_bb[3] - oi_bb[1])
-                        bbox2_A = (oj_bb[2] - oj_bb[0]) * (oj_bb[3] - oj_bb[1])
-
-                        self.scene[oi]["pred_relations"][oj][0] = bbox_intersection / bbox2_A
-                        self.scene[oj]["pred_relations"][oi][0] = bbox_intersection / bbox1_A
+                        self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
+                        self.scene[oj]["pred_relations"][oi][0] = intersection_A / mask1_A
 
                 self.f_vecs.update({
                     oi: (cls_emb, att_emb)
                     for oi, cls_emb, att_emb
-                    in zip(new_objs, incr_cls_embeddings, incr_att_embeddings)
+                    in zip(new_objs, incr_cls_embs, incr_att_embs)
                 })
 
         if visualize:
@@ -593,13 +548,3 @@ class VisualConceptInventory:
         # (Temp) Inventory of relation concept is a fixed singleton set, containing "have"
         self.cls = self.att = 0
         self.rel = 1
-
-
-def _box_intersection(box1, box2):
-    """ Helper method for obtaining intersection of two boxes (xyxy format) """
-    x1_int = max(box1[0], box2[0])
-    y1_int = max(box1[1], box2[1])
-    x2_int = min(box1[2], box2[2])
-    y2_int = min(box1[3], box2[3])
-
-    return x1_int, y1_int, x2_int, y2_int

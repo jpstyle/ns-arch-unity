@@ -32,7 +32,7 @@ public class StudentAgent : DialogueAgent
     {
         // Update annotation info whenever needed
         if (!EnvEntity.annotationStorage.annotationsUpToDate)
-            StartCoroutine(CaptureMasks());
+            StartCoroutine(CaptureAnnotations());
 
         // 'Utter' any outgoing messages
         if (outgoingMsgBuffer.Count > 0)

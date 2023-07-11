@@ -15,10 +15,16 @@ public class StorageEndpoint : IConsumerEndpoint
     
     // Storage implemented as a nested dictionary; outer mapping from PerceptionCamera ID,
     // to inner mapping from instance ID to annotation
-    public Dictionary<string, Dictionary<string, float[]>> maskStorage;
+    public Dictionary<string, Dictionary<string, BoundingBox>> boxStorage;
+    public Dictionary<string, Dictionary<string, Color32>> maskStorage;
+
+    // Segmentation PNG image buffer
+    public Color32[] segMap;
 
     public string description => "Endpoint that stores latest annotations instead of writing out to disk";
 
+    private Texture2D _segMap;
+    
     public object Clone()
     {
         return new StorageEndpoint();
@@ -34,7 +40,11 @@ public class StorageEndpoint : IConsumerEndpoint
     public void SimulationStarted(SimulationMetadata metadata)
     {
         // Initialize annotation storage
-        maskStorage = new Dictionary<string, Dictionary<string, float[]>>();
+        boxStorage = new Dictionary<string, Dictionary<string, BoundingBox>>();
+        maskStorage = new Dictionary<string, Dictionary<string, Color32>>();
+        
+        // Initialize segmentation map texture
+        _segMap = new Texture2D(2, 2);
     }
 
     public void SensorRegistered(SensorDefinition sensor)
@@ -54,32 +64,34 @@ public class StorageEndpoint : IConsumerEndpoint
 
     public void FrameGenerated(Frame frame)
     {
-        // Retrieve the labeler, then the annotation list
+        if (annotationsUpToDate) return;
+
+        // Clear current storage
+        boxStorage.Clear();
+        maskStorage.Clear();
+
+        // Retrieve the labeler, then the annotation lists
         var labeler = frame.sensors.OfType<RgbSensor>().Single();
+        var boxAnnotations =
+            labeler.annotations.OfType<BoundingBoxAnnotation>().Single();
         var maskAnnotations =
             labeler.annotations.OfType<InstanceSegmentationAnnotation>().Single();
 
         // Instance segmentation map of whole scene view
-        var segMap = new Texture2D(2, 2);
-        segMap.LoadImage(maskAnnotations.buffer);
-        var colorMap = segMap.GetPixels32();
+        _segMap.LoadImage(maskAnnotations.buffer);
+        segMap = _segMap.GetPixels32();
 
         // Initialize inner mapping if not already initialized
+        if (!boxStorage.ContainsKey(labeler.id))
+            boxStorage[labeler.id] = new Dictionary<string, BoundingBox>();
         if (!maskStorage.ContainsKey(labeler.id))
-            maskStorage[labeler.id] = new Dictionary<string, float[]>();
+            maskStorage[labeler.id] = new Dictionary<string, Color32>();
 
         // Store the annotations
+        foreach (var ann in boxAnnotations.boxes)
+            boxStorage[labeler.id][$"ent_{ann.instanceId}"] = ann;
         foreach (var ann in maskAnnotations.instances)
-        {
-            // Color match to get boolean (2d) array, then convert to float
-            var msk = colorMap
-                .Select(
-                    c => c.r == ann.color.r && c.g == ann.color.g && c.b == ann.color.b
-                )
-                .Select(Convert.ToSingle)
-                .ToArray();
-            maskStorage[labeler.id][$"ent_{ann.instanceId}"] = msk;
-        }
+            maskStorage[labeler.id][$"ent_{ann.instanceId}"] = ann.color;
 
         annotationsUpToDate = true;
     }

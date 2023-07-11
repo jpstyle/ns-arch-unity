@@ -53,7 +53,7 @@ class LanguageModule:
         update dialogue state.
 
         pointing (optional) is a dict summarizing the 'gesture' made along with the
-        utterance, indicating the reference (represented as bbox) made by the n'th
+        utterance, indicating the reference (represented as mask) made by the n'th
         occurrence of linguistic token. Mostly for programmed experiments.
         """
         ti = len(self.dialogue.record)      # New dialogue turn index
@@ -124,18 +124,18 @@ class LanguageModule:
                 if rel["pos"] == "q":
                     # Demonstratives need pointing
                     if "sense" in rel and rel["sense"] == "dem":
-                        matching_bboxes = [
-                            bbox for crange, bbox in pointing[si].items()
+                        matching_masks = [
+                            msk for crange, msk in pointing[si].items()
                             if crange[0]>=rel["crange"][0] and crange[1]<=rel["crange"][1]
                             # ERG parser includes punctuations in crange, test inclusion
                         ] if pointing is not None else []
 
-                        if len(matching_bboxes) > 0:
-                            dem_bbox = matching_bboxes[0]
+                        if len(matching_masks) > 0:
+                            dem_mask = matching_masks[0]
                         else:
-                            dem_bbox = None
+                            dem_mask = None
 
-                        pointed = self.dialogue.dem_point(dem_bbox)
+                        pointed = self.dialogue.dem_point(dem_mask)
 
                         ri = r2i[rel["args"][0]]
                         clause_tag = se2i[(si, ref_map[rel["args"][0]]["source_ind"])]

@@ -252,11 +252,11 @@ public class DialogueUI : MonoBehaviour
     
     private void HighlightReference(PointerOverLinkTagEvent evt)
     {
-        var highlightEnt = EnvEntity.FindByUid(evt.linkID);
+        var ent = EnvEntity.FindByUid(evt.linkID);
         
         var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)
-            pUI.HighlightMask(highlightEnt);
+            pUI.HighlightEnt(ent);
     }
 
     private void RemoveReferenceHighlight(PointerOutLinkTagEvent evt)

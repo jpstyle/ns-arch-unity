@@ -94,11 +94,11 @@ public class DialogueRecordController
 
     private static void HighlightReference(PointerOverLinkTagEvent evt)
     {
-        var highlightEnt = EnvEntity.FindByUid(evt.linkID);
+        var ent = EnvEntity.FindByUid(evt.linkID);
         
         var pointerUIs = Object.FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
         foreach (var pUI in pointerUIs)
-            pUI.HighlightMask(highlightEnt);
+            pUI.HighlightEnt(ent);
     }
 
     private static void RemoveReferenceHighlight(PointerOutLinkTagEvent evt)

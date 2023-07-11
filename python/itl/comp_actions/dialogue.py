@@ -190,17 +190,12 @@ def prepare_answer_Q(agent, utt_pointer):
         splits = [w[0].lower()+w[1:] for w in splits]
         answer_translated = f"This is a {' '.join(splits)}."
 
-    # Obtain relative bbox coordinates for demonstrative reference (xywh)
-    i_w, i_h = agent.vision.last_input.size
-    dem_bbox = dialogue_state["referents"]["env"][pred_var_to_ent_ref[qv]]["bbox"]
-    dem_bbox = [
-        dem_bbox[0] / i_w, dem_bbox[1] / i_h,
-        (dem_bbox[2]-dem_bbox[0]) / i_w, (dem_bbox[3]-dem_bbox[1]) / i_h,
-    ]
+    # Fetch segmentation mask for the demonstratively referenced entity
+    dem_mask = dialogue_state["referents"]["env"][pred_var_to_ent_ref[qv]]["mask"]
 
     # Push the translated answer to buffer of utterances to generate
     agent.lang.dialogue.to_generate.append((
-        (answer_logical_form, None), answer_translated, { (0, 4): dem_bbox }
+        (answer_logical_form, None), answer_translated, { (0, 4): dem_mask }
     ))
 
 def _search_specs_from_kb(agent, question, ref_bjt, restrictors):

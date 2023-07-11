@@ -9,8 +9,8 @@ from collections import defaultdict
 import inflect
 import torch
 import numpy as np
-from torchvision.ops import box_convert
 
+from ..vision.utils import masks_bounding_boxes
 from ..lpmln import Literal, Polynomial
 from ..lpmln.utils import flatten_cons_ante
 
@@ -277,13 +277,9 @@ def handle_mismatch(agent, mismatch):
             conc_ind = int(conc_ind)
             args = [a for a, _ in atom.args]
 
-            ex_bboxes = [
-                box_convert(
-                    torch.tensor(agent.lang.dialogue.referents["env"][arg]["bbox"]),
-                    "xyxy", "xywh"
-                ).numpy()
-                for arg in args
-            ]
+            ex_bboxes = masks_bounding_boxes(
+                [agent.lang.dialogue.referents["env"][arg]["mask"] for arg in args]
+            )
 
             # Fetch current score for the asserted fact
             if conc_type == "cls":
@@ -547,13 +543,9 @@ def handle_neologisms(agent, novel_concepts, dialogue_state):
                 args = [
                     agent.symbolic.value_assignment[arg] for arg in rule_cons[0][2]
                 ]
-                ex_bboxes = [
-                    box_convert(
-                        torch.tensor(dialogue_state["referents"]["env"][arg]["bbox"]),
-                        "xyxy", "xywh"
-                    ).numpy()
-                    for arg in args
-                ]
+                ex_bboxes = masks_bounding_boxes(
+                    [dialogue_state["referents"]["env"][arg]["mask"] for arg in args]
+                )
 
                 if conc_type == "cls":
                     f_vec = agent.vision.f_vecs[args[0]][0]

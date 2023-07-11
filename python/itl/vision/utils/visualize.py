@@ -2,9 +2,25 @@
 For visualizing predictions from scene graph generation models, using detectron2
 visualization toolkits.
 """
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.widgets import Slider
+from matplotlib.colors import LinearSegmentedColormap
+
+from . import masks_bounding_boxes
+
+
+## Preparing colormap with alpha fading with value
+# Get colormap
+ncolors = 256
+color_array = plt.get_cmap('gist_rainbow')(range(ncolors))
+# Change alpha values
+color_array[:,-1] = np.linspace(0.0, 0.6, ncolors)
+# Create a colormap object
+map_object = LinearSegmentedColormap.from_list(name='rainbow_alpha', colors=color_array)
+# Register this new colormap with matplotlib
+plt.register_cmap(cmap=map_object)
 
 
 def visualize_sg_predictions(img, scene, lexicon=None):
@@ -69,9 +85,15 @@ def visualize_sg_predictions(img, scene, lexicon=None):
         # )
         objs_filtered = scene
 
-        # Boxes and classes
+        # Masks, boxes and classes
         for oi in objs_filtered:
-            x1, y1, x2, y2 = scene[oi]["pred_box"]
+            msk = scene[oi]["pred_mask"]
+
+            # Draw segmentation mask
+            ax.imshow(msk, cmap="rainbow_alpha")
+
+            # Draw bounding box
+            x1, y1, x2, y2 = masks_bounding_boxes([msk])[0]
             r = Rectangle(
                 (x1, y1), x2-x1, y2-y1,
                 linewidth=2, edgecolor="r", facecolor="none"

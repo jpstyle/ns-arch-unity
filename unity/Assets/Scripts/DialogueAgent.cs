@@ -100,7 +100,9 @@ public class DialogueAgent : Agent
                     // Retrieve referenced EnvEntity and fetch segmentation mask in absolute scale
                     // w.r.t. this agent's camera's target display screen
                     var refEnt = EnvEntity.FindByUid(entUid);
-                    var screenMask = refEnt.masks[_cameraSensor.Camera.targetDisplay];
+                    var maskColors = refEnt.masks[_cameraSensor.Camera.targetDisplay];
+                    var segMapBuffer = EnvEntity.annotationStorage.segMap;
+                    var screenMask = ColorsToMask(segMapBuffer, maskColors);
                     demRefs[range] = new EntityRef(MaskCoordinateSwitch(screenMask, true));
                 }
 
@@ -142,7 +144,7 @@ public class DialogueAgent : Agent
 
         // If needed, synchronously wait until masks are updated and captured
         if (masksNeeded)
-            yield return StartCoroutine(CaptureMasks());
+            yield return StartCoroutine(CaptureAnnotations());
 
         // Now utter individual messages
         foreach (var (utterance, demRefs) in messagesToUtter)
@@ -181,7 +183,7 @@ public class DialogueAgent : Agent
         _uttering = false;
     }
 
-    protected IEnumerator CaptureMasks()
+    protected IEnumerator CaptureAnnotations()
     {
         // If a coroutine invocation is still running, do not start another; else,
         // set flag
@@ -190,18 +192,38 @@ public class DialogueAgent : Agent
 
         // First send a request for a capture to the PerceptionCamera component of the
         // Camera to which the CameraSensorComponent is attached
-        yield return null;              // Wait for a frame to render
+        yield return null;      // Wait for a frame to render
         _perCam.RequestCapture();
+        yield return null;
+        yield return null;      // Waiting couple more frames to ensure annotations were captured
 
         // Wait until annotations are ready in the storage endpoint for retrieval
         yield return new WaitUntil(() => EnvEntity.annotationStorage.annotationsUpToDate);
 
         // Finally, update segmentation masks of all EnvEntity instances based on the data
         // stored in the endpoint
-        EnvEntity.UpdateMasksAll();
+        EnvEntity.UpdateAnnotationsAll();
 
         // Reset flag on exit
         _maskCapturing = false;
+    }
+
+    private static float ContainsColor(Color32 color, Color32[] colorSet)
+    {
+        // Test if input color is contained in an array of colors
+        if (colorSet.Any(c => c.r == color.r && c.g == color.g && c.b == color.b))
+            return 1f;
+
+        return 0f;
+    }
+
+    private static float[] ColorsToMask(Color32[] segMapBuffer, Color32[] entities)
+    {
+        // Convert set of Color32 values to binary mask based on the segmentation image buffer
+        var binaryMask = segMapBuffer
+            .Select(c => ContainsColor(c, entities)).ToArray();
+
+        return binaryMask;
     }
 
     private float[] MaskCoordinateSwitch(float[] sourceMask, bool screenToSensor)
@@ -269,13 +291,17 @@ public class DialogueAgent : Agent
             {
                 // Source is 'narrower' in aspect ratio, write with the x-axis offset
                 sourceStart = j * newWidth;
-                sourceEnd = sourceStart + targetWidth;
+                sourceEnd = sourceStart + newWidth;
                 targetStart = j * targetWidth - xOffset;
             }
 
             for (var i = 0; i < sourceEnd-sourceStart; i++)
                 targetMask[i+targetStart] = rescaledMask[i+sourceStart].a;
         }
+
+        // Free them
+        Destroy(sourceTexture);
+        Destroy(rescaledSourceTexture);
 
         return targetMask;
     }

@@ -158,7 +158,7 @@ public class TeacherAgent : DialogueAgent
     {
         // Update annotation whenever needed
         if (!EnvEntity.annotationStorage.annotationsUpToDate)
-            StartCoroutine(CaptureMasks());
+            StartCoroutine(CaptureAnnotations());
 
         // 'Utter' any outgoing messages
         if (outgoingMsgBuffer.Count > 0)

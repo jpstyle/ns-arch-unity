@@ -245,28 +245,28 @@ class _FewShot2DDataset(Dataset):
             # Additional training signals for augmenting each training data point with
             # two additional hybrid prompts: 1) support examples + bbox and 2) support
             # examples + (near)-centroid coordinate
-            nonzero_inds_y, nonzero_inds_x = instance_mask.nonzero()
+            nz_inds_y, nz_inds_x = instance_mask.nonzero()
 
             # Axis-aligned bounding box from min/max indices for nonzero value in mask
-            data_dict["instance_bbox"] = np.array([
-                nonzero_inds_x.min(), nonzero_inds_y.min(),
-                nonzero_inds_x.max(), nonzero_inds_y.max()
-            ])
+            data_dict["instance_bbox"] = np.array([[
+                nz_inds_x.min(), nz_inds_y.min(),
+                nz_inds_x.max(), nz_inds_y.max()
+            ]])
 
             # (Near-)Centroid, as a point in mask closest to 'center of mass'
-            mass_center = (nonzero_inds_x.mean(), nonzero_inds_y.mean())
-            distances_to_center = np.transpose([nonzero_inds_x, nonzero_inds_y])
+            mass_center = (nz_inds_x.mean(), nz_inds_y.mean())
+            distances_to_center = np.transpose([nz_inds_x, nz_inds_y])
             distances_to_center = np.linalg.norm(distances_to_center - mass_center, axis=1)
             centroid_ind = distances_to_center.argmin()
-            data_dict["instance_centroid"] = np.array([
-                nonzero_inds_x[centroid_ind], nonzero_inds_y[centroid_ind]
-            ])
+            data_dict["instance_point"] = np.array([[[
+                nz_inds_x[centroid_ind], nz_inds_y[centroid_ind]
+            ]]])
         else:
             # instance_mask.sum() == 0; segmentation mask too small that the decoded
             # binary mask doesn't have any nonzero entry... This item doesn't serve
             # as a valid training signal
-            data_dict["instance_bbox"] = np.zeros(4, dtype=np.int64)
-            data_dict["instance_centroid"] = np.zeros(2, dtype=np.int64)
+            data_dict["instance_bbox"] = np.zeros(1, 4, dtype=np.int64)
+            data_dict["instance_point"] = np.zeros(1, 1, 2, dtype=np.int64)
 
         # Ground-truth segmentation binary maps for any instances of the specified
         # 'focus' concept, 

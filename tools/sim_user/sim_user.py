@@ -40,17 +40,20 @@ class SimulatedTeacher:
                     for part, attrs in info["part_attributes"].items()
                 }
 
-    def setup_episode(self):
+    def setup_episode(self, mode):
         """
         Preparation of a new interaction episode, comprising random initialization
         of the task for the episode and queueing of target concepts to teach
         """
+        target_concepts = self.target_concept_sets[mode]
+        self.mode = mode
+
         # Random environment initialization before reset; currently, sample fine-grained
         # type of truck as distinguished by load type
-        sampled_type = random.sample(range(len(self.target_concept_sets)), 1)[0]
+        sampled_type = random.sample(range(len(target_concepts)), 1)[0]
 
         # Initialize target concept queue and episode record
-        self.current_queue = list(self.target_concept_sets[sampled_type].items())
+        self.current_queue = list(target_concepts[sampled_type].items())
         self.current_episode_record = {}
 
         # Return environment parameters to pass
@@ -70,14 +73,18 @@ class SimulatedTeacher:
         self.current_target_concept = self.current_queue.pop(0)
         gameObject_handle = self.current_target_concept[1]
 
-        opening_output = [{
-            "utterance": "What kind of truck is this?",
-            "pointing": { (22, 26): gameObject_handle }
-            # "utterance": "What is this?",
-            # "pointing": { (8, 12): gameObject_handle }
-        }]
+        opening_outputs = [
+            [{
+                "utterance": "What is this?",
+                "pointing": { (8, 12): gameObject_handle }
+            }],
+            [{
+                "utterance": "What kind of truck is this?",
+                "pointing": { (22, 26): gameObject_handle }
+            }]
+        ]
 
-        return opening_output
+        return opening_outputs[self.mode]
 
     def react(self, agent_reactions):
         """ Rule-based pattern matching for handling agent responses """

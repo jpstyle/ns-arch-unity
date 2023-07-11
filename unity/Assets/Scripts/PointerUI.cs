@@ -97,7 +97,7 @@ public class PointerUI : MonoBehaviour
             if (_currentFocus is null)
                 RemoveHighlight();
             else
-                HighlightMask(_currentFocus);
+                HighlightEnt(_currentFocus);
         }
     }
 
@@ -111,12 +111,10 @@ public class PointerUI : MonoBehaviour
         _envEntities.Remove(ent);
     }
 
-    public void HighlightMask(EnvEntity ent)
+    public void HighlightEnt(EnvEntity ent)
     {
         // Highlight the target ent by setting display to Flex and changing style
         _pointerRect.style.display = DisplayStyle.Flex;
-        var dw = Display.displays[_displayId].renderingWidth;
-        var dh = Display.displays[_displayId].renderingHeight;
 
         var highlightBox = ent.boxes[_displayId];
         var bx = (int) highlightBox.x;
@@ -127,16 +125,6 @@ public class PointerUI : MonoBehaviour
         _pointerRect.style.top = new StyleLength(by);
         _pointerRect.style.width = new StyleLength(bw);
         _pointerRect.style.height = new StyleLength(bh);
-
-        var highlightMask = ent.masks[_displayId]
-            .Select((v, i) => (v, i % dw, dh - i / dw))
-            .Where(v => v.Item2 >= bx && v.Item2 < bx+bw && v.Item3 > by && v.Item3 <= by+bh)
-            .Select(v => new Color(1f, 0.588f, 0f, v.Item1 * 0.8f))
-            .ToArray();
-        var highlightTexture = new Texture2D((int) highlightBox.width, (int) highlightBox.height);
-        highlightTexture.SetPixels(highlightMask);
-        highlightTexture.Apply();
-        _pointerRect.style.backgroundImage = new StyleBackground(highlightTexture);
 
         _targetNameLabel.text = ent.gameObject.name;
     }

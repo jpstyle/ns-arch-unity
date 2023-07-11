@@ -267,17 +267,14 @@ class ITLAgent:
                 # input, re-run vision module to update with new predictions for it
                 new_ents = set(self.lang.dialogue.referents["env"]) - set(self.vision.scene)
                 if len(new_ents) > 0:
-                    bboxes = {
-                        ent: {
-                            "bbox": self.lang.dialogue.referents["env"][ent]["bbox"],
-                            "bbox_mode": "xyxy"
-                        }
+                    masks = {
+                        ent: self.lang.dialogue.referents["env"][ent]["mask"]
                         for ent in new_ents
                     }
 
                     # Incrementally predict on the designated bbox
                     self.vision.predict(
-                        None, self.lt_mem.exemplars, bboxes=bboxes, visualize=False
+                        None, self.lt_mem.exemplars, masks=masks, visualize=False
                     )
 
                     ents_updated = True     # Set flag for another round of sensemaking

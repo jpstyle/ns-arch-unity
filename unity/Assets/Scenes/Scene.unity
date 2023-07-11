@@ -512,11 +512,12 @@ MonoBehaviour:
     rid: 7528994970335444992
   m_Labelers:
   - rid: 6784594850814099456
+  - rid: 6784595041881948160
   m_LayerMask:
     serializedVersion: 2
     m_Bits: 4294967295
-  id: segmLabeler
-  description: instance segmentation mask extractor
+  id: annotationLabeler
+  description: 2d bounding box & instance segmentation mask extractor
   captureRgbImages: 0
   firstCaptureFrame: 0
   captureTriggerMode: 1
@@ -536,6 +537,14 @@ MonoBehaviour:
       data:
         enabled: 1
         annotationId: instance segmentation
+        idLabelConfig: {fileID: 11400000, guid: f787131a0a5e4fc60b971c569e2b9a9b,
+          type: 2}
+    - rid: 6784595041881948160
+      type: {class: BoundingBox2DLabeler, ns: UnityEngine.Perception.GroundTruth.Labelers,
+        asm: Unity.Perception.Runtime}
+      data:
+        enabled: 1
+        annotationId: bounding box
         idLabelConfig: {fileID: 11400000, guid: f787131a0a5e4fc60b971c569e2b9a9b,
           type: 2}
     - rid: 7528994970335444992
@@ -1643,6 +1652,7 @@ MonoBehaviour:
       type: {class: StorageEndpoint, ns: , asm: Assembly-CSharp}
       data:
         annotationsUpToDate: 0
+        segMap: []
 --- !u!4 &1862703091
 Transform:
   m_ObjectHideFlags: 3

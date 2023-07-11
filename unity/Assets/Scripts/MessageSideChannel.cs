@@ -34,7 +34,10 @@ public class MessageSideChannel : SideChannel
             var end = msg.ReadInt32();
             var refByMask = msg.ReadBoolean();
             if (refByMask)
-                demRefs[(start, end)] = new EntityRef(msg.ReadFloatList().ToArray());
+            {
+                var rleMask = msg.ReadFloatList().ToArray();
+                demRefs[(start, end)] = new EntityRef(RleDecode(rleMask));
+            }
             else
                 demRefs[(start, end)] = new EntityRef(msg.ReadString());
         }
@@ -66,7 +69,7 @@ public class MessageSideChannel : SideChannel
             {
                 case EntityRefType.Mask:
                     msgOut.WriteBoolean(true);
-                    msgOut.WriteFloatList(demRef.maskRef);
+                    msgOut.WriteFloatList(RleEncode(demRef.maskRef));
                     break;
                 case EntityRefType.String:
                     msgOut.WriteBoolean(false);
@@ -83,5 +86,65 @@ public class MessageSideChannel : SideChannel
 
         // Queue message to send
         QueueMessageToSend(msgOut);
+    }
+
+    private static float[] RleEncode(float[] rawMask)
+    {
+        // Encode raw binary mask into RLE format for message compression
+        var rle = new List<float>();
+
+        var zeroFlag = true;
+        var run = 0f;
+        foreach (var f in rawMask)
+        {
+            // Increment run length if value matches with current flag; push current
+            // run length value to return array and flip sign
+            if (zeroFlag)
+            {
+                if (f == 0f) run += 1;
+                else
+                {
+                    rle.Add(run);
+                    zeroFlag = false;
+                    run = 1f;
+                }
+            }
+            else
+            {
+                if (f > 0f) run += 1;
+                else
+                {
+                    rle.Add(run);
+                    zeroFlag = true;
+                    run = 1f;
+                }
+            }
+        }
+        if (run > 0f) rle.Add(run);     // Flush last entry
+
+        return rle.ToArray();
+    }
+
+    private static float[] RleDecode(float[] rleMask)
+    {
+        // Decode RLE to recover raw binary mask
+        var totalLength = (int) rleMask.Sum();
+        var raw = new float[totalLength];
+
+        var zeroFlag = true;
+        var cumulative = 0; 
+        foreach (var f in rleMask)
+        {
+            // Get integer run length and update values 
+            var runLength = (int) f;
+            for (var i = cumulative; i < cumulative+runLength; i++)
+                raw[i] = zeroFlag ? 0f : 1f;
+
+            // Flip sign and update cumulative index
+            zeroFlag = !zeroFlag;
+            cumulative += runLength;
+        }
+
+        return raw;
     }
 }

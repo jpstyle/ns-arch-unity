@@ -4,17 +4,20 @@ import pickle
 from PIL import Image
 from collections import OrderedDict, defaultdict
 
+import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from tqdm import tqdm
 from torch.optim import AdamW
-from torchvision.ops import box_convert, clip_boxes_to_image
 from transformers import SamModel, SamProcessor
 from transformers.activations import ACT2FN
 from transformers.models.sam.modeling_sam import SamFeedForward, SamLayerNorm
 
-from .process_batch import process_batch
+from .process_data import (
+    process_batch, preprocess_input, shape_guided_roi_align, compute_conc_embs
+)
+from ..utils import masks_bounding_boxes
 
 
 class VisualSceneAnalyzer(pl.LightningModule):
@@ -110,8 +113,11 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
         self.save_hyperparameters()
 
-    def training_step(self, batch, batch_idx, *_):
-        losses, metrics = process_batch(self, batch, batch_idx)
+        # For caching image embeddings for __forward__ inputs
+        self.processed_img_cached = None
+
+    def training_step(self, batch, *_):
+        losses, metrics = process_batch(self, batch)
 
         conc_type = batch[1]
 
@@ -133,7 +139,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
-        loss, metrics = process_batch(self, batch, batch_idx)
+        loss, metrics = process_batch(self, batch)
         pred = loss, metrics, batch[1]
         self.validation_step_outputs[dataloader_idx].append(pred)
         return pred
@@ -188,8 +194,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         final_avg_loss = sum(avg_total_losses) / (len(avg_total_losses) / len(outputs))
         self.log(f"val_loss", final_avg_loss, add_dataloader_idx=False)
 
-    def test_step(self, batch, batch_idx, dataloader_idx):
-        _, metrics = process_batch(self, batch, batch_idx)
+    def test_step(self, batch, dataloader_idx):
+        _, metrics = process_batch(self, batch)
         pred = metrics, batch[1]
         self.test_step_outputs[dataloader_idx].append(pred)
         return pred
@@ -268,65 +274,146 @@ class VisualSceneAnalyzer(pl.LightningModule):
             state_dict_filtered[k] = v
         checkpoint["state_dict"] = state_dict_filtered
 
-    def forward(self, image, bboxes=None, lock_provided_boxes=True):
+    def forward(self, image, grid=None, masks=None):
         """
         Purposed as the most general endpoint of the vision module for inference,
         which takes an image as input and returns 'raw output' consisting of the
-        following types of data:
-            1) a class-centric embedding (projection from DETR decoder output)
-            2) an attribute-centric embedding (projection from DETR decoder output)
-            3) a bounding box (from DETR decoder)
+        following types of data for each recognized instance:
+            1) a class-centric embedding
+            2) an attribute-centric embedding
+            3) an instance segmentation mask
+            4) an objectness score (estimated IoU)
         for each object (candidate) detected.
-        
-        Can be optionally provided with a list of additional bounding boxes as
-        references to regions which are guaranteed to enclose an object each --
-        so that their concept identities can be classified.
+
+        Can be optionally provided with a 2-d grid specification (as int-int pair),
+        for prompt-free 'ensemble recognition'; essentially predictions on point
+        prompts scattered as 2-d grid.
+
+        Can be optionally provided with a list of additional segmentation masks
+        as references to regions which are guaranteed to enclose an object each
+        -- so that their concept identities can be classified.
+
+        Either grid or masks should be provided.
         """
-        # Corner- to center-format, then absolute to relative bbox dimensions
-        if bboxes is not None:
-            bboxes = box_convert(bboxes, "xywh", "cxcywh")
-            bboxes = torch.stack([
-                bboxes[:,0] / image.width, bboxes[:,1] / image.height,
-                bboxes[:,2] / image.width, bboxes[:,3] / image.height,
-            ], dim=-1)
+        assert grid is not None or masks is not None
+
+        # Preprocessing input image & prompts
+        img_provided = image is not None
+        grid_provided = grid is not None
+
+        input_data = {}
+        if img_provided:
+            orig_size = (image.width, image.height)
+            input_data["image"] = image
         else:
-            bboxes = torch.tensor([]).view(0, 4).to(self.device)
+            orig_size = self.processed_img_cached[1]
+            input_data["original_sizes"] = torch.tensor([orig_size])
 
-        encoder_outputs_all = detr_enc_outputs(
-            self.detr, image, self.feature_extractor
-        )
-        encoder_outputs, valid_ratios, spatial_shapes, \
-            level_start_index, mask_flatten = encoder_outputs_all
+        if grid_provided:
+            # Prepare prompts for grid (if provided)
+            assert isinstance(grid, tuple)
+            assert isinstance(grid[0], int) and isinstance(grid[1], int)
+            y_count, x_count = grid
+            input_data["instance_point"] = torch.tensor([[
+                [[orig_size[0] / (x_count+1) * (i+1), orig_size[1] / (y_count+1) * (j+1)]]
+                for i in range(x_count) for j in range(y_count)
+            ]])
 
-        decoder_outputs, last_reference_points, enc_objectness_scores = \
-            detr_dec_outputs(
-                self.detr, encoder_outputs, bboxes, lock_provided_boxes,
-                valid_ratios, spatial_shapes, level_start_index, mask_flatten
+        processed_input = preprocess_input(self, input_data, img_provided)
+
+        # Obtain image embedding computed by SAM image encoder; compute from scratch
+        # if image input is new, fetch cached embs otherwise
+        if img_provided:
+            # Compute image embedding and cache for later use
+            img_embs = self.sam.get_image_embeddings(processed_input["pixel_values"])
+            reshaped_size = processed_input["reshaped_input_sizes"]
+            self.processed_img_cached = (img_embs, orig_size, reshaped_size)
+        else:
+            # No image provided, used cached image embedding
+            assert self.processed_img_cached is not None
+            img_embs = self.processed_img_cached[0]
+            reshaped_size = self.processed_img_cached[2]
+
+        if grid_provided:
+            # Run SAM to obtain segmentation mask estimations on grid point prompts
+            
+            # Prepare image-positional embeddings
+            img_positional_embs = self.sam.get_image_wide_positional_embeddings()
+            # No-mask embeddings; Dense embedding in SAM when mask prompts are not provided
+            no_mask_dense_embs = self.sam.prompt_encoder.no_mask_embed.weight
+            no_mask_dense_embs = no_mask_dense_embs[...,None,None].expand_as(img_embs)
+
+            # Call prompt encoder to get grid point prompts encoding
+            grid_tokens, _ = self.sam.prompt_encoder(
+                processed_input["input_points"],
+                processed_input["input_labels"],
+                None,
+                None
             )
 
-        # Class/attribute-centric feature vectors
-        cls_embeddings = self.fs_embed_cls(decoder_outputs[0])
-        att_embeddings = self.fs_embed_att(
-            torch.cat([decoder_outputs[0], cls_embeddings], dim=-1)
+            # Call mask decoder with the image & prompt encodings
+            low_res_masks, iou_predictions, _ = self.sam.mask_decoder(
+                image_embeddings=img_embs,
+                image_positional_embeddings=img_positional_embs,
+                sparse_prompt_embeddings=grid_tokens,
+                dense_prompt_embeddings=no_mask_dense_embs,
+                multimask_output=True
+            )
+
+            # Binarize the mask predictions
+            high_res_masks = self.sam_processor.image_processor.post_process_masks(
+                low_res_masks.cpu(),
+                processed_input["original_sizes"].cpu(),
+                processed_input["reshaped_input_sizes"].cpu()
+            )
+
+            # Flatten & rank predictions by scores
+            preds_sorted = sorted([
+                (mask_inst, score_inst.item())
+                for masks_per_pt, scores_per_pt in zip(high_res_masks[0], iou_predictions[0])
+                for mask_inst, score_inst in zip(masks_per_pt, scores_per_pt)
+            ], key= lambda x: x[1], reverse=True)
+            masks_all = [msk for msk, _ in preds_sorted]
+            scores_all = [scr for _, scr in preds_sorted]
+        else:
+            # No predictions on grid points
+            masks_all = []
+            scores_all = []
+
+        if masks is not None:
+            # Add the provided masks along with the recognized masks to be processed
+            # for [concept]-centric embeddings. Treat the provided masks as golden,
+            # i.e. having scores of 1.0 and prepending to the mask/score lists
+            masks_all += masks
+            scores_all += [1.0] * len(masks)
+
+        # Prepare tensor inputs for shape-guided RoIAlign, filtering out invalid ones
+        # (i.e., masks with zero area)
+        masks_tensor = torch.stack(masks_all)
+        valid_masks = masks_tensor.sum(dim=(-2,-1)) > 0
+        masks_tensor = masks_tensor[valid_masks]
+        boxes_tensor = masks_bounding_boxes(masks_tensor.cpu().numpy())
+        boxes_tensor = torch.tensor(boxes_tensor, dtype=torch.float)
+
+        # Filter mask/score outputs accordingly
+        masks_all = [masks_all[i] for i, is_valid in enumerate(valid_masks) if is_valid]
+        scores_all = [scores_all[i] for i, is_valid in enumerate(valid_masks) if is_valid]
+
+        # Shape-guided RoIAlign
+        sg_roi_embs = shape_guided_roi_align(
+            self, img_embs.expand(len(masks_all), -1, -1, -1),
+            masks_tensor, boxes_tensor[:,None], [orig_size] * len(masks_all)
         )
 
-        # Obtain final bbox estimates
-        dec_last_layer_ind = self.detr.config.decoder_layers
-        last_bbox_embed = self.detr.bbox_embed[dec_last_layer_ind-1]
-        delta_bbox = last_bbox_embed(decoder_outputs[0])
+        # Obtain class/attribute-centric feature vectors for the masks
+        cls_embs, att_embs = compute_conc_embs(self, sg_roi_embs, "attribute")
 
-        final_bboxes = delta_bbox + torch.logit(last_reference_points[0])
-        final_bboxes = final_bboxes.sigmoid()
-        final_bboxes = torch.cat([bboxes, final_bboxes[bboxes.shape[0]:]])
+        # Output tensors to numpy arrays
+        cls_embs = cls_embs.cpu().numpy()
+        att_embs = att_embs.cpu().numpy()
+        masks_all = np.stack([msk.numpy() for msk in masks_all])
 
-        # Relative to absolute bbox dimensions, then center- to corner-format
-        final_bboxes = torch.stack([
-            final_bboxes[:,0] * image.width, final_bboxes[:,1] * image.height,
-            final_bboxes[:,2] * image.width, final_bboxes[:,3] * image.height,
-        ], dim=-1)
-        final_bboxes = box_convert(final_bboxes, "cxcywh", "xywh")
-
-        return cls_embeddings, att_embeddings, final_bboxes, enc_objectness_scores[0]
+        return cls_embs, att_embs, masks_all, scores_all
 
     def search(self, image, conds_lists, k=None):
         """
@@ -374,14 +461,14 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # Dataset name (e.g., 'vaw')
         d_name = self.cfg.vision.data.name
 
+        # Need to move to cuda as this method is not handled by pytorch lightning Trainer
+        if torch.cuda.is_available():
+            self.cuda()
+
         # Process each image in images_path
         all_images = os.listdir(images_path)
         pbar = tqdm(all_images, total=len(all_images))
         pbar.set_description("Pre-computing image embs")
-
-        # Need to move to cuda as this method is not handled by pytorch lightning Trainer
-        if torch.cuda.is_available():
-            self.cuda()
 
         for img in pbar:
             # Load raw image
@@ -396,14 +483,14 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
             # Obtain image embeddings from the raw pixel values
             with torch.no_grad():
-                img_emb = self.sam.get_image_embeddings(processed_input["pixel_values"])
-                img_emb = img_emb.cpu().numpy()
+                img_embs = self.sam.get_image_embeddings(processed_input["pixel_values"])
+                img_embs = img_embs.cpu().numpy()
 
             # Save embedding (along with metadata like original size, reshaped size)
             # as compressed file
             with gzip.open(f"{cache_path}/{d_name}_{image_id}.gz", "wb") as enc_f:
                 # Replace raw pixel values with the computed embeddings, then save
-                processed_input["embedding"] = img_emb
+                processed_input["embedding"] = img_embs
                 processed_input["original_sizes"] = \
                     processed_input["original_sizes"][0].tolist()
                 processed_input["reshaped_input_sizes"] = \

@@ -77,7 +77,7 @@ def main(cfg):
                 y = ([1] * len(pos_train)) + ([0] * len(neg_train))
 
                 # Fit classifier and run on test set
-                bin_clf = KNeighborsClassifier(n_neighbors=50, weights="distance")
+                bin_clf = KNeighborsClassifier(n_neighbors=10, weights="distance")
                 bin_clf.fit(X, y)
                 pos_results = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 neg_results = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5

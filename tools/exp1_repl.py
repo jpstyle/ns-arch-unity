@@ -45,20 +45,29 @@ def main(cfg):
     student = ITLAgent(cfg)
     teacher = SimulatedTeacher(cfg)
 
+    # (Temp?) Concept teaching modes:
+    #   0) Distinguishing whole trucks and parts
+    #   1) Distinguishing between types of trucks
+    mode = 0
+
     # Set up target concepts to teach in each episode as a list of dicts, where
     # each index corresponds to a truck type
     teacher.target_concept_sets = [
         # Each dict contains concepts to be tested and taught in a single episode,
         # with string concept names as key and Unity GameObject string name handle
         # as value
-        # { "base truck": "/truck" },
-        # { "dump truck": "/truck" },
-        # { "fire truck": "/truck" },
-        # { "missile truck": "/truck" }
-        { "truck": "/truck" },
-        { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
-        { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
-        { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+        [
+            { "truck": "/truck" },
+            { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
+            { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
+            { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+        ],
+        [
+            { "base truck": "/truck" },
+            { "dump truck": "/truck" },
+            { "fire truck": "/truck" },
+            { "missile truck": "/truck" }
+        ]
     ]
 
     # Student/teacher-side string message communication side channels
@@ -72,14 +81,14 @@ def main(cfg):
     # Start communication with Unity
     env = UnityEnvironment(
         # Uncomment next line when running with Unity linux build
-        # f"{cfg.paths.root_dir}/unity/Builds/truck_domain.x86_64",
+        f"{cfg.paths.root_dir}/unity/Builds/truck_domain.x86_64",
         side_channels=[student_channel, teacher_channel, env_par_channel],
         timeout_wait=600, seed=cfg.seed
     )
 
     for _ in range(100):
         # Obtain random initialization of each episode
-        random_inits = teacher.setup_episode()
+        random_inits = teacher.setup_episode(mode)
 
         # Send randomly initialized parameters to Unity
         for field, value in random_inits.items():
@@ -132,13 +141,10 @@ def main(cfg):
                         if len(incoming_msgs) > 0:
                             while len(incoming_msgs) > 0:
                                 _, utterance, dem_refs = incoming_msgs.pop(0)
-                                # Relative to absolute bbox coordinates
+                                # 1D to 2D according to visual scene dimension
                                 dem_refs = {
-                                    crange: [
-                                        bbox[0] * i_w, bbox[1] * i_h,
-                                        (bbox[0]+bbox[2]) * i_w, (bbox[1]+bbox[3]) * i_h
-                                    ]
-                                    for crange, bbox in dem_refs.items()
+                                    crange: np.array(mask).reshape(i_h, i_w)
+                                    for crange, mask in dem_refs.items()
                                 }
                                 agent_loop_input["l_usr_in"].append(utterance)
                                 agent_loop_input["pointing"].append(dem_refs)
@@ -153,7 +159,12 @@ def main(cfg):
                             for act_type, act_data in act_out:
                                 if act_type == "generate":
                                     action.discrete[0][0] = 1       # 'Utter' action
-                                    student_channel.send_string(act_data[0], act_data[1])
+                                    utterance = act_data[0]
+                                    dem_refs = {
+                                        crange: mask.reshape(-1).tolist()
+                                        for crange, mask in act_data[1].items()
+                                    }
+                                    student_channel.send_string(utterance, dem_refs)
 
                             # Finally apply actions
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
@@ -184,10 +195,10 @@ def main(cfg):
                             action = b_spec.action_spec.empty_action(1)
                             for act_data in user_response:
                                 action.discrete[0][0] = 1       # 'Utter' action
-                                teacher_channel.send_string(
-                                    act_data["utterance"], act_data["pointing"]
-                                )
-                            
+                                utterance = act_data["utterance"]
+                                dem_refs = act_data["pointing"]
+                                teacher_channel.send_string(utterance, dem_refs)
+
                             # Finally apply actions
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
                         else:
