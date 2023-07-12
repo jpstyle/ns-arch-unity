@@ -402,7 +402,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # Shape-guided RoIAlign
         sg_roi_embs = shape_guided_roi_align(
             self, img_embs.expand(len(masks_all), -1, -1, -1),
-            masks_tensor, boxes_tensor[:,None], [orig_size] * len(masks_all)
+            masks_tensor, boxes_tensor[:,None],
+            [(orig_size[1], orig_size[0])] * len(masks_all)     # Needs flipping (H, W)
         )
 
         # Obtain class/attribute-centric feature vectors for the masks

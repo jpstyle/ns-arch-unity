@@ -81,7 +81,7 @@ def main(cfg):
     # Start communication with Unity
     env = UnityEnvironment(
         # Uncomment next line when running with Unity linux build
-        f"{cfg.paths.root_dir}/unity/Builds/truck_domain.x86_64",
+        f"{cfg.paths.build_dir}/truck_domain.x86_64",
         side_channels=[student_channel, teacher_channel, env_par_channel],
         timeout_wait=600, seed=cfg.seed
     )

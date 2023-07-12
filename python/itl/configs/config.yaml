@@ -13,6 +13,7 @@ paths:
     assets_dir: "${paths.root_dir}/assets"
     outputs_dir: "${hydra:runtime.output_dir}"
     cache_dir: "${paths.outputs_dir}/cache"
+    build_dir: "${paths.root_dir}/unity/Builds"
 
 agent:
     strat_generic: "semOnly"    # Options: "semOnly", "semNeg", "semNegScal"
