@@ -414,14 +414,11 @@ def shape_guided_roi_align(model, img_embs, masks, boxes, orig_sizes):
     """
     Shape-guided RoIAlign; amplify feature map areas corresponding to the masks,
     then run roi_align to obtain fixed-sized feature maps for each instance
+    (cf. [Deeply Shape-guided Cascade for Instance Segmentation], Ding et al. 2021)
     """
     # Sync devices and to list
     masks = [msk.to(img_embs.device) for msk in masks]
     boxes = [box.to(img_embs.device) for box in boxes]
-
-    # Hyperparameters needed
-    patch_size = model.sam.config.vision_config.patch_size
-    resize_size = model.sam.config.vision_config.image_size
 
     # Pad and resize instance masks to match the downsampled feature map size,
     # needed for shape-guided RoIAlign
@@ -435,15 +432,18 @@ def shape_guided_roi_align(model, img_embs, masks, boxes, orig_sizes):
         F.pad(msk, p_spec, value=0).to(torch.float)
         for msk, p_spec in zip(masks, pad_specs)
     ]
-    masks_resized = torch.cat([resize(msk[None], resize_size) for msk in masks_resized])
+    masks_resized = torch.stack([
+        resize(msk[None], img_emb.shape[1:])
+        for msk, img_emb in zip(masks_resized, img_embs)
+    ])
 
-    # RoI-align on feature maps + mask embedding
-    model.sam.prompt_encoder.mask_embed.layer_norm1.data_format = "channels_first"
-    model.sam.prompt_encoder.mask_embed.layer_norm2.data_format = "channels_first"
-    masks_embs = model.sam.prompt_encoder.mask_embed(masks_resized[:,None])
-    masks_embs = resize(masks_embs, img_embs.shape[-2:])
+    # RoI-align on feature maps where features in regions covered by the provided
+    # masks are further amplified
+    img_embs_amplified = img_embs * 0.1 + img_embs * masks_resized
+    patch_size = model.sam.config.vision_config.patch_size
+    resize_size = model.sam.config.vision_config.image_size
     sg_roi_embs = roi_align(
-        img_embs+masks_embs, boxes,
+        img_embs_amplified, boxes,
         output_size=model.roi_align_out, spatial_scale=patch_size/resize_size
     )
 
