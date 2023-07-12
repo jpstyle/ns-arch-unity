@@ -265,8 +265,8 @@ class _FewShot2DDataset(Dataset):
             # instance_mask.sum() == 0; segmentation mask too small that the decoded
             # binary mask doesn't have any nonzero entry... This item doesn't serve
             # as a valid training signal
-            data_dict["instance_bbox"] = np.zeros(1, 4, dtype=np.int64)
-            data_dict["instance_point"] = np.zeros(1, 1, 2, dtype=np.int64)
+            data_dict["instance_bbox"] = np.zeros((1, 4), dtype=np.int64)
+            data_dict["instance_point"] = np.zeros((1, 1, 2), dtype=np.int64)
 
         # Ground-truth segmentation binary maps for any instances of the specified
         # 'focus' concept, 
