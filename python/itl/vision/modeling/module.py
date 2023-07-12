@@ -111,7 +111,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # Loss component weights
         self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 1 }
 
-        self.save_hyperparameters()
+        self.save_hyperparameters(self.cfg)
 
         # For caching image embeddings for __forward__ inputs
         self.processed_img_cached = None
