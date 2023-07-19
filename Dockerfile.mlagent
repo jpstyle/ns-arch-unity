@@ -11,6 +11,7 @@ COPY python/itl/lang/requirements.txt itl/lang/
 COPY python/itl/symbolic_reasoning/requirements.txt itl/symbolic_reasoning/
 COPY python/itl/practical_reasoning/requirements.txt itl/practical_reasoning/
 COPY python/itl/lpmln/requirements.txt itl/lpmln/
+RUN pip install --no-cache-dir pip
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir gdown
 
@@ -20,8 +21,9 @@ RUN apt update && apt install -y libgl1
 # Let's add in vim
 RUN apt install -y vim
 
-# Install virtual display buffer X server
+# Install virtual display buffer X server and X11 server utils
 RUN apt install -y xvfb
+RUN apt install -y x11-xserver-utils
 
 # Create a non-root user
 RUN useradd --create-home nonroot
@@ -36,6 +38,6 @@ RUN chown -R nonroot .
 USER nonroot
 
 # Display env var
-ENV DISPLAY :1
+ENV DISPLAY :99
 
 ENTRYPOINT ["/bin/bash", "tools/container_scripts/eval_with_xvfb.sh"]

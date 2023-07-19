@@ -11,6 +11,7 @@ COPY python/itl/lang/requirements.txt itl/lang/
 COPY python/itl/symbolic_reasoning/requirements.txt itl/symbolic_reasoning/
 COPY python/itl/practical_reasoning/requirements.txt itl/practical_reasoning/
 COPY python/itl/lpmln/requirements.txt itl/lpmln/
+RUN pip install --no-cache-dir pip
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir --upgrade torch torchvision pytorch-lightning
 RUN pip install --no-cache-dir gdown
