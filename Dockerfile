@@ -1,4 +1,4 @@
-FROM python:3.8
+FROM python:3.10.8
 
 SHELL ["/bin/bash", "-c"]
 
@@ -12,13 +12,17 @@ COPY python/itl/symbolic_reasoning/requirements.txt itl/symbolic_reasoning/
 COPY python/itl/practical_reasoning/requirements.txt itl/practical_reasoning/
 COPY python/itl/lpmln/requirements.txt itl/lpmln/
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade protobuf==3.20
 RUN pip install --no-cache-dir gdown
 
-# Needed to import cv2
+# Some graphics related libraries needed
 RUN apt update && apt install -y libgl1
+RUN apt install -y vulkan-tools
+RUN apt install -y mesa-utils
 
-# Let's add in vim
+# Let's add in vim and less
 RUN apt install -y vim
+RUN apt install -y less
 
 # Install virtual display buffer X server and X11 server utils
 RUN apt install -y xvfb
@@ -38,5 +42,7 @@ USER nonroot
 
 # Display env var
 ENV DISPLAY :99
+
+ENV NVIDIA_DRIVER_CAPABILITIES all
 
 ENTRYPOINT ["/bin/bash", "tools/container_scripts/eval_with_xvfb.sh"]

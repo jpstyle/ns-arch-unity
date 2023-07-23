@@ -61,3 +61,15 @@ def mask_nms(masks, scores, iou_thres):
         queue = queue[ious < iou_thres]
 
     return kept_indices
+
+
+def flatten_cfg(cfg_entry, prefix=None):
+    """ For flattening nested config dict using '.' as separator """
+    if isinstance(cfg_entry, dict):
+        return {
+            f"{prefix}.{in_k}" if prefix is not None else in_k: in_v
+            for k, v in cfg_entry.items()
+            for in_k, in_v in flatten_cfg(v, k).items()
+        }
+    else:
+        return { prefix: cfg_entry }

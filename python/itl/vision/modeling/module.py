@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from tqdm import tqdm
+from omegaconf import OmegaConf
 from torch.optim import AdamW
 from transformers import SamModel, SamProcessor
 from transformers.activations import ACT2FN
@@ -17,7 +18,7 @@ from transformers.models.sam.modeling_sam import SamFeedForward, SamLayerNorm
 from .process_data import (
     process_batch, preprocess_input, shape_guided_roi_align, compute_conc_embs
 )
-from ..utils import masks_bounding_boxes
+from ..utils import masks_bounding_boxes, flatten_cfg
 
 
 class VisualSceneAnalyzer(pl.LightningModule):
@@ -111,7 +112,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # Loss component weights
         self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 1 }
 
-        self.save_hyperparameters(self.cfg)
+        flattened_cfg = flatten_cfg(OmegaConf.to_container(self.cfg, resolve=True))
+        self.save_hyperparameters(flattened_cfg)
 
         # For caching image embeddings for __forward__ inputs
         self.processed_img_cached = None
