@@ -20,6 +20,7 @@ for filename in $(find "${ICD_SEARCH_LOCATIONS[@]}" -name "*nvidia*.json" 2> /de
 done
 
 docker run -d --gpus "device=0" --name $1 \
-    --mount type=bind,source=$2,target=/mnt/host ${ICD_MOUNTS[@]} \
-    --mount type=bind,source=$3,target=/home/nonroot/ns-arch-unity/.env \
+    --volume $2:/mnt/data_volume \
+    --volume $3:/home/nonroot/ns-arch-unity/.env \
+    ${ICD_MOUNTS[@]} \
     jpstyle92/ns-arch-unity "${@:4}"
