@@ -1,5 +1,8 @@
 #!/bin/bash
-# arg1: A directory to bind mount for access from the dev container
+# arg1: Name of the container
+# arg2: A directory to bind mount for access from the container
+# arg3: Path to dotenv file containing environment variables (wandb secret, etc.)
+# Remaining args: Command to run with the container
 
 # Needed to expose Nvidia GPUs to Vulkan renderer
 # Locations of Nvidia icd files may vary across hosts and cannot be baked in 
@@ -16,4 +19,7 @@ for filename in $(find "${ICD_SEARCH_LOCATIONS[@]}" -name "*nvidia*.json" 2> /de
     ICD_MOUNTS+=( --volume "${filename}":"${filename}":ro )
 done
 
-docker run -d --rm --name ns-dev --mount type=bind,source=$1,target=/mnt/host ${ICD_MOUNTS[@]} --gpus "device=0" --entrypoint sleep jpstyle92/ns-arch-unity infinity
+docker run -d --rm --gpus "device=0" --name $1 \
+    --mount type=bind,source=$2,target=/mnt/host ${ICD_MOUNTS[@]} \
+    --mount type=bind,source=$3,target=/home/nonroot/ns-arch-unity/.env \
+    jpstyle92/ns-arch-unity "${@:4}"

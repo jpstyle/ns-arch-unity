@@ -20,9 +20,10 @@ RUN apt update && apt install -y libgl1
 RUN apt install -y vulkan-tools
 RUN apt install -y mesa-utils
 
-# Let's add in vim and less
+# Let's add in vim, less and rsync
 RUN apt install -y vim
 RUN apt install -y less
+RUN apt install -y rsync
 
 # Install virtual display buffer X server and X11 server utils
 RUN apt install -y xvfb
@@ -40,9 +41,8 @@ RUN chown -R nonroot .
 # Login as non-root
 USER nonroot
 
-# Display env var
+# Environment variables
 ENV DISPLAY :99
-
 ENV NVIDIA_DRIVER_CAPABILITIES all
 
 ENTRYPOINT ["/bin/bash", "tools/container_internal_scripts/eval_with_xvfb.sh"]

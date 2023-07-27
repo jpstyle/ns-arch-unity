@@ -36,7 +36,7 @@ OmegaConf.register_new_resolver(
 )
 @hydra.main(config_path="../python/itl/configs", config_name="config")
 def main(cfg):
-    print(OmegaConf.to_yaml(cfg))
+    print(OmegaConf.to_yaml(cfg, resolve=True))
 
     # Set seed
     random.seed(cfg.seed)
