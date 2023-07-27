@@ -205,6 +205,7 @@ def main(cfg):
                                 utterance = act_data["utterance"]
                                 dem_refs = act_data["pointing"]
                                 teacher_channel.send_string(utterance, dem_refs)
+                                logger.info(f"T> {TAB}{utterance}")
 
                             # Finally apply actions
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
