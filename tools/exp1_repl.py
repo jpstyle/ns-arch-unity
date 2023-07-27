@@ -9,6 +9,7 @@ sys.path.insert(
     os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
 import uuid
+import logging
 import warnings
 warnings.filterwarnings("ignore")
 import random
@@ -26,6 +27,9 @@ from python.itl import ITLAgent
 from tools.sim_user import SimulatedTeacher
 from tools.message_side_channel import StringMsgChannel
 
+
+logger = logging.getLogger(__name__)
+TAB = "\t"
 
 OmegaConf.register_new_resolver(
     "randid", lambda: str(uuid.uuid4())[:6]
@@ -86,7 +90,9 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    for _ in range(100):
+    for i in range(100):
+        logger.info(f"Sys> Episode {i+1})")
+
         # Obtain random initialization of each episode
         random_inits = teacher.setup_episode(mode)
 
@@ -165,6 +171,7 @@ def main(cfg):
                                         for crange, mask in act_data[1].items()
                                     }
                                     student_channel.send_string(utterance, dem_refs)
+                                    logger.info(f"L> {TAB}{utterance}")
 
                             # Finally apply actions
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
