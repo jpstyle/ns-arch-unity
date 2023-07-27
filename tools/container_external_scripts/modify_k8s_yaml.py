@@ -27,11 +27,9 @@ if __name__ == "__main__":
 
     for i, path in enumerate(icd_search_locations):
 
-        if not os.path.exists(path): continue
-
         k8s_obj["spec"]["volumes"].append({
             "name": f"icd{i}",
-            "hostPath": { "path": path, "type": "File" }
+            "hostPath": { "path": path, "type": "FileOrCreate" }
         })
 
         for c_spec in k8s_obj["spec"]["containers"]:

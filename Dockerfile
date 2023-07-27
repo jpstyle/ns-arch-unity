@@ -45,4 +45,4 @@ ENV DISPLAY :99
 
 ENV NVIDIA_DRIVER_CAPABILITIES all
 
-ENTRYPOINT ["/bin/bash", "tools/container_scripts/eval_with_xvfb.sh"]
+ENTRYPOINT ["/bin/bash", "tools/container_internal_scripts/eval_with_xvfb.sh"]

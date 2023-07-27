@@ -1,3 +1,3 @@
 #!/bin/bash
-bash tools/container_scripts/start_xvfb.sh
+bash tools/container_internal_scripts/start_xvfb.sh
 eval $*
