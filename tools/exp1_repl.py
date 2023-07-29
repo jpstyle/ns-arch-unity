@@ -90,7 +90,7 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    for i in range(1000):
+    for i in range(3000):
         logger.info(f"Sys> Episode {i+1})")
 
         # Obtain random initialization of each episode

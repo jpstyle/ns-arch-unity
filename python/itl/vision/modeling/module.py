@@ -247,7 +247,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
                 param for name, param in self.named_parameters()
                 if name.startswith("sam.mask_decoder.")
             ],
-            "lr": self.cfg.vision.optim.init_lr * 5
+            "lr": self.cfg.vision.optim.init_lr * 3
         }            
         optim = AdamW([default_params, faster_params], **optim_kwargs)
 
