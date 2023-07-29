@@ -13,7 +13,7 @@ import gc
 import torch
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
-from torchvision.ops import roi_align
+from torchvision.ops import roi_align, box_area
 from torchvision.transforms.functional import resize
 from transformers.image_processing_utils import BatchFeature
 
@@ -439,13 +439,18 @@ def shape_guided_roi_align(model, img_embs, masks, boxes, orig_sizes):
 
     # RoI-align on feature maps where features in regions covered by the provided
     # masks are further amplified
-    img_embs_amplified = img_embs * 0.1 + img_embs * masks_resized
+    bg_mult = 0.1
+    img_embs_amplified = img_embs * bg_mult + img_embs * masks_resized
     patch_size = model.sam.config.vision_config.patch_size
     resize_size = model.sam.config.vision_config.image_size
     sg_roi_embs = roi_align(
         img_embs_amplified, boxes,
         output_size=model.roi_align_out, spatial_scale=patch_size/resize_size
     )
+    # Make up for 'loss of magnitude' due to average pooling, by multiplying the
+    # ratio of box vs. mask
+    area_ratios = torch.stack([msk.sum() for msk in masks]) / box_area(torch.cat(boxes))
+    sg_roi_embs = sg_roi_embs / ((bg_mult + area_ratios)[:,None,None,None])
 
     return sg_roi_embs
 

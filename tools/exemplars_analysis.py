@@ -19,7 +19,8 @@ import tqdm as tqdm
 import numpy as np
 import pandas as pd
 from omegaconf import OmegaConf
-from sklearn.neighbors import KNeighborsClassifier
+# from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
 from bokeh.io import save
 from bokeh.models import Title
 from bokeh.layouts import column
@@ -34,7 +35,7 @@ OmegaConf.register_new_resolver(
 )
 @hydra.main(config_path="../python/itl/configs", config_name="config")
 def main(cfg):
-    print(OmegaConf.to_yaml(cfg))
+    print(OmegaConf.to_yaml(cfg, resolve=True))
 
     # Set seed
     random.seed(cfg.seed)
@@ -67,22 +68,30 @@ def main(cfg):
                 # Evaluating exemplar sets by binary classification performance on
                 # random 90:10 train/test split
                 pos_shuffled = random.sample(pos_exs_inds[c], len(pos_exs_inds[c]))
-                pos_train = pos_shuffled[:int(0.9*len(pos_shuffled))]
-                pos_test = pos_shuffled[int(0.9*len(pos_shuffled)):]
+                pos_train = pos_shuffled[:int(0.8*len(pos_shuffled))]
+                pos_test = pos_shuffled[int(0.8*len(pos_shuffled)):]
                 neg_shuffled = random.sample(neg_exs_inds[c], len(neg_exs_inds[c]))
-                neg_train = neg_shuffled[:int(0.9*len(neg_shuffled))]
-                neg_test = neg_shuffled[int(0.9*len(neg_shuffled)):]
+                neg_train = neg_shuffled[:int(0.8*len(neg_shuffled))]
+                neg_test = neg_shuffled[int(0.8*len(neg_shuffled)):]
+                print(len(pos_test), len(neg_test))
 
                 X = vectors[pos_train + neg_train]
                 y = ([1] * len(pos_train)) + ([0] * len(neg_train))
 
                 # Fit classifier and run on test set
-                bin_clf = KNeighborsClassifier(n_neighbors=10, weights="distance")
+                # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 100), weights="distance")
+                bin_clf = SVC(C=1000, probability=True, random_state=cfg.seed)
                 bin_clf.fit(X, y)
-                pos_results = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
-                neg_results = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5
-                accs[(concept_name, conc_type)] = \
-                    (pos_results.sum()+neg_results.sum()) / (len(pos_test)+len(neg_test))
+                true_pos = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
+                true_neg = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5
+                false_pos = bin_clf.predict_proba(vectors[neg_test])[:,1] > 0.5
+                false_neg = bin_clf.predict_proba(vectors[pos_test])[:,0] > 0.5
+
+                accs[(concept_name, conc_type)] = {
+                    "precision": true_pos.sum() / (true_pos.sum()+false_pos.sum()),
+                    "recall": true_pos.sum() / (true_pos.sum()+false_neg.sum()),
+                    "accuracy": (true_pos.sum()+true_neg.sum()) / (len(pos_test)+len(neg_test))
+                }
 
                 labels = [
                     "p" if fv_i in pos_exs_inds[c]
@@ -108,7 +117,16 @@ def main(cfg):
             save(column(*plots))
     
     for (concept_name, conc_type), acc in accs.items():
-        print(f"Accuracy for {concept_name} ({conc_type}): {acc:.3f}")
+        accuracy = acc["accuracy"]
+        precision = acc["precision"]
+        recall = acc["recall"]
+        f1 = 2 * precision * recall / (precision+recall)
+
+        print(f"Scores for {concept_name} ({conc_type}):")
+        print(f"{TAB} Accuracy: {accuracy}")
+        print(f"{TAB} Precision: {precision}")
+        print(f"{TAB} Recall: {recall}")
+        print(f"{TAB} F1: {f1}")
 
 if __name__ == "__main__":
     main()
