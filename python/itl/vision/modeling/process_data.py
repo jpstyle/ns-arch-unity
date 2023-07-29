@@ -447,10 +447,6 @@ def shape_guided_roi_align(model, img_embs, masks, boxes, orig_sizes):
         img_embs_amplified, boxes,
         output_size=model.roi_align_out, spatial_scale=patch_size/resize_size
     )
-    # Make up for 'loss of magnitude' due to average pooling, by multiplying the
-    # ratio of box vs. mask
-    area_ratios = torch.stack([msk.sum() for msk in masks]) / box_area(torch.cat(boxes))
-    sg_roi_embs = sg_roi_embs / ((bg_mult + area_ratios)[:,None,None,None])
 
     return sg_roi_embs
 
