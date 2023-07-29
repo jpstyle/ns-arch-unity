@@ -1,7 +1,8 @@
 #!/bin/bash
 # arg1: Name of the container
-# arg2: A directory to bind mount for access from the container
-# arg3: Path to dotenv file containing environment variables (wandb secret, etc.)
+# arg2: CUDA device index to use
+# arg3: Docker volume to mount
+# arg4: Path to dotenv file containing environment variables (wandb secret, etc.)
 # Remaining args: Command to run with the container
 
 # Needed to expose Nvidia GPUs to Vulkan renderer
@@ -19,8 +20,8 @@ for filename in $(find "${ICD_SEARCH_LOCATIONS[@]}" -name "*nvidia*.json" 2> /de
     ICD_MOUNTS+=( --volume "${filename}":"${filename}":ro )
 done
 
-docker run -d --gpus "device=0" --name $1 \
-    --volume $2:/mnt/data_volume \
-    --volume $3:/home/nonroot/ns-arch-unity/.env \
+docker run -d --name $1 --gpus "device=$2" \
+    --volume $3:/mnt/data_volume \
+    --volume $4:/home/nonroot/ns-arch-unity/.env \
     ${ICD_MOUNTS[@]} \
-    jpstyle92/ns-arch-unity "${@:4}"
+    jpstyle92/ns-arch-unity "${@:5}"
