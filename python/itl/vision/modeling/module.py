@@ -235,21 +235,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         if "eps" in self.cfg.vision.optim:
             optim_kwargs["eps"] = self.cfg.vision.optim.eps
 
-        # Construct optimizer instance; faster learning rates for mask decoder params
-        default_params = {
-            "params": [
-                param for name, param in self.named_parameters()
-                if not name.startswith("sam.mask_decoder.")
-            ]
-        }
-        faster_params = {
-            "params": [
-                param for name, param in self.named_parameters()
-                if name.startswith("sam.mask_decoder.")
-            ],
-            "lr": self.cfg.vision.optim.init_lr * 1.5
-        }            
-        optim = AdamW([default_params, faster_params], **optim_kwargs)
+        # Construct optimizer instance
+        optim = AdamW(self.parameters(), **optim_kwargs)
 
         # Populate LR scheduler configs
         sched_kwargs = {}
