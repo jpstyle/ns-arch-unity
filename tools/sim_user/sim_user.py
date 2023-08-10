@@ -40,13 +40,13 @@ class SimulatedTeacher:
                     for part, attrs in info["part_attributes"].items()
                 }
 
-    def setup_episode(self, mode):
+    def setup_episode(self, concept_set):
         """
         Preparation of a new interaction episode, comprising random initialization
         of the task for the episode and queueing of target concepts to teach
         """
-        target_concepts = self.target_concept_sets[mode]
-        self.mode = mode
+        target_concepts = self.target_concept_sets[concept_set]
+        self.concept_set = concept_set
 
         # Random environment initialization before reset; currently, sample fine-grained
         # type of truck as distinguished by load type
@@ -73,18 +73,18 @@ class SimulatedTeacher:
         self.current_target_concept = self.current_queue.pop(0)
         gameObject_handle = self.current_target_concept[1]
 
-        opening_outputs = [
-            [{
+        opening_outputs = {
+            "prior": [{
                 "utterance": "What is this?",
                 "pointing": { (8, 12): gameObject_handle }
             }],
-            [{
+            "main": [{
                 "utterance": "What kind of truck is this?",
                 "pointing": { (22, 26): gameObject_handle }
             }]
-        ]
+        }
 
-        return opening_outputs[self.mode]
+        return opening_outputs[self.concept_set]
 
     def react(self, agent_reactions):
         """ Rule-based pattern matching for handling agent responses """

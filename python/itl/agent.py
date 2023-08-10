@@ -222,8 +222,8 @@ class ITLAgent:
 
         # Keep updating beliefs until there's no more immediately exploitable learning
         # opportunities
-        xb_updated = False      # Whether learning happened at neural-level (in exemplar base)
-        kb_updated = False      # Whether learning happened at symbolic-level (in knowledge base)
+        xb_updated = False      # Whether learning happened at 'neural'-level (in exemplar base)
+        kb_updated = False      # Whether learning happened at 'symbolic'-level (in knowledge base)
         while True:
             ###################################################################
             ##                  Processing perceived inputs                  ##
@@ -303,6 +303,9 @@ class ITLAgent:
             ###################################################################
             ##           Identify & exploit learning opportunities           ##
             ###################################################################
+
+            # Disable learning when agent is in test mode
+            if self.cfg.agent.test_mode: break
 
             # Resetting flags
             xb_updated = False

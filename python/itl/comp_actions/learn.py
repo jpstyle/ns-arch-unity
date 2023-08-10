@@ -7,7 +7,6 @@ import math
 from collections import defaultdict
 
 import inflect
-import torch
 import numpy as np
 
 from ..vision.utils import masks_bounding_boxes

@@ -1,5 +1,6 @@
-difficulty: "fineHard"      # Options: "nonFine", "fineEasy", "fineHard"
-strat_feedback: "minHelp"   # Options: "minHelp", "medHelp", "maxHelp"
+defaults:
+    - base
+
 num_examples: 60
 test_interval: 10
 test_set_size: 18
