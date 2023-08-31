@@ -4,13 +4,14 @@
 !/datasets/vg_image_data.json
 /assets/*
 !/assets/domain_knowledge/
+xsession.log
 
 ## Python
 __pycache__/
 .vscode/
-
 wandb/
 
+# dotenv (potentially containing secrets)
 .env
 
 ## Unity

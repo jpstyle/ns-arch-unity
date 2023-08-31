@@ -6,6 +6,7 @@
 !/assets/domain_knowledge/
 !/assets/binaries/
 !/assets/grammars/
+**/xsession.log
 
 ## Python
 **/__pycache__/
