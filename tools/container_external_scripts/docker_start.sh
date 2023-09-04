@@ -20,10 +20,17 @@ for filename in $(find "${ICD_SEARCH_LOCATIONS[@]}" -name "*nvidia*.json" 2> /de
     ICD_MOUNTS+=( --volume "${filename}":"${filename}":ro )
 done
 
+# Uncomment to debug only with virtual display
 docker run -d --name $1 --gpus "device=$2" \
     --volume $3:/mnt/data_volume \
     --volume $4:/home/nonroot/ns-arch-unity/.env \
-    # --env DISPLAY=$DISPLAY --volume /tmp/.X11-unix:/tmp/.X11-unix \
-        # Uncomment to debug with local machine display
     ${ICD_MOUNTS[@]} \
     jpstyle92/ns-arch-unity "${@:5}"
+
+# Uncomment to debug with local (linux) machine display
+# docker run -d --name $1 --gpus "device=$2" \
+#     --volume $3:/mnt/data_volume \
+#     --volume $4:/home/nonroot/ns-arch-unity/.env \
+#     --env DISPLAY=$DISPLAY --volume /tmp/.X11-unix:/tmp/.X11-unix \
+#     ${ICD_MOUNTS[@]} \
+#     jpstyle92/ns-arch-unity "${@:5}"
