@@ -23,5 +23,7 @@ done
 docker run -d --name $1 --gpus "device=$2" \
     --volume $3:/mnt/data_volume \
     --volume $4:/home/nonroot/ns-arch-unity/.env \
+    # --env DISPLAY=$DISPLAY --volume /tmp/.X11-unix:/tmp/.X11-unix \
+        # Uncomment to debug with local machine display
     ${ICD_MOUNTS[@]} \
     jpstyle92/ns-arch-unity "${@:5}"
