@@ -366,7 +366,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
             high_res_masks = self.sam_processor.image_processor.post_process_masks(
                 low_res_masks.cpu(),
                 processed_input["original_sizes"].cpu(),
-                processed_input["reshaped_input_sizes"].cpu()
+                reshaped_size.cpu()
             )
 
             # Flatten & rank predictions by scores
@@ -418,33 +418,89 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
         return cls_embs, att_embs, masks_all, scores_all
 
-    def search(self, image, conds_lists, k=None):
+    def search(self, image, search_conds):
         """
         For few-shot search (exemplar-based conditioned detection). Given an image
         and a list of (concept type, exemplar vector set) pairs, find and return
-        the top k **candidate** region proposals. The proposals do not intend to be
-        highly accurate at this stage, as they will be further processed by the full
-        model and tested again.
-        """
-        enc_out = detr_enc_outputs(self.detr, image, self.feature_extractor)
-        _, _, outputs_coords, outputs_scores = \
-            few_shot_search_img(self, enc_out, conds_lists)
+        top-k **candidate** region proposals (one for each mask prediction head).
 
-        # Relative to absolute bbox dimensions, then center- to corner-format
-        outputs_coords = torch.stack([
-            outputs_coords[:,:,0] * image.width, outputs_coords[:,:,1] * image.height,
-            outputs_coords[:,:,2] * image.width, outputs_coords[:,:,3] * image.height
-        ], dim=-1)
-        outputs_coords = box_convert(outputs_coords, "cxcywh", "xyxy")
-        outputs_coords = clip_boxes_to_image(
-            outputs_coords, (image.height, image.width)
+        The proposals do not intend to be highly accurate at this stage, as they
+        will be further processed by the full model and tested again.
+        """
+        # Preprocessing input image & prompts
+        img_provided = image is not None
+
+        input_data = {}
+        if img_provided:
+            orig_size = (image.width, image.height)
+            input_data["image"] = image
+        else:
+            orig_size = self.processed_img_cached[1]
+            input_data["original_sizes"] = torch.tensor([orig_size])
+
+        processed_input = preprocess_input(self, input_data, img_provided)
+
+        # Obtain image embedding computed by SAM image encoder; compute from scratch
+        # if image input is new, fetch cached embs otherwise
+        if img_provided:
+            # Compute image embedding and cache for later use
+            img_embs = self.sam.get_image_embeddings(processed_input["pixel_values"])
+            reshaped_size = processed_input["reshaped_input_sizes"]
+            self.processed_img_cached = (img_embs, orig_size, reshaped_size)
+        else:
+            # No image provided, used cached image embedding
+            assert self.processed_img_cached is not None
+            img_embs = self.processed_img_cached[0]
+            reshaped_size = self.processed_img_cached[2]
+
+        # Prepare image-positional embeddings
+        img_positional_embs = self.sam.get_image_wide_positional_embeddings()
+        # No-mask embeddings; Dense embedding in SAM when mask prompts are not provided
+        no_mask_dense_embs = self.sam.prompt_encoder.no_mask_embed.weight
+        no_mask_dense_embs = no_mask_dense_embs[...,None,None].expand_as(img_embs)
+
+        exemplar_tokens = []
+        for conc_type, pos_exs_vecs in search_conds:
+            # Determine appropriate values and modules to use in computation by conc_type
+            if conc_type == "cls":
+                exs_prompt_encode = self.exs_prompt_encode_cls
+                exs_prompt_tag = self.exs_prompt_tag_cls
+            else:
+                assert conc_type == "att"
+                exs_prompt_encode = self.exs_prompt_encode_att
+                exs_prompt_tag = self.exs_prompt_tag_att
+
+            prototypes = torch.tensor(pos_exs_vecs, device=self.device)
+            prototypes = prototypes.mean(dim=0, keepdims=True)
+            exemplar_tokens.append(exs_prompt_encode(prototypes) + exs_prompt_tag.weight)
+
+        # Encode the prototypes into decoder prompt tokens
+        exemplar_tokens = torch.cat(exemplar_tokens)
+        exemplar_tokens = exemplar_tokens[:,None,None]
+
+        # Call mask decoder with the image & prompt encodings
+        low_res_masks, iou_predictions, _ = self.sam.mask_decoder(
+            image_embeddings=img_embs,
+            image_positional_embeddings=img_positional_embs,
+            sparse_prompt_embeddings=exemplar_tokens,
+            dense_prompt_embeddings=no_mask_dense_embs,
+            multimask_output=True
         )
 
-        if k is None:
-            k = len(outputs_coords)
-        topk_inds = outputs_scores.max(dim=-1).values.topk(k).indices
+        # Binarize the mask predictions
+        high_res_masks = self.sam_processor.image_processor.post_process_masks(
+            low_res_masks.cpu(),
+            processed_input["original_sizes"].cpu(),
+            reshaped_size.cpu()
+        )
 
-        return outputs_coords[topk_inds], outputs_scores[topk_inds]
+        # Sort and return the top k mask predictions with score estimates
+        k = self.sam.config.mask_decoder_config.num_multimask_outputs
+        topk_inds = iou_predictions[0,0].topk(k, dim=-1).indices
+        topk_masks = high_res_masks[0][0,topk_inds]
+        topk_scores = iou_predictions[0,0,topk_inds]
+
+        return topk_masks, topk_scores
 
     def cache_image_encodings(self):
         """

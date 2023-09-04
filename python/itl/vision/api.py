@@ -262,12 +262,12 @@ class VisionModule:
                                 continue
 
                         # Run search method to obtain region proposals
-                        proposals, _ = self.model.search(self.last_input, [search_conds], 30)
+                        proposals, _ = self.model.search(image, search_conds)
                         proposals = box_convert(proposals[:,0,:], "xyxy", "xywh")
 
                         # Predict on the proposals
                         cls_embs, att_embs, bboxes_out, _ = self.model(
-                            self.last_input, proposals, lock_provided_boxes=False
+                            image, proposals, lock_provided_boxes=False
                         )
                         cls_embs = cls_embs[:len(proposals)].cpu().numpy()
                         att_embs = att_embs[:len(proposals)].cpu().numpy()
