@@ -194,8 +194,10 @@ public class DialogueAgent : Agent
         // Camera to which the CameraSensorComponent is attached
         yield return null;      // Wait for a frame to render
         _perCam.RequestCapture();
-        yield return null;
-        yield return null;      // Waiting couple more frames to ensure annotations were captured
+        for (var i=0; i < 5; i++)
+            yield return null;
+        // Waiting several more frames to ensure annotations were captured (This is
+        // somewhat ad hoc indeed... but it works)
 
         // Wait until annotations are ready in the storage endpoint for retrieval
         yield return new WaitUntil(() => EnvEntity.annotationStorage.annotationsUpToDate);
