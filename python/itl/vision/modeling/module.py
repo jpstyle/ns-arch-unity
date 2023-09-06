@@ -90,14 +90,24 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.exs_prompt_tag_att = nn.Embedding(1, D)
 
         if self.training:
-            # Freeze all parameters except ones that need training
-            self.to_train_prefixes = [
-                "embed_cls.", "embed_att.",
-                "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
-                "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
-                "condition_cls_mult.", "condition_cls_add.",
-                "sam.mask_decoder."
-            ]
+            # Freeze all parameters except those that need training
+            if self.cfg.vision.task == "rgb":
+                self.to_train_prefixes = [
+                    "embed_cls.", "embed_att.",
+                    "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
+                    "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
+                    "condition_cls_mult.", "condition_cls_add.",
+                    "sam.mask_decoder."
+                ]
+            elif self.cfg.vision.task == "rgb_segm_only":
+                self.to_train_prefixes = [
+                    "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
+                    "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
+                    "sam.mask_decoder."
+                ]
+            else:
+                raise NotImplementedError
+
             for name, param in self.named_parameters():
                 param.requires_grad = any(
                     name.startswith(train_param)
@@ -110,7 +120,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.test_step_outputs = defaultdict(list)
 
         # Loss component weights
-        self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 1 }
+        self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 10 }
 
         flattened_cfg = flatten_cfg(OmegaConf.to_container(self.cfg, resolve=True))
         self.save_hyperparameters(flattened_cfg)
@@ -119,7 +129,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.processed_img_cached = None
 
     def training_step(self, batch, *_):
-        losses, metrics = process_batch(self, batch)
+        segm_only = self.cfg.vision.task == "rgb_segm_only"
+        losses, metrics = process_batch(self, batch, segm_only)
 
         conc_type = batch[1]
 
@@ -141,7 +152,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
-        loss, metrics = process_batch(self, batch)
+        segm_only = self.cfg.vision.task == "rgb_segm_only"
+        loss, metrics = process_batch(self, batch, segm_only)
         pred = loss, metrics, batch[1]
         self.validation_step_outputs[dataloader_idx].append(pred)
         return pred
@@ -197,7 +209,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.log(f"val_loss", final_avg_loss, add_dataloader_idx=False)
 
     def test_step(self, batch, dataloader_idx):
-        _, metrics = process_batch(self, batch)
+        segm_only = self.cfg.vision.task == "rgb_segm_only"
+        _, metrics = process_batch(self, batch, segm_only)
         pred = metrics, batch[1]
         self.test_step_outputs[dataloader_idx].append(pred)
         return pred

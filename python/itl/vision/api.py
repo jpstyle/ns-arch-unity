@@ -466,7 +466,8 @@ class VisionModule:
             wb_kwargs["log_model"] = True
         # Whether to resume training from previous few-shot components
         if "fs_model" in self.cfg.vision.model:
-            if self.cfg.vision.model.fs_model.startswith(WB_PREFIX):
+            if (self.cfg.vision.model.fs_model.startswith(WB_PREFIX) and
+                self.cfg.vision.optim.resume):
                 wb_path = self.cfg.vision.model.fs_model[len(WB_PREFIX):].split(":")
                 wb_kwargs["id"] = wb_path[0]
                 wb_kwargs["resume"] = "must"

@@ -22,3 +22,4 @@ optim:
     max_steps: 50000
     log_interval: 250
     val_interval: 5000
+    resume: false

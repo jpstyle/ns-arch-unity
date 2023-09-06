@@ -80,7 +80,7 @@ class FewShotDataModule(pl.LightningDataModule):
         }
         self.datasets = {}; self.samplers = {}
 
-        if self.cfg.vision.task == "rgb":
+        if self.cfg.vision.task.startswith("rgb"):
             # Load VAW metadata
             with open(f"{dataset_path}/metadata.json") as meta_f:
                 metadata = json.load(meta_f)
@@ -197,8 +197,8 @@ class _FewShot2DDataset(Dataset):
         self.name = dataset_name
 
     def __getitem__(self, idx):
-        assert len(idx) == 4
-        img_id, inst_id, conc_type, conc = idx
+        assert len(idx) == 5
+        img_id, inst_id, conc_type, conc, all_concs = idx
 
         # Values to return: raw image or pre-computed image encodings + metadata,
         # segmentation mask for the specified instance, and ground-truth segmentation
@@ -272,34 +272,42 @@ class _FewShot2DDataset(Dataset):
         # 'focus' concept, 
         if conc_type == "class":
             all_conc_insts = [
-                data for data in self.annotations[img_id].values()
-                if conc == data["class"]
+                [
+                    data for data in self.annotations[img_id].values()
+                    if c == data["class"]
+                ]
+                for c in all_concs
             ]
         else:
             assert conc_type == "attribute"
             all_conc_insts = [
-                data for data in self.annotations[img_id].values()
-                if conc in data["attributes_pos"]
+                [
+                    data for data in self.annotations[img_id].values()
+                    if c in data["attributes_pos"]
+                ]
+                for c in all_concs
             ]
 
         # Sort by area in descending order then pick top 3, as SAM model is set to predict
         # at most 3 'valid' segmentation masks for each (non-hybrid) prompt; we are sorting
         # by area in order to pick the most prominent instances if there are more than 3
-        all_conc_inst_masks = sorted([
-            self.poly_to_mask(data["instance_mask"], img_size)
-            for data in all_conc_insts if data["instance_mask"] is not None
-        ], key=np.sum, reverse=True) 
+        all_conc_inst_masks = [
+            sorted([
+                self.poly_to_mask(data["instance_mask"], img_size)
+                for data in per_conc if data["instance_mask"] is not None
+            ], key=np.sum, reverse=True)
+            for per_conc in all_conc_insts
+        ]
 
-        if len(all_conc_inst_masks) >= 3:
-            # Only return top 3 masks with largest areas
-            data_dict["concept_masks"] = all_conc_inst_masks[:3]
-        else:
-            # If fewer than 3 masks, pad with 'null' masks
-            pad_masks = [
-                np.full_like(all_conc_inst_masks[0], -1)
-                for _ in range(3 - len(all_conc_inst_masks))
-            ]
-            data_dict["concept_masks"] = all_conc_inst_masks + pad_masks
+        # Only return top 3 masks with largest areas; if fewer than 3 masks, pad with
+        # 'null' masks
+        pad_mask = np.full(data_dict["original_sizes"], -1)
+        data_dict["concept_masks"] = [
+            per_conc + [pad_mask for _ in range(3-len(per_conc))]
+                if len(per_conc) < 3
+                else per_conc[:3]
+            for per_conc in all_conc_inst_masks
+        ]
 
         # Positive concept labels; needed for discerning positive pairs (within batch
         # and memory queue for LooK loss computation). Record as a binary tuple (c, C),
@@ -362,8 +370,8 @@ class _FewShot2DDataSampler(Sampler):
         # exemplars per concept (equivalently, number of concepts or 'ways')
         assert self.batch_size % self.num_exs_per_conc == 0
 
-        # If is_eval, will terminate and can sample in advance; primarily for getting
-        # total length info
+        # If is_eval, will terminate and can sample in advance; primarily for
+        # consistency and getting total length info
         if self.is_eval:
             self.sampled_in_advance = list(self.sample())
 
@@ -401,7 +409,8 @@ class _FewShot2DDataSampler(Sampler):
 
             # Sampling success, yield the sampled concepts and instances
             batch = [
-                (inst[0], inst[1], self.conc_type, conc)
+                (inst[0], inst[1], self.conc_type, conc, sampled_concs)
+                    # sampled_concs included for reference, for Dataset.__get__ later
                 for conc, insts in zip(sampled_concs, sampled_insts)
                 for inst in insts
             ]
