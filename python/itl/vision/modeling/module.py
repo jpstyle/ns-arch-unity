@@ -89,38 +89,39 @@ class VisualSceneAnalyzer(pl.LightningModule):
         self.exs_prompt_tag_cls = nn.Embedding(1, D)
         self.exs_prompt_tag_att = nn.Embedding(1, D)
 
-        if self.training:
-            # Freeze all parameters except those that need training
-            if self.cfg.vision.task == "rgb":
-                self.to_train_prefixes = [
-                    "embed_cls.", "embed_att.",
-                    "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
-                    "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
-                    "condition_cls_mult.", "condition_cls_add.",
-                    "sam.mask_decoder."
-                ]
-            elif self.cfg.vision.task == "rgb_segm_only":
-                self.to_train_prefixes = [
-                    "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
-                    "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
-                    "sam.mask_decoder."
-                ]
-            else:
-                raise NotImplementedError
+        if "task" in self.cfg.vision:
+            if self.training:
+                # Freeze all parameters except those that need training
+                if self.cfg.vision.task == "rgb":
+                    self.to_train_prefixes = [
+                        "embed_cls.", "embed_att.",
+                        "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
+                        "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
+                        "condition_cls_mult.", "condition_cls_add.",
+                        "sam.mask_decoder."
+                    ]
+                elif self.cfg.vision.task == "rgb_segm_only":
+                    self.to_train_prefixes = [
+                        "exs_prompt_encode_cls.", "exs_prompt_encode_att.",
+                        "exs_prompt_tag_cls.", "exs_prompt_tag_att.",
+                        "sam.mask_decoder."
+                    ]
+                else:
+                    raise NotImplementedError
 
-            for name, param in self.named_parameters():
-                param.requires_grad = any(
-                    name.startswith(train_param)
-                    for train_param in self.to_train_prefixes
-                )
-        else:
-            self.to_train_prefixes = []
+                for name, param in self.named_parameters():
+                    param.requires_grad = any(
+                        name.startswith(train_param)
+                        for train_param in self.to_train_prefixes
+                    )
+            else:
+                self.to_train_prefixes = []
 
         self.validation_step_outputs = defaultdict(list)
         self.test_step_outputs = defaultdict(list)
 
         # Loss component weights
-        self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 10 }
+        self.loss_weights = { "nca": 2, "focal": 20, "dice": 1, "iou": 20 }
 
         flattened_cfg = flatten_cfg(OmegaConf.to_container(self.cfg, resolve=True))
         self.save_hyperparameters(flattened_cfg)
@@ -322,7 +323,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
             input_data["image"] = image
         else:
             orig_size = self.processed_img_cached[1]
-            input_data["original_sizes"] = torch.tensor([orig_size])
+            input_data["original_sizes"] = torch.tensor([(orig_size[1], orig_size[0])])
 
         if grid_provided:
             # Prepare prompts for grid (if provided)
@@ -449,7 +450,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
             input_data["image"] = image
         else:
             orig_size = self.processed_img_cached[1]
-            input_data["original_sizes"] = torch.tensor([orig_size])
+            input_data["original_sizes"] = torch.tensor([(orig_size[1], orig_size[0])])
 
         processed_input = preprocess_input(self, input_data, img_provided)
 

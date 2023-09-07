@@ -377,11 +377,11 @@ def process_batch(model, batch, segm_only):
         # Update losses & metrics
         if multimask:
             # Twice the importance
-            losses["focal"] += focal_loss * 2
-            losses["dice"] += dice_loss * 2
-            losses["iou"] += iou_loss * 2
-            metrics["dice"] += dice_metric * 2
-            metrics["iou"] += iou_metric * 2
+            losses["focal"] += focal_loss * 3
+            losses["dice"] += dice_loss * 3
+            losses["iou"] += iou_loss * 3
+            metrics["dice"] += dice_metric * 3
+            metrics["iou"] += iou_metric * 3
         else:
             losses["focal"] += focal_loss
             losses["dice"] += dice_loss
@@ -423,8 +423,8 @@ def process_batch(model, batch, segm_only):
 
     # Divide the segmentation loss & metric values by three (one for each prompt)
     # to obtain average
-    losses["focal"] /= 4; losses["dice"] /= 4; losses["iou"] /= 4
-    metrics["dice"] /= 4; metrics["iou"] /= 4
+    losses["focal"] /= 5; losses["dice"] /= 5; losses["iou"] /= 5
+    metrics["dice"] /= 5; metrics["iou"] /= 5
 
     return losses, metrics
 

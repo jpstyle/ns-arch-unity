@@ -3,7 +3,6 @@ Language processing module API that exposes only the high-level functionalities
 required by the ITL agent: situate the embodied agent in a physical environment,
 understand & generate language input in the context of the dialogue
 """
-import copy
 from collections import defaultdict
 
 from .semantics import SemanticParser
@@ -37,10 +36,10 @@ class LanguageModule:
 
         # Incorporate parsed scene graph into dialogue context
         for oi, obj in vis_scene.items():
-            bbox = obj["pred_box"]
+            mask = obj["pred_mask"]
             self.dialogue.referents["env"][oi] = {
-                "bbox": bbox,
-                "area": (bbox[2]-bbox[0]) * (bbox[3]-bbox[1])
+                "mask": mask,
+                "area": mask.sum().item()
             }
             self.dialogue.referent_names[oi] = oi
         

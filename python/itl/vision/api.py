@@ -16,7 +16,6 @@ import pytorch_lightning as pl
 from dotenv import find_dotenv, load_dotenv
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from torchvision.ops import box_convert, box_area
 
 from .data import FewShotDataModule
 from .modeling import VisualSceneAnalyzer
@@ -223,7 +222,7 @@ class VisionModule:
                 if masks_provided:
                     # Instance classification mode
                     incr_preds = self.model(
-                        None, masks=[torch.tensor(msk) for msk in masks.values()]
+                        image, masks=[torch.tensor(msk) for msk in masks.values()]
                     )
                     incr_cls_embs = incr_preds[0]
                     incr_att_embs = incr_preds[1]
@@ -240,7 +239,8 @@ class VisionModule:
 
                     incr_cls_embs = []
                     incr_att_embs = []
-                    incr_bboxes_out = []
+                    incr_masks_out = []
+                    incr_objectness_scores = []
 
                     # Prepare search conditions to feed into model.search() method
                     for s_vars, dscr in specs.values():
@@ -262,16 +262,14 @@ class VisionModule:
                                 continue
 
                         # Run search method to obtain region proposals
-                        proposals, _ = self.model.search(image, search_conds)
-                        proposals = box_convert(proposals[:,0,:], "xyxy", "xywh")
+                        proposals, objectness_scores = self.model.search(image, search_conds)
+                        proposals = list(proposals)
+                        objectness_scores = objectness_scores.cpu().numpy()
 
                         # Predict on the proposals
-                        cls_embs, att_embs, bboxes_out, _ = self.model(
-                            image, proposals, lock_provided_boxes=False
+                        cls_embs, att_embs, masks_out, _ = self.model(
+                            image, masks=proposals
                         )
-                        cls_embs = cls_embs[:len(proposals)].cpu().numpy()
-                        att_embs = att_embs[:len(proposals)].cpu().numpy()
-                        bboxes_out = box_convert(bboxes_out[:len(proposals)], "xywh", "xyxy")
 
                         # Then test each candidate to select the one that's most compatible
                         # to the search spec
@@ -317,8 +315,8 @@ class VisionModule:
                                     for arg in d_lit.args
                                 ]
 
-                                # Bounding boxes for all candidates
-                                bboxes_out_A = box_area(bboxes_out)
+                                # Mask areas for all candidates
+                                masks_out_A = masks_out.sum(axis=(-2,-1))
 
                                 # Fetch bbox of reference entity, against which bbox area
                                 # ratios will be calculated among candidates
@@ -327,27 +325,15 @@ class VisionModule:
                                     if arg_type=="e"
                                 ][0]
                                 reference_ent = exs_idx_map[reference_ent]
-                                reference_bbox = self.scene[reference_ent]["pred_box"]
-                                reference_bbox = torch.tensor(
-                                    reference_bbox, device=self.model.device
+                                reference_mask = self.scene[reference_ent]["pred_mask"]
+
+                                # Compute area ratio between the reference mask and all proposals
+                                intersections = masks_out & reference_mask[None]
+                                intersections_A = intersections.sum(axis=(-2,-1))
+
+                                comp_scores = torch.tensor(
+                                    intersections_A / masks_out_A, device=self.model.device
                                 )
-
-                                # Compute area ratio between the reference box and all patches
-                                x1_ints = torch.max(bboxes_out[:,0], reference_bbox[0])
-                                y1_ints = torch.max(bboxes_out[:,1], reference_bbox[1])
-                                x2_ints = torch.min(bboxes_out[:,2], reference_bbox[2])
-                                y2_ints = torch.min(bboxes_out[:,3], reference_bbox[3])
-                                intersections = torch.stack([
-                                    x1_ints, y1_ints, x2_ints, y2_ints
-                                ], dim=-1)
-                                ints_invalid = torch.logical_or(
-                                    x1_ints > x2_ints, y1_ints > y2_ints
-                                )
-
-                                intersections_A = box_area(intersections)
-                                intersections_A[ints_invalid] = 0.0
-
-                                comp_scores = intersections_A / bboxes_out_A
 
                             # Update aggregate compatibility score; using min function
                             # as the t-norm (other options: product, ...)
@@ -359,11 +345,13 @@ class VisionModule:
                         best_match_ind = agg_compatibility_scores.max(dim=0).indices
                         incr_cls_embs.append(cls_embs[best_match_ind])
                         incr_att_embs.append(att_embs[best_match_ind])
-                        incr_bboxes_out.append(bboxes_out[best_match_ind])
+                        incr_masks_out.append(masks_out[best_match_ind])
+                        incr_objectness_scores.append(objectness_scores[best_match_ind])
 
                     incr_cls_embs = np.stack(incr_cls_embs)
                     incr_att_embs = np.stack(incr_att_embs)
-                    incr_bboxes_out = torch.stack(incr_bboxes_out)
+                    incr_masks_out = np.stack(incr_masks_out)
+                    incr_objectness_scores = np.stack(incr_objectness_scores)
 
                 # Incrementally update the existing scene graph with the output with the
                 # detections best complying with the conditions provided
@@ -371,7 +359,7 @@ class VisionModule:
                 if masks_provided:
                     new_objs = list(masks.keys())
                 else:
-                    new_objs = sum(list(specs.keys()), [])
+                    new_objs = list(sum(list(specs.keys()), ()))
 
                 for oi, oj in product(existing_objs, new_objs):
                     # Add new relation score slots for existing objects
