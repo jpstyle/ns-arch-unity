@@ -73,14 +73,13 @@ def main(cfg):
                 neg_shuffled = random.sample(neg_exs_inds[c], len(neg_exs_inds[c]))
                 neg_train = neg_shuffled[:int(0.8*len(neg_shuffled))]
                 neg_test = neg_shuffled[int(0.8*len(neg_shuffled)):]
-                print(len(pos_test), len(neg_test))
 
                 X = vectors[pos_train + neg_train]
                 y = ([1] * len(pos_train)) + ([0] * len(neg_train))
 
                 # Fit classifier and run on test set
                 # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 100), weights="distance")
-                bin_clf = SVC(C=1000, probability=True, random_state=cfg.seed)
+                bin_clf = SVC(C=1, probability=True, random_state=cfg.seed)
                 bin_clf.fit(X, y)
                 true_pos = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 true_neg = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5

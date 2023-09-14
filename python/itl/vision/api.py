@@ -172,8 +172,7 @@ class VisionModule:
             # Prediction modes
             if not (masks_provided or specs_provided):
                 # Full (ensemble) prediction
-                cls_embs, att_embs, masks_out, objectness_scores \
-                    = self.model(image, grid=(3, 3))
+                vis_embs, masks_out, objectness_scores = self.model(image)
 
                 self.last_input = image
 
@@ -187,8 +186,8 @@ class VisionModule:
                     f"o{i}": {
                         "pred_mask": masks_out[det_ind],
                         "pred_objectness": objectness_scores[det_ind],
-                        "pred_classes": fs_conc_pred(cls_embs[det_ind], "cls"),
-                        "pred_attributes": fs_conc_pred(att_embs[det_ind], "att"),
+                        "pred_classes": fs_conc_pred(vis_embs[det_ind], "cls"),
+                        "pred_attributes": fs_conc_pred(vis_embs[det_ind], "att"),
                         "pred_relations": {
                             f"o{j}": np.zeros(self.inventories.rel)
                             for j in range(len(topk_inds)) if i != j
@@ -197,8 +196,7 @@ class VisionModule:
                     for i, det_ind in enumerate(topk_inds)
                 }
                 self.f_vecs = {
-                    oi: (cls_embs[det_ind], att_embs[det_ind])
-                    for oi, det_ind in zip(self.scene, topk_inds)
+                    oi: vis_embs[det_ind] for oi, det_ind in zip(self.scene, topk_inds)
                 }
 
                 for oi, obj_i in self.scene.items():
@@ -221,13 +219,10 @@ class VisionModule:
                 # Incremental scene graph expansion
                 if masks_provided:
                     # Instance classification mode
-                    incr_preds = self.model(
-                        image, masks=[torch.tensor(msk) for msk in masks.values()]
-                    )
-                    incr_cls_embs = incr_preds[0]
-                    incr_att_embs = incr_preds[1]
-                    incr_masks_out = incr_preds[2]
-                    incr_objectness_scores = incr_preds[3]
+                    incr_preds = self.model(image, masks=list(masks.values()))
+                    incr_vis_embs = incr_preds[0]
+                    incr_masks_out = incr_preds[1]
+                    incr_objectness_scores = incr_preds[2]
 
                 else:
                     assert specs_provided
@@ -237,12 +232,11 @@ class VisionModule:
                     exs_idx_map = { i: ent for i, ent in enumerate(self.scene) }
                     exs_idx_map_inv = { ent: i for i, ent in enumerate(self.scene) }
 
-                    incr_cls_embs = []
-                    incr_att_embs = []
+                    incr_vis_embs = []
                     incr_masks_out = []
                     incr_objectness_scores = []
 
-                    # Prepare search conditions to feed into model.search() method
+                    # Prepare search conditions to feed into model.forward()
                     for s_vars, dscr in specs.values():
                         search_conds = []
                         for d_lit in dscr:
@@ -261,20 +255,15 @@ class VisionModule:
                                 # (for now, at least...)
                                 continue
 
-                        # Run search method to obtain region proposals
-                        proposals, objectness_scores = self.model.search(image, search_conds)
-                        proposals = list(proposals)
-                        objectness_scores = objectness_scores.cpu().numpy()
-
-                        # Predict on the proposals
-                        cls_embs, att_embs, masks_out, _ = self.model(
-                            image, masks=proposals
+                        # Run search conditioned on the exemplars
+                        vis_embs, masks_out, objectness_scores = self.model(
+                            image, exemplars=search_conds
                         )
 
                         # Then test each candidate to select the one that's most compatible
                         # to the search spec
                         agg_compatibility_scores = torch.ones(
-                            len(proposals), device=self.model.device
+                            len(masks_out), device=self.model.device
                         )
                         for d_lit in dscr:
                             conc_type, conc_ind = d_lit.name.split("_")
@@ -284,18 +273,14 @@ class VisionModule:
                                 # Fetch set of positive exemplars
                                 clf = exemplars.binary_classifiers[conc_type][conc_ind]
                                 if clf is not None:
-                                    if conc_type == "cls":
-                                        comp_scores = clf.predict_proba(cls_embs)[:,1]
-                                    else:
-                                        comp_scores = clf.predict_proba(att_embs)[:,1]
-
+                                    comp_scores = clf.predict_proba(vis_embs)[:,1]
                                     comp_scores = torch.tensor(
                                         comp_scores, device=self.model.device
                                     )
                                 else:
-                                    comp_scores = torch.full((cls_embs.shape[0],), DEF_CON) \
+                                    comp_scores = torch.full((vis_embs.shape[0],), DEF_CON) \
                                         if len(exemplars.exemplars_pos[conc_type][conc_ind]) > 0 \
-                                        else torch.full((cls_embs.shape[0],), 1-DEF_CON)
+                                        else torch.full((vis_embs.shape[0],), 1-DEF_CON)
                             else:
                                 assert conc_type == "rel"
 
@@ -328,7 +313,7 @@ class VisionModule:
                                 reference_mask = self.scene[reference_ent]["pred_mask"]
 
                                 # Compute area ratio between the reference mask and all proposals
-                                intersections = masks_out & reference_mask[None]
+                                intersections = masks_out * reference_mask[None]
                                 intersections_A = intersections.sum(axis=(-2,-1))
 
                                 comp_scores = torch.tensor(
@@ -343,13 +328,11 @@ class VisionModule:
 
                         # Finally choose and keep the best search output
                         best_match_ind = agg_compatibility_scores.max(dim=0).indices
-                        incr_cls_embs.append(cls_embs[best_match_ind])
-                        incr_att_embs.append(att_embs[best_match_ind])
+                        incr_vis_embs.append(vis_embs[best_match_ind])
                         incr_masks_out.append(masks_out[best_match_ind])
                         incr_objectness_scores.append(objectness_scores[best_match_ind])
 
-                    incr_cls_embs = np.stack(incr_cls_embs)
-                    incr_att_embs = np.stack(incr_att_embs)
+                    incr_vis_embs = np.stack(incr_vis_embs)
                     incr_masks_out = np.stack(incr_masks_out)
                     incr_objectness_scores = np.stack(incr_objectness_scores)
 
@@ -366,16 +349,15 @@ class VisionModule:
                     self.scene[oi]["pred_relations"][oj] = np.zeros(self.inventories.rel)
 
                 update_data = list(zip(
-                    new_objs, incr_cls_embs, incr_att_embs,
-                    incr_masks_out, incr_objectness_scores
+                    new_objs, incr_vis_embs, incr_masks_out, incr_objectness_scores
                 ))
-                for oi, cls_emb, att_emb, msk, score in update_data:
+                for oi, vis_emb, msk, score in update_data:
                     # Register new objects into the existing scene
                     self.scene[oi] = {
                         "pred_mask": msk,
                         "pred_objectness": score,
-                        "pred_classes": fs_conc_pred(cls_emb, "cls"),
-                        "pred_attributes": fs_conc_pred(att_emb, "att"),
+                        "pred_classes": fs_conc_pred(vis_emb, "cls"),
+                        "pred_attributes": fs_conc_pred(vis_emb, "att"),
                         "pred_relations": {
                             **{
                                 oj: np.zeros(self.inventories.rel)
@@ -413,9 +395,7 @@ class VisionModule:
                         self.scene[oj]["pred_relations"][oi][0] = intersection_A / mask1_A
 
                 self.f_vecs.update({
-                    oi: (cls_emb, att_emb)
-                    for oi, cls_emb, att_emb
-                    in zip(new_objs, incr_cls_embs, incr_att_embs)
+                    oi: vis_emb for oi, vis_emb in zip(new_objs, incr_vis_embs)
                 })
 
         if visualize:

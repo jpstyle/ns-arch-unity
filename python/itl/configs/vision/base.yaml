@@ -1,5 +1,5 @@
 model:
-    sam_model: "facebook/sam-vit-large"
+    clipseg_model: "CIDAS/clipseg-rd64-refined"
 
 data:
     batch_size: 16

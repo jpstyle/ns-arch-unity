@@ -6,6 +6,7 @@ torchmetrics
 transformers
 timm
 scipy
+scikit-image
 matplotlib
 pycocotools
 pytorch-lightning

@@ -281,10 +281,8 @@ def handle_mismatch(agent, mismatch):
             )
 
             # Fetch current score for the asserted fact
-            if conc_type == "cls":
-                f_vec = agent.vision.f_vecs[args[0]][0]
-            elif conc_type == "att":
-                f_vec = agent.vision.f_vecs[args[0]][1]
+            if conc_type == "cls" or conc_type == "att":
+                f_vec = agent.vision.f_vecs[args[0]]
             else:
                 assert conc_type == "rel"
                 raise NotImplementedError   # Step back for relation prediction...
@@ -546,10 +544,8 @@ def handle_neologisms(agent, novel_concepts, dialogue_state):
                     [dialogue_state["referents"]["env"][arg]["mask"] for arg in args]
                 )
 
-                if conc_type == "cls":
-                    f_vec = agent.vision.f_vecs[args[0]][0]
-                elif conc_type == "att":
-                    f_vec = agent.vision.f_vecs[args[0]][1]
+                if conc_type == "cls" or conc_type == "att":
+                    f_vec = agent.vision.f_vecs[args[0]]
                 else:
                     assert conc_type == "rel"
                     raise NotImplementedError   # Step back for relation prediction...

@@ -99,8 +99,7 @@ class ITLAgent:
         """
         ckpt = {
             "vision": {
-                "inventories": self.vision.inventories,
-                "fs_model_path": self.cfg.vision.model.fs_model
+                "inventories": self.vision.inventories
             },
             "lt_mem": {
                 "exemplars": vars(self.lt_mem.exemplars),
@@ -108,6 +107,9 @@ class ITLAgent:
                 "lexicon": vars(self.lt_mem.lexicon)
             }
         }
+        if "fs_model" in self.cfg.vision.model:
+            ckpt["vision"]["fs_model_path"] = self.cfg.vision.model.fs_model
+
         torch.save(ckpt, ckpt_path)
         logger.info(f"Saved current agent model at {ckpt_path}")
 

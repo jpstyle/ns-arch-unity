@@ -122,7 +122,7 @@ class Exemplars:
                         y = ([1] * len(pos_inds)) + ([0] * len(neg_inds))
 
                         # Fit classifier and update
-                        bin_clf = SVC(C=1000, probability=True)
+                        bin_clf = SVC(C=1, probability=True)
                         # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 50), weights="distance")
                         bin_clf.fit(X, y)
                         self.binary_classifiers[conc_type][conc_ind] = bin_clf
