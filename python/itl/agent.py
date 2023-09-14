@@ -16,7 +16,6 @@ from .memory import LongTermMemoryModule
 from .symbolic_reasoning import SymbolicReasonerModule
 from .practical_reasoning import PracticalReasonerModule
 from .comp_actions import CompositeActions
-from .lpmln import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ class ITLAgent:
         self.lang = LanguageModule(cfg)
         self.symbolic = SymbolicReasonerModule()
         self.practical = PracticalReasonerModule()
-        self.lt_mem = LongTermMemoryModule()
+        self.lt_mem = LongTermMemoryModule(cfg)
 
         # Provide access to methods in comp_actions
         self.comp_actions = CompositeActions(self)
