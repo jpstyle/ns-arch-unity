@@ -344,12 +344,4 @@ def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
 
             final_specs.append((search_vars, lits))
 
-    # Perform incremental visual search...
-    O = len(agent.vision.scene)
-    oi_offsets = np.cumsum([0]+[len(vars) for vars, _ in final_specs][:-1])
-    final_specs = {
-        tuple(f"o{offset+i+O}" for i in range(len(spc[0]))): spc
-        for spc, offset in zip(final_specs, oi_offsets)
-    }
-
     return final_specs

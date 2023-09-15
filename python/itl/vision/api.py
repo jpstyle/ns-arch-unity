@@ -237,7 +237,7 @@ class VisionModule:
                     incr_objectness_scores = []
 
                     # Prepare search conditions to feed into model.forward()
-                    for s_vars, dscr in specs.values():
+                    for s_vars, dscr in specs:
                         search_conds = []
                         for d_lit in dscr:
                             conc_type, conc_ind = d_lit.name.split("_")
@@ -260,89 +260,104 @@ class VisionModule:
                             image, exemplars=search_conds
                         )
 
-                        # Then test each candidate to select the one that's most compatible
-                        # to the search spec
-                        agg_compatibility_scores = torch.ones(
-                            len(masks_out), device=self.model.device
-                        )
-                        for d_lit in dscr:
-                            conc_type, conc_ind = d_lit.name.split("_")
-                            conc_ind = int(conc_ind)
+                        if len(masks_out) > 0:
+                            # Search returned some matches
 
-                            if conc_type == "cls" or conc_type == "att":
-                                # Fetch set of positive exemplars
-                                clf = exemplars.binary_classifiers[conc_type][conc_ind]
-                                if clf is not None:
-                                    comp_scores = clf.predict_proba(vis_embs)[:,1]
-                                    comp_scores = torch.tensor(
-                                        comp_scores, device=self.model.device
-                                    )
+                            # Test each candidate to select the one that's most compatible
+                            # to the search spec
+                            agg_compatibility_scores = torch.ones(
+                                len(masks_out), device=self.model.device
+                            )
+                            for d_lit in dscr:
+                                conc_type, conc_ind = d_lit.name.split("_")
+                                conc_ind = int(conc_ind)
+
+                                if conc_type == "cls" or conc_type == "att":
+                                    # Fetch set of positive exemplars
+                                    clf = exemplars.binary_classifiers[conc_type][conc_ind]
+                                    if clf is not None:
+                                        comp_scores = clf.predict_proba(vis_embs)[:,1]
+                                        comp_scores = torch.tensor(
+                                            comp_scores, device=self.model.device
+                                        )
+                                    else:
+                                        if len(exemplars.exemplars_pos[conc_type][conc_ind]) > 0:
+                                            comp_scores = torch.full((vis_embs.shape[0],), DEF_CON)
+                                        else:
+                                            comp_scores = torch.full((vis_embs.shape[0],), 1-DEF_CON)
                                 else:
-                                    comp_scores = torch.full((vis_embs.shape[0],), DEF_CON) \
-                                        if len(exemplars.exemplars_pos[conc_type][conc_ind]) > 0 \
-                                        else torch.full((vis_embs.shape[0],), 1-DEF_CON)
-                            else:
-                                assert conc_type == "rel"
+                                    assert conc_type == "rel"
 
-                                # Cannot process relations other than "have" for now...
-                                assert conc_ind == 0
+                                    # Cannot process relations other than "have" for now...
+                                    assert conc_ind == 0
 
-                                # Cannot process search specs with more than one variables for
-                                # now (not planning to address that for a good while!)
-                                assert len(s_vars) == 1
+                                    # Cannot process search specs with more than one variables for
+                                    # now (not planning to address that for a good while!)
+                                    assert len(s_vars) == 1
 
-                                # Handles to literal args; either search target variable or
-                                # previously identified entity
-                                arg_handles = [
-                                    ("v", s_vars.index(arg[0]))
-                                        if arg[0] in s_vars
-                                        else ("e", exs_idx_map_inv[arg[0]])
-                                    for arg in d_lit.args
-                                ]
+                                    # Handles to literal args; either search target variable or
+                                    # previously identified entity
+                                    arg_handles = [
+                                        ("v", s_vars.index(arg[0]))
+                                            if arg[0] in s_vars
+                                            else ("e", exs_idx_map_inv[arg[0]])
+                                        for arg in d_lit.args
+                                    ]
 
-                                # Mask areas for all candidates
-                                masks_out_A = masks_out.sum(axis=(-2,-1))
+                                    # Mask areas for all candidates
+                                    masks_out_A = masks_out.sum(axis=(-2,-1))
 
-                                # Fetch bbox of reference entity, against which bbox area
-                                # ratios will be calculated among candidates
-                                reference_ent = [
-                                    arg_ind for arg_type, arg_ind in arg_handles
-                                    if arg_type=="e"
-                                ][0]
-                                reference_ent = exs_idx_map[reference_ent]
-                                reference_mask = self.scene[reference_ent]["pred_mask"]
+                                    # Fetch bbox of reference entity, against which bbox area
+                                    # ratios will be calculated among candidates
+                                    reference_ent = [
+                                        arg_ind for arg_type, arg_ind in arg_handles
+                                        if arg_type=="e"
+                                    ][0]
+                                    reference_ent = exs_idx_map[reference_ent]
+                                    reference_mask = self.scene[reference_ent]["pred_mask"]
 
-                                # Compute area ratio between the reference mask and all proposals
-                                intersections = masks_out * reference_mask[None]
-                                intersections_A = intersections.sum(axis=(-2,-1))
+                                    # Compute area ratio between the reference mask and all proposals
+                                    intersections = masks_out * reference_mask[None]
+                                    intersections_A = intersections.sum(axis=(-2,-1))
 
-                                comp_scores = torch.tensor(
-                                    intersections_A / masks_out_A, device=self.model.device
+                                    comp_scores = torch.tensor(
+                                        intersections_A / masks_out_A, device=self.model.device
+                                    )
+
+                                # Update aggregate compatibility score; using min function
+                                # as the t-norm (other options: product, ...)
+                                agg_compatibility_scores = torch.minimum(
+                                    agg_compatibility_scores, comp_scores
                                 )
 
-                            # Update aggregate compatibility score; using min function
-                            # as the t-norm (other options: product, ...)
-                            agg_compatibility_scores = torch.minimum(
-                                agg_compatibility_scores, comp_scores
-                            )
+                            # Finally choose and keep the best search output
+                            best_match_ind = agg_compatibility_scores.max(dim=0).indices
+                            incr_vis_embs.append(vis_embs[best_match_ind])
+                            incr_masks_out.append(masks_out[best_match_ind])
+                            incr_objectness_scores.append(objectness_scores[best_match_ind])
 
-                        # Finally choose and keep the best search output
-                        best_match_ind = agg_compatibility_scores.max(dim=0).indices
-                        incr_vis_embs.append(vis_embs[best_match_ind])
-                        incr_masks_out.append(masks_out[best_match_ind])
-                        incr_objectness_scores.append(objectness_scores[best_match_ind])
-
-                    incr_vis_embs = np.stack(incr_vis_embs)
-                    incr_masks_out = np.stack(incr_masks_out)
-                    incr_objectness_scores = np.stack(incr_objectness_scores)
+                        else:
+                            # Search didn't return any match
+                            incr_vis_embs.append(None)
+                            incr_masks_out.append(None)
+                            incr_objectness_scores.append(None)
 
                 # Incrementally update the existing scene graph with the output with the
                 # detections best complying with the conditions provided
                 existing_objs = list(self.scene)
                 if masks_provided:
+                    # Already provided with appropriate object identifier
                     new_objs = list(masks.keys())
                 else:
-                    new_objs = list(sum(list(specs.keys()), ()))
+                    # Come up with new object identifiers for valid search matches
+                    new_objs = []; ind_offset = 0
+                    for msk in incr_masks_out:
+                        if msk is None:
+                            # Null match
+                            new_objs.append(None)
+                        else:
+                            new_objs.append(f"o{len(existing_objs)+ind_offset}")
+                            ind_offset += 1
 
                 for oi, oj in product(existing_objs, new_objs):
                     # Add new relation score slots for existing objects
@@ -352,6 +367,9 @@ class VisionModule:
                     new_objs, incr_vis_embs, incr_masks_out, incr_objectness_scores
                 ))
                 for oi, vis_emb, msk, score in update_data:
+                    # Pass null entry
+                    if oi is None: continue
+
                     # Register new objects into the existing scene
                     self.scene[oi] = {
                         "pred_mask": msk,
@@ -371,10 +389,16 @@ class VisionModule:
                     }
 
                 for oi in new_objs:
+                    # Pass null entry
+                    if oi is None: continue
+
                     oi_msk = self.scene[oi]["pred_mask"]
 
                     # Relation concepts (Within new detections)
                     for oj in new_objs:
+                        # Pass null entry
+                        if oj is None: continue
+
                         if oi==oj: continue     # Dismiss self-self object pairs
                         oj_msk = self.scene[oj]["pred_mask"]
 

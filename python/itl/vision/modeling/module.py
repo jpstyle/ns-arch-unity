@@ -339,21 +339,28 @@ class VisualSceneAnalyzer(pl.LightningModule):
             # by connected component analysis to obtain masks
             masks_all, scores_all = self._conditioned_segment(text_prompt="an object")
 
-        # Obtain visual feature embeddings corresponding to each mask instance by applying
-        # a series of 'visual prompt engineering' process, and passing through CLIP visual
-        # transformer
-        visual_prompts = self._visual_prompt_by_mask(image, bg_image, masks_all)
+        if len(masks_all) > 0:
+            # Non-empty list of segmentation masks
 
-        # Pass through vision encoder to obtain visual embeddings corresponding to each mask
-        visual_prompts_processed = self.clipseg_processor(
-            images=visual_prompts, return_tensors="pt"
-        )
-        visual_prompts_processed = visual_prompts_processed["pixel_values"].to(self.device)
-        vis_embs = self.clipseg.clip.get_image_features(visual_prompts_processed)
+            # Obtain visual feature embeddings corresponding to each mask instance by applying
+            # a series of 'visual prompt engineering' process, and passing through CLIP visual
+            # transformer
+            visual_prompts = self._visual_prompt_by_mask(image, bg_image, masks_all)
 
-        # Output tensors to numpy arrays
-        vis_embs = vis_embs.cpu().numpy()
-        masks_all = np.stack(masks_all)
+            # Pass through vision encoder to obtain visual embeddings corresponding to each mask
+            visual_prompts_processed = self.clipseg_processor(
+                images=visual_prompts, return_tensors="pt"
+            )
+            visual_prompts_processed = visual_prompts_processed["pixel_values"].to(self.device)
+            vis_embs = self.clipseg.clip.get_image_features(visual_prompts_processed)
+
+            # Output tensors to numpy arrays
+            vis_embs = vis_embs.cpu().numpy()
+            masks_all = np.stack(masks_all)
+        else:
+            # Empty list of segmentation masks; occurs when search returned zero matches
+            vis_embs = np.zeros((0, self.clipseg.config.projection_dim), dtype="float32")
+            masks_all = np.zeros((0, image.height, image.width), dtype="float32")
 
         return vis_embs, masks_all, scores_all
 
