@@ -41,9 +41,21 @@ def main(cfg):
     # Set seed
     random.seed(cfg.seed)
 
+    # Experiment tag
+    exp_tag = f"{cfg.exp1.strat_feedback}_{cfg.agent.strat_generic}_{cfg.seed}"
+
+    # Path to save result metrics
+    results_path = os.path.join(cfg.paths.outputs_dir, "results")
+    os.makedirs(results_path, exist_ok=True)
+
+    # Path to save agent models during & after training
+    if not cfg.agent.test_mode:
+        ckpt_path = os.path.join(cfg.paths.outputs_dir, "agent_model")    
+        os.makedirs(ckpt_path, exist_ok=True)
+
     # Tensorboard writer to log learning progress
     writer = SummaryWriter(f"{cfg.paths.outputs_dir}/tensorboard_logs")
-    mistakes = defaultdict(lambda: (0,0))     # Accumulating regrets
+    mistakes = defaultdict(lambda: [(0,0)])         # Accumulating regrets
 
     # Set up student & teacher
     student = ITLAgent(cfg)
@@ -223,25 +235,61 @@ def main(cfg):
             else:
                 env.step()
 
-        # Log progress to tensorboard
         for gt_conc, ans_conc in teacher.current_episode_record.items():
-            regrets, total = mistakes[gt_conc]
+            # Update metrics
+            regrets_conc, total_conc = mistakes[gt_conc][-1]
+            regrets_all, total_all = mistakes["__all__"][-1]
 
-            new_regrets = regrets+1 if gt_conc != ans_conc else regrets
-            new_total = total+1
+            new_regrets_conc = regrets_conc+1 if gt_conc != ans_conc else regrets_conc
+            new_total_conc = total_conc+1
+            new_regrets_all = regrets_all+1 if gt_conc != ans_conc else regrets_all
+            new_total_all = total_all+1
 
-            writer.add_scalar(f"Cumul. regret: {gt_conc}", new_regrets, new_total)
-            mistakes[gt_conc] = (new_regrets, new_total)
+            # Log progress to tensorboard
+            writer.add_scalar(
+                f"Cumul. regret: {gt_conc}", new_regrets_conc, global_step=new_total_conc
+            )
+            writer.add_scalar(
+                f"Cumul. regret: *All concepts*", new_regrets_all, global_step=new_total_all
+            )
+            mistakes[gt_conc].append((new_regrets_conc, new_total_conc))
+            mistakes["__all__"].append((new_regrets_all, new_total_all))
+
+            # If not test mode (i.e., training mode), save current agent model checkpoint
+            # to output dir after every 5 mistakes (across all concepts)
+            if not cfg.agent.test_mode:
+                # Avoid redundant saving by checking gt_conc != ans_conc
+                if gt_conc != ans_conc and regrets_all % 5 == 0 and regrets_all > 0:
+                    student.save_model(f"{ckpt_path}/{exp_tag}_{regrets_all}.ckpt")
 
     # Close Unity environment & tensorboard writer
     env.close()
     writer.close()
 
-    # Save current agent model checkpoint to output dir
-    if not cfg.agent.test_mode:
-        ckpt_path = os.path.join(cfg.paths.outputs_dir, "agent_model")
-        os.makedirs(ckpt_path, exist_ok=True)
-        student.save_model(f"{ckpt_path}/injected_{cfg.seed}.ckpt")
+    if cfg.agent.test_mode:
+        # If test mode, save exam records to output dir for later summary
+        out_csv_fname = cfg.agent.model_path.split("/")[-1].replace(".ckpt",".csv")
+        out_csv_fname = f"outputs_{out_csv_fname}"
+
+        with open(os.path.join(results_path, out_csv_fname), "w") as out_csv:
+            out_csv.write("episode,ground_truth,answer\n")
+
+            for i, record in enumerate(teacher.episode_records):
+                for gt_conc, ans_conc in record.items():
+                    out_csv.write(f"{i+1},{gt_conc},{ans_conc}\n")
+
+    else:
+        # Otherwise (i.e., training mode), save cumulative regret curves to output dir
+        out_csv_fname = f"cumulReg_{exp_tag}.csv"
+
+        with open(os.path.join(results_path, out_csv_fname), "w") as out_csv:
+            out_csv.write("episode,cumulative_regret\n")
+
+            for regrets, total in mistakes["__all__"]:
+                out_csv.write(f"{total},{regrets}\n")
+
+        # Then save final agent model checkpoint to output dir
+        student.save_model(f"{ckpt_path}/{exp_tag}_final-{regrets_all}.ckpt")
 
 
 if __name__ == "__main__":
