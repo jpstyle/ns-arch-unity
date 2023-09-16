@@ -79,7 +79,7 @@ def main(cfg):
 
                 # Fit classifier and run on test set
                 # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 100), weights="distance")
-                bin_clf = SVC(C=1, probability=True, random_state=cfg.seed)
+                bin_clf = SVC(C=1000, probability=True, random_state=cfg.seed)
                 bin_clf.fit(X, y)
                 true_pos = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 true_neg = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5
