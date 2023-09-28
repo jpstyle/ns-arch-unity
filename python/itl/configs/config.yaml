@@ -16,7 +16,8 @@ paths:
     build_dir: "${paths.root_dir}/unity/Builds"
 
 agent:
-    strat_generic: "semOnly"    # Options: "semOnly", "semNeg", "semNegScal"
+    strat_generic: "semOnly"        # Options: "semOnly", "semNeg", "semNegScal"
+    strat_assent: "doNotLearn"      # Options: "doNotLearn", "alwaysLearn" ("boundaryLearn"?)
     test_mode: false
         # For measuring agent performance; disable learning & model saving if true
 

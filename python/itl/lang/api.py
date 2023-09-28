@@ -248,7 +248,7 @@ class LanguageModule:
                     question = _map_and_format(question, ref_map, ti, si, r2i, se2i)
 
                     new_record.append(((presup, question), parse["conjunct_raw"][ev_id]))
-                    self.dialogue.unanswered_Q.add((ti, si))
+                    self.dialogue.unanswered_Qs.add((ti, si))
 
                 elif parse["utt_type"][ev_id] == "comm":
                     # Imperatives

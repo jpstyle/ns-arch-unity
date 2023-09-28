@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 
 from ..vision.utils import mask_iou
@@ -24,7 +26,17 @@ class DialogueManager:
         #   3) original user input string
         self.record = []
 
-        self.unanswered_Q = set()
+        self.unanswered_Qs = set()
+        if hasattr(self, "acknowledged_stms"):
+            # If acknowledgement info exists for current record when refreshing, outdate
+            # by re-indexing "curr" entries with "prev"
+            self.acknowledged_stms = {
+                ("prev", ti, si): data
+                for (prev_or_curr, ti, si), data in self.acknowledged_stms.items()
+                if prev_or_curr=="curr"
+            }
+        else:
+            self.acknowledged_stms = {}
 
         # Buffer of utterances to generate
         self.to_generate = []
@@ -35,7 +47,7 @@ class DialogueManager:
     
     def export_as_dict(self):
         """ Export the current dialogue information state as a dict """
-        return vars(self)
+        return copy.deepcopy(vars(self))
 
     def dem_point(self, dem_mask):
         """

@@ -43,6 +43,7 @@ class ITLAgent:
 
         # Agent learning strategy params
         self.strat_generic = cfg.agent.strat_generic
+        self.strat_assent = cfg.agent.strat_assent
 
         # Show visual UI and plots
         self.vis_ui_on = False
@@ -69,8 +70,10 @@ class ITLAgent:
 
     def loop(self, v_usr_in=None, l_usr_in=None, pointing=None, new_scene=True):
         """
-        Single agent activity loop. Provide usr_in for programmatic execution; otherwise,
-        prompt user input on command line REPL
+        Single agent activity loop, called with inputs of visual scene, natural
+        language utterances from user and affiliated gestures (demonstrative
+        references by pointing in our case). new_scene flag indicates whether
+        the visual scene input is new.
         """
         self._vis_inp(usr_in=v_usr_in, new_scene=new_scene)
         self._lang_inp(usr_in=l_usr_in)
@@ -175,8 +178,8 @@ class ITLAgent:
 
     def _vis_inp(self, usr_in, new_scene):
         """ Handle provided visual input """
-        self.vision.new_input = new_scene
-        if self.vision.new_input:
+        self.vision.new_input_provided = new_scene
+        if self.vision.new_input_provided:
             self.vision.last_input = usr_in
 
     def _lang_inp(self, usr_in):
@@ -188,9 +191,9 @@ class ITLAgent:
             usr_in = [usr_in]
 
         if len(usr_in) == 0:
-            self.lang.new_input = False
+            self.lang.new_input_provided = False
         else:
-            self.lang.new_input = True
+            self.lang.new_input_provided = True
 
             parsed_input = None
             try:
@@ -203,7 +206,7 @@ class ITLAgent:
     def _update_belief(self, pointing):
         """ Form beliefs based on visual and/or language input """
 
-        if not (self.vision.new_input or self.lang.new_input):
+        if not (self.vision.new_input_provided or self.lang.new_input_provided):
             # No information whatsoever to make any belief updates
             return
 
@@ -216,6 +219,14 @@ class ITLAgent:
 
         # Index of latest dialogue turn
         ti_last = len(self.lang.dialogue.record)
+
+        # Previous dialogue record and visual context from currently stored values
+        prev_dialogue_state = self.lang.dialogue.export_as_dict()
+        prev_translated = self.symbolic.translate_dialogue_content(prev_dialogue_state)
+        prev_scene = self.vision.scene
+        prev_pr_prog = self.symbolic.concl_vis[1][0] if self.symbolic.concl_vis else None
+        prev_kb = self.kb_snap
+        prev_context = (prev_scene, prev_pr_prog, prev_kb)
 
         # Set of new visual concepts (equivalently, neologisms) newly registered
         # during the loop
@@ -230,17 +241,17 @@ class ITLAgent:
             ##                  Processing perceived inputs                  ##
             ###################################################################
 
-            if self.vision.new_input or xb_updated:
+            if self.vision.new_input_provided or xb_updated:
                 # Prior to resetting visual context, store current one into the
                 # episodic memory (visual perceptions & user language inputs),
                 # in the form of LP^MLN program fragments
-                if self.vision.new_input:
+                if self.vision.new_input_provided:
                     if (self.vision.scene is not None and
                         len(self.vision.scene) > 1 and
                         self.symbolic.concl_vis_lang is not None):
 
-                        pprog, _, dprog = self.symbolic.concl_vis_lang[1]
-                        self.episodic_memory.append((pprog, dprog))
+                        pr_prog, _, dl_prog = self.symbolic.concl_vis_lang[1]
+                        self.episodic_memory.append((pr_prog, dl_prog))
 
                 # Ground raw visual perception with scene graph generation module
                 self.vision.predict(
@@ -249,16 +260,17 @@ class ITLAgent:
                 )
                 vis_ui_on = False
 
-            if self.vision.new_input:
+            if self.vision.new_input_provided:
                 # Inform the language module of the visual context
                 self.lang.situate(self.vision.scene)
                 self.symbolic.refresh()
 
-                # Reset below on episode-basis
+                # Update KB snapshot on episode-basis
                 self.kb_snap = copy.deepcopy(self.lt_mem.kb)
 
             # Understand the user input in the context of the dialogue
-            if self.lang.new_input:
+            if self.lang.new_input_provided:
+                # Revert to pre-update dialogue state at the start of each loop iteration
                 self.lang.dialogue.record = self.lang.dialogue.record[:ti_last]
                 self.lang.understand(self.lang.last_input, pointing=pointing)
 
@@ -284,22 +296,22 @@ class ITLAgent:
             ##       Sensemaking via synthesis of perception+knowledge       ##
             ###################################################################
 
-            dialogue_state = self.lang.dialogue.export_as_dict()
+            updated_dialogue_state = self.lang.dialogue.export_as_dict()
 
-            if self.vision.new_input or ents_updated or xb_updated or kb_updated:
+            if self.vision.new_input_provided or ents_updated or xb_updated or kb_updated:
                 # Sensemaking from vision input only
                 exported_kb = self.lt_mem.kb.export_reasoning_program()
                 self.symbolic.sensemake_vis(self.vision.scene, exported_kb)
 
-            if self.lang.new_input:
+            if self.lang.new_input_provided:
                 # Reference & word sense resolution to connect vision & discourse
                 self.symbolic.resolve_symbol_semantics(
-                    dialogue_state, self.lt_mem.lexicon
+                    updated_dialogue_state, self.lt_mem.lexicon
                 )
 
                 if self.vision.scene is not None:
                     # Sensemaking from vision & language input
-                    self.symbolic.sensemake_vis_lang(dialogue_state)
+                    self.symbolic.sensemake_vis_lang(updated_dialogue_state)
 
             ###################################################################
             ##           Identify & exploit learning opportunities           ##
@@ -318,25 +330,24 @@ class ITLAgent:
             # Info needed (along with generics) for computing scalar implicatures
             pair_rules = defaultdict(list)
 
+            # Collect previous factual statements and questions made during this dialogue,
+            # respectively
+            prev_statements = []
+            prev_Qs = []
+            for ti, (spk, turn_clauses) in enumerate(prev_translated):
+                for si, ((rule, ques), raw) in enumerate(turn_clauses):
+                    # Factual statement
+                    if rule is not None and len(rule[0])==1 and rule[1] is None:
+                        prev_statements.append(((ti, si), (spk, rule)))
+
+                    # Question
+                    if ques is not None:
+                        # Here, `rule` represents presuppositions included in `ques`
+                        prev_Qs.append(((ti, si), (spk, ques, rule, raw)))
+
             # Translate dialogue record into processable format based on the result
             # of symbolic.resolve_symbol_semantics
-            translated = self.symbolic.translate_dialogue_content(dialogue_state)
-
-            # Collect previous factual statements made during this dialogue
-            prev_facts = [
-                (spk, rule)
-                for spk, turn_clauses in translated
-                for (rule, _), _ in turn_clauses
-                if rule is not None and len(rule[0])==1 and rule[1] is None
-            ]
-
-            # Collect previous questions made during this dialogue
-            prev_Qs = [
-                (spk, ques, presup, raw)
-                for spk, turn_clauses in translated
-                for (presup, ques), raw in turn_clauses
-                if ques is not None
-            ]
+            translated = self.symbolic.translate_dialogue_content(updated_dialogue_state)
 
             # Process translated dialogue record to do the following:
             #   - Identify recognition mismatch btw. user provided vs. agent
@@ -348,12 +359,30 @@ class ITLAgent:
                 for (rule, _), raw in turn_clauses:
                     if rule is None: continue
 
-                    # Identify learning opportunities; i.e., any deviations from the
-                    # agent's estimated states of affairs, or generic rules delivered
-                    # via NL generic statements
+                    # Identify learning opportunities; i.e., any deviations from the agent's
+                    # estimated states of affairs, generic rules delivered via NL generic
+                    # statements, or acknowledgements (positive or lack of negative)
                     self.comp_actions.identify_mismatch(rule)
-                    self.comp_actions.identify_confusion(rule, prev_facts, novel_concepts)
-                    self.comp_actions.identify_generics(rule, raw, prev_Qs, generics, pair_rules)
+                    self.comp_actions.identify_confusion(
+                        rule, prev_statements, novel_concepts
+                    )
+                    self.comp_actions.identify_acknowledgement(
+                        rule, prev_statements, prev_context
+                    )
+                    self.comp_actions.identify_generics(
+                        rule, raw, prev_Qs, generics, pair_rules
+                    )
+
+            # By default, treat lack of any negative acknowledgements to an agent's statement
+            # as positive acknowledgement
+            prev_or_curr = "prev" if self.vision.new_input_provided else "curr"
+            for (ti, si), (speaker, (statement, _)) in prev_statements:
+                if speaker != "A": continue         # Not interested
+
+                stm_ind = (prev_or_curr, ti, si)
+                if stm_ind not in self.lang.dialogue.acknowledged_stms:
+                    acknowledgement_data = (statement, True, prev_context)
+                    self.lang.dialogue.acknowledged_stms[stm_ind] = acknowledgement_data
 
             # Update knowledge base with obtained generic statements
             for rule, w_pr, provenance in generics:
@@ -361,11 +390,11 @@ class ITLAgent:
 
             # Compute scalar implicature if required by agent's strategy
             if self.strat_generic == "semNegScal":
-                self.comp_actions.add_scalar_implicatures(pair_rules)
+                self.comp_actions.add_scalar_implicature(pair_rules)
 
             # Handle neologisms
-            xb_updated |= self.comp_actions.handle_neologisms(
-                novel_concepts, dialogue_state
+            xb_updated |= self.comp_actions.handle_neologism(
+                novel_concepts, updated_dialogue_state
             )
 
             # Terminate the loop when 'equilibrium' is reached
@@ -388,12 +417,14 @@ class ITLAgent:
         # Ideally, this is to be accomplished declaratively by properly setting up formal
         # maintenance goals and then performing automated planning or something to come
         # up with right sequence of actions to be added to agenda. However, the ad-hoc code
-        # below (+ plan library in practical/plans/library.py) will do for our purpose right
-        # now; we will see later if we'll ever need to generalize and implement the said
-        # procedure.)
+        # below (+ plan library in practical_reasoning/plans/library.py) will do for our
+        # purpose right now; we will see later if we'll ever need to generalize and implement
+        # the said procedure.)
 
-        for ti, si in self.lang.dialogue.unanswered_Q:
+        for ti, si in self.lang.dialogue.unanswered_Qs:
             self.practical.agenda.append(("address_unanswered_Q", (ti, si)))
+        for a in self.lang.dialogue.acknowledged_stms.items():
+            self.practical.agenda.append(("address_acknowledgement", a))
         for n in self.lang.unresolved_neologisms:
             self.practical.agenda.append(("address_neologism", n))
         for m in self.symbolic.mismatches:
@@ -430,7 +461,7 @@ class ITLAgent:
 
             if len(resolved_items) == 0:
                 # No resolvable agenda item any more
-                if (len(return_val) == 0 and self.lang.new_input):
+                if (len(return_val) == 0 and self.lang.new_input_provided):
                     # Nothing to add, acknowledge any user input
                     self.practical.agenda.append(("acknowledge", None))
                 else:

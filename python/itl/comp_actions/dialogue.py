@@ -45,7 +45,7 @@ def prepare_answer_Q(agent, utt_pointer):
     into natural language form to be uttered
     """
     # The question is about to be answered
-    agent.lang.dialogue.unanswered_Q.remove(utt_pointer)
+    agent.lang.dialogue.unanswered_Qs.remove(utt_pointer)
 
     dialogue_state = agent.lang.dialogue.export_as_dict()
     translated = agent.symbolic.translate_dialogue_content(dialogue_state)

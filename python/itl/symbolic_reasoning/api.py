@@ -46,14 +46,7 @@ class SymbolicReasonerModule:
         self.mismatches = []
 
     def refresh(self):
-        self.concl_vis = None
-        self.concl_vis_lang = None
-        self.Q_answers = {}
-
-        self.value_assignment = {}
-        self.word_senses = {}
-
-        self.mismatches = []
+        self.__init__()
 
     def sensemake_vis(self, vis_scene, exported_kb):
         """
@@ -68,7 +61,7 @@ class SymbolicReasonerModule:
         kb_prog, preds_in_kb = exported_kb
 
         # Build ASP program for processing perception outputs
-        pprog = Program()
+        pr_prog = Program()
 
         # Biasing literals by visual evidence
         for oi, obj in vis_scene.items():
@@ -83,7 +76,7 @@ class SymbolicReasonerModule:
                     rule = Rule(head=event_lit)
                     r_pr = float(obj["pred_classes"][c])
 
-                    pprog.add_rule(rule, r_pr)
+                    pr_prog.add_rule(rule, r_pr)
 
             # Object attributes
             if "pred_attributes" in obj:
@@ -96,7 +89,7 @@ class SymbolicReasonerModule:
                     rule = Rule(head=event_lit)
                     r_pr = float(obj["pred_attributes"][a])
 
-                    pprog.add_rule(rule, r_pr)
+                    pr_prog.add_rule(rule, r_pr)
 
             # Object relations
             if "pred_relations" in obj:
@@ -112,14 +105,14 @@ class SymbolicReasonerModule:
                         rule = Rule(head=event_lit)
                         r_pr = float(obj["pred_relations"][oj][r])
 
-                        pprog.add_rule(rule, r_pr)
+                        pr_prog.add_rule(rule, r_pr)
 
         # Solve with clingo to find the best models of the program
-        prog = pprog + kb_prog
+        prog = pr_prog + kb_prog
         bjt_v = prog.compile()
 
         # Store sensemaking result as module state
-        self.concl_vis = bjt_v, (pprog, kb_prog)
+        self.concl_vis = bjt_v, (pr_prog, kb_prog)
     
     def resolve_symbol_semantics(self, dialogue_state, lexicon):
         """
@@ -134,13 +127,13 @@ class SymbolicReasonerModule:
                 vs. discourse referents for variable assignment
         """
         # Find the best estimate of referent value assignment
-        aprog = Program()
+        sm_prog = Program()
 
         # Environmental referents
         occurring_atoms = set()
         for ent in dialogue_state["referents"]["env"]:
             if ent not in occurring_atoms:
-                aprog.add_absolute_rule(Rule(head=Literal("env", wrap_args(ent))))
+                sm_prog.add_absolute_rule(Rule(head=Literal("env", wrap_args(ent))))
                 occurring_atoms.add(ent)
 
         # Discourse referents
@@ -150,13 +143,13 @@ class SymbolicReasonerModule:
             # No need to assign if not an entity referent
             if not rf.startswith("x"): continue
 
-            aprog.add_absolute_rule(Rule(head=Literal("dis", wrap_args(rf))))
+            sm_prog.add_absolute_rule(Rule(head=Literal("dis", wrap_args(rf))))
             if v["is_referential"]:
-                aprog.add_absolute_rule(Rule(head=Literal("referential", wrap_args(rf))))
+                sm_prog.add_absolute_rule(Rule(head=Literal("referential", wrap_args(rf))))
 
         # Hard assignments by pointing, etc.
         for ref, env in dialogue_state["assignment_hard"].items():
-            aprog.add_absolute_rule(
+            sm_prog.add_absolute_rule(
                 Rule(body=[Literal("assign", [(ref, False), (env, False)], naf=True)])
             )
 
@@ -177,7 +170,7 @@ class SymbolicReasonerModule:
             #             vis_concepts[atom.name] += pr[0]
 
             #     for vc, score in vis_concepts.items():
-            #         aprog.add_absolute_rule(Rule(
+            #         sm_prog.add_absolute_rule(Rule(
             #             head=Literal("vis_prime", wrap_args(vc, int(score * 100)))
             #         ))
 
@@ -221,7 +214,7 @@ class SymbolicReasonerModule:
 
                             sym = f"{p[1]}_{p[0].split('/')[0]}"
                             tok_loc = f"t{ti}_s{si}_r{c}_{src_loc}"
-                            aprog.add_absolute_rule(
+                            sm_prog.add_absolute_rule(
                                 Rule(head=Literal("pred_token", wrap_args(tok_loc, sym)))
                             )
 
@@ -292,7 +285,7 @@ class SymbolicReasonerModule:
                         #                 for bi, d in enumerate(body_vcs)
                         #             ]
 
-                        #         aprog.add_absolute_rule(Rule(head=c_head, body=c_body))
+                        #         sm_prog.add_absolute_rule(Rule(head=c_head, body=c_body))
                 
                 if question is not None:
                     _, (cons, ante) = question
@@ -313,7 +306,7 @@ class SymbolicReasonerModule:
 
                             sym = f"{p[1]}_{p[0].split('/')[0]}"
                             tok_loc = f"t{ti}_s{si}_q{c}_{src_loc}"
-                            aprog.add_absolute_rule(
+                            sm_prog.add_absolute_rule(
                                 Rule(head=Literal("pred_token", wrap_args(tok_loc, sym)))
                             )
 
@@ -335,22 +328,22 @@ class SymbolicReasonerModule:
 
                     den = f"{vc[1]}_{vc[0]}"
 
-                    aprog.add_absolute_rule(
+                    sm_prog.add_absolute_rule(
                         Rule(head=Literal("may_denote", wrap_args(sym, den)))
                     )
-                    aprog.add_absolute_rule(
+                    sm_prog.add_absolute_rule(
                         Rule(head=Literal("d_freq", wrap_args(den, lexicon.d_freq[vc])))
                     )
             else:
                 # Predicate symbol not found in lexicon: unresolved neologism
-                aprog.add_absolute_rule(
+                sm_prog.add_absolute_rule(
                     Rule(head=Literal("may_denote", wrap_args(sym, "_neo")))
                 )
 
         ## Assignment program rules
 
         # 1 { assign(X,E) : env(E) } 1 :- dis(X), referential(X).
-        aprog.add_rule(Rule(
+        sm_prog.add_rule(Rule(
             head=Literal(
                 "assign", wrap_args("X", "E"),
                 conds=[Literal("env", wrap_args("E"))]
@@ -363,7 +356,7 @@ class SymbolicReasonerModule:
         ))
 
         # { assign(X,E) : env(E) } 1 :- dis(X), not referential(X).
-        aprog.add_rule(Rule(
+        sm_prog.add_rule(Rule(
             head=Literal(
                 "assign", wrap_args("X", "E"),
                 conds=[Literal("env", wrap_args("E"))]
@@ -376,7 +369,7 @@ class SymbolicReasonerModule:
         ))
 
         # 1 { denote(T,D) : may_denote(S,D) } 1 :- pred_token(T,S).
-        aprog.add_rule(Rule(
+        sm_prog.add_rule(Rule(
             head=Literal(
                 "denote", wrap_args("T", "D"),
                 conds=[Literal("may_denote", wrap_args("S", "D"))]
@@ -388,14 +381,14 @@ class SymbolicReasonerModule:
         ))
 
         # 'Base cost' for cases where no assignments are any better than others
-        aprog.add_absolute_rule(Rule(head=Literal("zero_p", [])))
+        sm_prog.add_absolute_rule(Rule(head=Literal("zero_p", [])))
 
         # By querying for the optimal assignment, essentially we are giving the user a 'benefit
         # of doubt', such that any statements made by the user are considered as True, and the
         # agent will try to find the 'best' assignment to make it so.
         # (Note: this is not a probabilistic inference, and the confidence scores provided as 
         # arguments are better understood as properties of the env. entities & disc. referents.)
-        opt_models = aprog.optimize([
+        opt_models = sm_prog.optimize([
             # (Note: Earlier statements receive higher optimization priority)
             # Prioritize assignments that agree with given statements
             ("maximize", [
@@ -537,11 +530,11 @@ class SymbolicReasonerModule:
             dialogue_state: Current dialogue information state exported from the dialogue
                 manager
         """
-        dprog = Program()
-        bjt_v, (pprog, kb_prog) = self.concl_vis
+        dl_prog = Program()
+        bjt_v, (pr_prog, kb_prog) = self.concl_vis
 
         # TODO (in some future): Incremental BJT update from existing bjt_v and additional
-        # dprog info (cf. [Incremental junction tree inference], Agli et al. 2016)
+        # dl_prog info (cf. [Incremental junction tree inference], Agli et al. 2016)
 
         # Incorporate additional information provided by the user in language for updated
         # sensemaking
@@ -572,20 +565,20 @@ class SymbolicReasonerModule:
                         if len(cons) > 0:
                             # One ASP rule per cons
                             for cl in cons:
-                                dprog.add_rule(Rule(head=cl, body=ante), U_IN_PR)
+                                dl_prog.add_rule(Rule(head=cl, body=ante), U_IN_PR)
                         else:
                             # Cons-less; single constraint
-                            dprog.add_rule(Rule(body=ante), U_IN_PR)
+                            dl_prog.add_rule(Rule(body=ante), U_IN_PR)
 
         # Finally, reasoning with all visual+language info
-        if len(dprog) > 0:
-            prog = pprog + kb_prog + dprog
+        if len(dl_prog) > 0:
+            prog = pr_prog + kb_prog + dl_prog
             bjt_vl = prog.compile()
         else:
             bjt_vl = bjt_v
 
         # Store sensemaking result as module state
-        self.concl_vis_lang = bjt_vl, (pprog, kb_prog, dprog)
+        self.concl_vis_lang = bjt_vl, (pr_prog, kb_prog, dl_prog)
 
     @staticmethod
     def query(bjt, q_vars, event, restrictors=None):

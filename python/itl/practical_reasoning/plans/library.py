@@ -87,6 +87,16 @@ library = {
         }
     ],
 
+    # Resolve user's positive acknowledgement (assent) to agent's statement that reports
+    # agent's estimation
+    "address_acknowledgement": [
+        # Prepare answering utterance to generate
+        {
+            "action_method": Val(referrable=["comp_actions", "handle_acknowledgement"]),
+            "action_args_getter": lambda x: (Val(data=x),)
+        }
+    ],
+
     # Nothing special has to be addressed, just acknowledge user input
     "acknowledge": [
         # Acknowledge in a cool way, saying "OK."

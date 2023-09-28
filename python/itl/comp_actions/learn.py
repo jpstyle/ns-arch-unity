@@ -4,12 +4,11 @@ referring to belief updates that modify long-term memory
 """
 import re
 import math
+from itertools import permutations
 from collections import defaultdict
 
 import inflect
-import numpy as np
 
-from ..vision.utils import masks_bounding_boxes
 from ..lpmln import Literal, Polynomial
 from ..lpmln.utils import flatten_cons_ante
 
@@ -56,7 +55,7 @@ def identify_mismatch(agent, rule):
             if m not in agent.symbolic.mismatches:
                 agent.symbolic.mismatches.append(m)
 
-def identify_confusion(agent, rule, prev_facts, novel_concepts):
+def identify_confusion(agent, rule, prev_statements, novel_concepts):
     """
     Test against vision module output to identify  any 'concept overlap' -- i.e.
     whenever the agent confuses two concepts difficult to distinguish visually
@@ -77,12 +76,12 @@ def identify_confusion(agent, rule, prev_facts, novel_concepts):
         # by agent is provided as answer to the last question from user. This
         # might change in the future when we adopt a more sophisticated formalism
         # for representing discourse to relax the assumption.
-        prev_facts_A = [fct for spk, fct in prev_facts if spk=="A"]
-        if len(prev_facts_A) == 0:
+        prev_statements_A = [stm for _, (spk, stm) in prev_statements if spk=="A"]
+        if len(prev_statements_A) == 0:
             # Hasn't given an answer (i.e., "I am not sure.")
             return
 
-        agent_last_ans = prev_facts_A[-1][0][0]
+        agent_last_ans = prev_statements_A[-1][0][0]
         ans_conc_type, ans_conc_ind = agent_last_ans.name.split("_")
         ans_conc_ind = int(ans_conc_ind)
 
@@ -111,6 +110,52 @@ def identify_confusion(agent, rule, prev_facts, novel_concepts):
                     # Agent's best guess disagrees with the user-provided
                     # information
                     agent.vision.confusions.add((conc_type, confusion_pair))
+
+def identify_acknowledgement(agent, rule, prev_statements, prev_context):
+    """
+    Check whether the agent reported its estimate of something by its utterance
+    and whether `rule` effectively acknowledges any of them positively or negatively.
+    We may treat "Correct.", silence or explicit repetition as positive acknowledgement.
+    Any conflicting statement from user would count as negative acknowledgement, as
+    well as "Incorrect." or "No.".
+    """
+    cons, ante = rule
+    rule_is_grounded = (cons is None or is_grounded(cons)) and \
+        (ante is None or is_grounded(ante))
+    rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
+        (ante is None or has_pred_referent(ante))
+
+    prev_scene, _, prev_kb = prev_context
+
+    if rule_is_grounded and not rule_has_pred_referent:
+        # Grounded event without constant predicate referents
+
+        if agent.vision.new_input_provided:
+            # Discussion about irrelevant contexts, can return early without doing anything
+            return
+
+        for (ti, si), (speaker, (statement, _)) in prev_statements:
+            # Only interested in whether an agent's statement is acknowledged
+            if speaker != "A": continue
+
+            # Entailment checks; cons vs. statement, and cons vs. ~statement
+            _, pos_entail_check = Literal.entailing_mapping_btw(cons, statement)
+            _, neg_entail_check = Literal.entailing_mapping_btw(cons, (list(statement),))
+                # Recall that a list of literals stands for the negation of the conjunction;
+                # wrap it in a tuple again to make it an iterable
+
+            pos_ack = pos_entail_check is not None and pos_entail_check >= 0
+            neg_ack = neg_entail_check is not None and neg_entail_check >= 0
+
+            if not (pos_ack or neg_ack): continue       # Nothing to do here
+
+            # Determine polarity of the acknowledgement, collect relevant visual embeddings
+            # from prev_scene, and then record
+            polarity = pos_ack
+            acknowledgement_data = (statement, polarity, prev_context)
+            agent.lang.dialogue.acknowledged_stms[("curr", ti, si)] = acknowledgement_data
+                # "curr" indicates the acknowledgement is relevant to a statement in the
+                # ongoing dialogue record
 
 def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
     """
@@ -141,7 +186,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
 
             # Collect concept_diff questions made by the agent during this dialogue
             diff_Qs_args = []
-            for (spk, (q_vars, (q_cons, _)), _, raw) in prev_Qs:
+            for _, (spk, (q_vars, (q_cons, _)), _, raw) in prev_Qs:
                 if spk!="A": continue
                 diff_Qs_args += [
                     l.args for l in q_cons
@@ -204,7 +249,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
         entail_consts = defaultdict(list)       # Map from pred var to set of pred consts
         instance_consts = {}                    # Map from ent const to pred var
         context_Qs = {}                         # Pointers to user's original question
-        for (spk, (q_vars, (q_cons, _)), presup, raw) in prev_Qs:
+        for _, (spk, (q_vars, (q_cons, _)), presup, raw) in prev_Qs:
             # Consider only questions from user
             if spk!="U": continue
 
@@ -276,27 +321,17 @@ def handle_mismatch(agent, mismatch):
             conc_ind = int(conc_ind)
             args = [a for a, _ in atom.args]
 
-            ex_bboxes = masks_bounding_boxes(
-                [agent.lang.dialogue.referents["env"][arg]["mask"] for arg in args]
-            )
-
             # Fetch current score for the asserted fact
             if conc_type == "cls" or conc_type == "att":
-                f_vec = agent.vision.f_vecs[args[0]]
+                f_vec = agent.vision.scene[args[0]]["vis_emb"]
             else:
                 assert conc_type == "rel"
                 raise NotImplementedError   # Step back for relation prediction...
 
-            # Add new concept exemplars to memory, as feature vectors at the
-            # penultimate layer right before category prediction heads
-            pointers_src = { 0: (0, tuple(ai for ai in range(len(args)))) }
-            pointers_exm = { conc_ind: exm_pointer }
-
+            # Add new concept exemplars to memory
             agent.lt_mem.exemplars.add_exs(
-                sources=[(np.asarray(agent.vision.last_input), ex_bboxes)],
                 f_vecs={ conc_type: f_vec[None,:] },
-                pointers_src={ conc_type: pointers_src },
-                pointers_exm={ conc_type: pointers_exm }
+                pointers={ conc_type: { conc_ind: exm_pointer } }
             )
 
 def handle_confusion(agent, confusion):
@@ -357,7 +392,103 @@ def handle_confusion(agent, confusion):
     # for the rest of the interaction episode sequence
     agent.confused_no_more.add(confusion)
 
-def add_scalar_implicatures(agent, pair_rules):
+def handle_acknowledgement(agent, acknowledgement_info):
+    """
+    Handle (positive) acknowledgements to an utterance by the agent reporting its
+    estimation on some state of affairs. The learning process differs based on the
+    agent's strategy regarding how to extract learning signals from user's assents.
+    """
+    if agent.strat_assent == "doNotLearn": return       # Nothing to do here
+
+    ack_ind, ack_data = acknowledgement_info
+    if ack_data is None: return         # Marked 'already processed'
+
+    statement, polarity, context = ack_data
+    vis_scene, pr_prog, kb_snap = context
+    if polarity != True: return         # Nothing to do with negative acknowledgements
+
+    # Vision-only (neural) estimations recognized
+    vis_lits = {r.head[0]: w_pr[0] for r, w_pr in pr_prog.rules}
+
+    # Find literals to be considered as confirmed via user's assent; always include
+    # each literal in `statement`, and others if relevant via some rule in KB
+    literals_acknowledged = set()
+    for main_lit in statement:
+        literals_acknowledged.add(main_lit)
+
+        # Find relevant KB entries containing the main literal
+        relevant_kb_entries = [
+            kb_snap.entries[ei][0]
+            for ei in kb_snap.entries_by_pred[main_lit.name]
+        ]
+
+        # Into groups of literals to be recognized as learning signals
+        literal_groups = []
+        for cons, ante in relevant_kb_entries:
+            # Only consider rules with antecedents that don't have negated conjunction
+            # as conjunct, when learning from assents
+            if not all(isinstance(cnjt, Literal) for cnjt in ante): continue
+
+            # Only consider unnegated conjuncts in consequent
+            cons_pos = tuple(cnjt for cnjt in cons if isinstance(cnjt, Literal))
+
+            for conjunct in cons_pos+ante:
+                assert isinstance(conjunct, Literal)
+                if conjunct.name==main_lit.name:
+                    vc_map = {v: c for v, c in zip(conjunct.args, main_lit.args)}
+                    literal_groups.append((cons_pos, ante, vc_map))
+
+        for cons, ante, vc_map in literal_groups:
+            # Substitute and identify the set of unique args occurring
+            cons_subs = [l.substitute(terms=vc_map) for l in cons]
+            ante_subs = [l.substitute(terms=vc_map) for l in ante]
+            occurring_args = set.union(*[set(l.args) for l in cons_subs+ante_subs])
+
+            # Consider all assignments of constants to variables & skolem functions
+            # possible, and add viable cases to the set of acknowledged literals
+            possible_assignments = [
+                tuple(zip(occurring_args, prm))
+                for prm in permutations(vis_scene, len(occurring_args))
+            ]
+            for prm in possible_assignments:
+                # Skip this assignment if constant mismatch occurs
+                const_mismatch = any(
+                    arg_name!=cons and not (is_var or isinstance(arg_name, tuple))
+                    for (arg_name, is_var), cons in prm
+                )
+                if const_mismatch: continue
+
+                assig = {arg: (cons, False) for arg, cons in prm if arg[0]!=cons}
+                cons_subs_full = {l.substitute(terms=assig) for l in cons_subs}
+                ante_subs_full = {l.substitute(terms=assig) for l in ante_subs}
+
+                # Union the fully substituted consequent to `literals_acknowledged`
+                # only if all the literals in the substituted antecedent can be found
+                # in visual scene (no matter how high the estimation confidences are
+                # -- at least for now). The main literal is explicitly acknowledged
+                # and thus always can be considered as satisfied.
+                if all(lit in vis_lits for lit in ante_subs_full-{main_lit}):
+                    literals_acknowledged |= cons_subs_full
+                    literals_acknowledged |= ante_subs_full
+
+    # Add the instances represented by the literals as positive concept exemplars
+    for lit in literals_acknowledged:
+        conc_type, conc_ind = lit.name.split("_")
+        if conc_type == "rel": continue         # Relations are not neurally predicted
+
+        f_vec = vis_scene[lit.args[0][0]]["vis_emb"]
+        exm_pointer = ({0}, set()) if not lit.naf else (set(), {0})     # Pos & neg each
+
+        # Add new concept exemplars to memory
+        agent.lt_mem.exemplars.add_exs(
+            f_vecs={ conc_type: f_vec[None,:] },
+            pointers={ conc_type: { conc_ind: exm_pointer } }
+        )
+
+    # Replace value with None to mark as 'already processed'
+    agent.lang.dialogue.acknowledged_stms[ack_ind] = None
+
+def add_scalar_implicature(agent, pair_rules):
     """
     For concepts c1 vs. c2 recorded in pair_rules, infer implicit concept similarities
     by copying properties for c1/c2 and replacing the predicates with c2/c1, unless
@@ -392,8 +523,8 @@ def add_scalar_implicatures(agent, pair_rules):
         # the episodic memory
         mini_kb_prog, _ = mini_kb.export_reasoning_program()
         inspection_outputs = [
-            (pprog+dprog+mini_kb_prog).compile()
-            for pprog, dprog in agent.episodic_memory
+            (pr_prog+dl_prog+mini_kb_prog).compile()
+            for pr_prog, dl_prog in agent.episodic_memory
         ]
         deduc_viol_cases = [
             bjt for bjt in inspection_outputs
@@ -491,7 +622,7 @@ def _compute_scalar_implicature(c1, c2, rules, kb_snap):
     
     return scal_impls
 
-def handle_neologisms(agent, novel_concepts, dialogue_state):
+def handle_neologism(agent, novel_concepts, dialogue_state):
     """
     Identify neologisms (that the agent doesn't know which concepts they refer to)
     to be handled, attempt resolving from information available so far if possible,
@@ -540,24 +671,17 @@ def handle_neologisms(agent, novel_concepts, dialogue_state):
                 args = [
                     agent.symbolic.value_assignment[arg] for arg in rule_cons[0][2]
                 ]
-                ex_bboxes = masks_bounding_boxes(
-                    [dialogue_state["referents"]["env"][arg]["mask"] for arg in args]
-                )
 
                 if conc_type == "cls" or conc_type == "att":
-                    f_vec = agent.vision.f_vecs[args[0]]
+                    f_vec = agent.vision.scene[args[0]]["vis_emb"]
                 else:
                     assert conc_type == "rel"
                     raise NotImplementedError   # Step back for relation prediction...
-                
-                pointers_src = { 0: (0, tuple(ai for ai in range(len(args)))) }
-                pointers_exm = { conc_ind: ({0}, set()) }
 
+                # Add new concept exemplars to memory
                 agent.lt_mem.exemplars.add_exs(
-                    sources=[(np.asarray(agent.vision.last_input), ex_bboxes)],
                     f_vecs={ conc_type: f_vec[None,:] },
-                    pointers_src={ conc_type: pointers_src },
-                    pointers_exm={ conc_type: pointers_exm }
+                    pointers={ conc_type: { conc_ind: ({0}, set()) } }
                 )
 
                 # Set flag that XB is updated

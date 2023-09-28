@@ -42,7 +42,12 @@ def main(cfg):
     random.seed(cfg.seed)
 
     # Experiment tag
-    exp_tag = f"{cfg.exp1.strat_feedback}_{cfg.agent.strat_generic}_{cfg.seed}"
+    exp_tag = "_".join([
+        cfg.exp1.strat_feedback,
+        cfg.agent.strat_generic,
+        cfg.agent.strat_assent,
+        str(cfg.seed)
+    ])
 
     # Path to save result metrics
     results_path = os.path.join(cfg.paths.outputs_dir, "results")

@@ -37,7 +37,6 @@ class VisionModule:
         self.cfg = cfg
 
         self.scene = None
-        self.f_vecs = None
         self.last_input = None
         self.last_output = None
 
@@ -184,6 +183,7 @@ class VisionModule:
                 # detections
                 self.scene = {
                     f"o{i}": {
+                        "vis_emb": vis_embs[det_ind],
                         "pred_mask": masks_out[det_ind],
                         "pred_objectness": objectness_scores[det_ind],
                         "pred_classes": fs_conc_pred(vis_embs[det_ind], "cls"),
@@ -194,9 +194,6 @@ class VisionModule:
                         }
                     }
                     for i, det_ind in enumerate(topk_inds)
-                }
-                self.f_vecs = {
-                    oi: vis_embs[det_ind] for oi, det_ind in zip(self.scene, topk_inds)
                 }
 
                 for oi, obj_i in self.scene.items():
@@ -372,6 +369,7 @@ class VisionModule:
 
                     # Register new objects into the existing scene
                     self.scene[oi] = {
+                        "vis_emb": vis_emb,
                         "pred_mask": msk,
                         "pred_objectness": score,
                         "pred_classes": fs_conc_pred(vis_emb, "cls"),
@@ -417,10 +415,6 @@ class VisionModule:
 
                         self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
                         self.scene[oj]["pred_relations"][oi][0] = intersection_A / mask1_A
-
-                self.f_vecs.update({
-                    oi: vis_emb for oi, vis_emb in zip(new_objs, incr_vis_embs)
-                })
 
         if visualize:
             if lexicon is not None:

@@ -1,6 +1,5 @@
 from collections import defaultdict
 
-import cv2
 import numpy as np
 # from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
@@ -17,16 +16,12 @@ class Exemplars:
     def __init__(self, cfg):
         self.cfg = cfg
 
-        # Storage of source image patches
-        self.storage_img = []
-
         # Storage of vectors, and pointers to their source
         self.storage_vec = {
             "cls": np.array([], dtype=np.float32),
             "att": np.array([], dtype=np.float32),
             "rel": np.array([], dtype=np.float32)
         }
-        self.vec2img = { "cls": {}, "att": {}, "rel": {} }
 
         # Labelling as dict from visual concept to list of pointers to vectors
         self.exemplars_pos = {
@@ -41,13 +36,11 @@ class Exemplars:
         self.binary_classifiers = { "cls": {}, "att": {}, "rel": {} }
 
     def __repr__(self):
-        scene_desc = f"scenes={len(self.storage_img)}"
-        obj_desc = f"objects={sum([len(img['objects']) for img in self.storage_img])}"
         conc_desc = f"concepts={len(self.exemplars_pos['cls'])}" \
             f"/{len(self.exemplars_pos['att'])}" \
             f"/{len(self.exemplars_pos['rel'])}"
-        return f"Exemplars({scene_desc}, {obj_desc}, {conc_desc})"
-    
+        return f"Exemplars({conc_desc})"
+
     def __getitem__(self, item):
         conc_ind, conc_type = item
 
@@ -70,32 +63,10 @@ class Exemplars:
             for conc_ind in pos_covered | neg_covered:
                 yield (conc_ind, conc_type)
 
-    def add_exs(self, sources, f_vecs, pointers_src, pointers_exm):
-        assert len(sources) > 0
-
-        N_I = len(self.storage_img)
-
-        # Add source images and object bboxes; for storage size concern, resize into
-        # smaller resolutions (so that max(width, height) <= 80) and record original
-        # image sizes
-        scaling_factors = [
-            Exemplars.TARGET_MAX_WH / max(img.shape[:2])
-            for img, _ in sources
-        ]
-        self.storage_img += [
-            {
-                "image": cv2.resize(
-                    img, dsize=(int(img.shape[1]*sf), int(img.shape[0]*sf))
-                ),
-                "original_width": img.shape[1],
-                "original_height": img.shape[0],
-                "objects": bboxes
-            }
-            for (img, bboxes), sf in zip(sources, scaling_factors)
-        ]
+    def add_exs(self, f_vecs, pointers):
 
         for conc_type in ["cls", "att", "rel"]:
-            if conc_type in pointers_src:
+            if conc_type in pointers:
                 assert conc_type in f_vecs
                 N_C = len(self.storage_vec[conc_type])
 
@@ -104,15 +75,14 @@ class Exemplars:
                     self.storage_vec[conc_type].reshape(-1, f_vecs[conc_type].shape[-1]),
                     f_vecs[conc_type]
                 ])
-                # Mapping from vector row index to source object in image
-                for fv_id, (src_img, src_obj) in pointers_src[conc_type].items():
-                    self.vec2img[conc_type][fv_id+N_C] = (src_img+N_I, src_obj)
+
                 # Positive/negative exemplar tagging by vector row index
-                for conc_ind, (exs_pos, exs_neg) in pointers_exm[conc_type].items():
+                for conc_ind, (exs_pos, exs_neg) in pointers[conc_type].items():
                     exs_pos = {fv_id+N_C for fv_id in exs_pos}
                     exs_neg = {fv_id+N_C for fv_id in exs_neg}
                     self.exemplars_pos[conc_type][conc_ind] |= exs_pos
                     self.exemplars_neg[conc_type][conc_ind] |= exs_neg
+
                     # If we have at least one positive & negative exemplars each,
                     # (re-)train a binary classifier and store it
                     if len(self.exemplars_pos[conc_type][conc_ind]) > 0 and \

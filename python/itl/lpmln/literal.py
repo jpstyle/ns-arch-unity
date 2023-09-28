@@ -188,7 +188,7 @@ class Literal:
         """
         mapping = mapping or { "terms": {}, "functions": {} }
 
-        # Cast into sequences to assign indicies, in order to keep track of
+        # Cast into sequences to assign indices, in order to keep track of
         # entailability between components
         iter1 = tuple(iter1); iter2 = tuple(iter2)
         entailabilities = {}

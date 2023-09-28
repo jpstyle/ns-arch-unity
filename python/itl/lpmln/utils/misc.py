@@ -74,8 +74,8 @@ def flatten_cons_ante(cons, ante):
             # Positive & negative conjuncts in consequent
             # (Reminder for self: a list of conjuncts stands for negation of
             # the conjunction in current implementation)
-            cons_cjcts_p = [c for c in cons if isinstance(c, Literal)]
-            cons_cjcts_n = [c for c in cons if not isinstance(c, Literal)]
+            cons_cnjts_p = [c for c in cons if isinstance(c, Literal)]
+            cons_cnjts_n = [c for c in cons if not isinstance(c, Literal)]
 
             if any(not isinstance(a, Literal) for a in ante):
                 # Introduce auxiliary literals that are derived when each conjunction
@@ -83,14 +83,14 @@ def flatten_cons_ante(cons, ante):
                 # (Mind differences of semantics of strong vs. weak negation...)
                 raise NotImplementedError
 
-            if len(cons_cjcts_p) > 0:
+            if len(cons_cnjts_p) > 0:
                 # Positive conjuncts in consequent <= antecedent
-                flattened_new.append((cons_cjcts_p, ante))
+                flattened_new.append((cons_cnjts_p, ante))
 
-            for neg_cjct in cons_cjcts_n:
+            for neg_cnjt in cons_cnjts_n:
                 # Migrate each negated conjunction to ante, creating a new (cons, ante)
                 # pair to be processed and included
-                flattened_new.append(([], ante+neg_cjct))
+                flattened_new.append(([], ante+neg_cnjt))
 
         flattened = flattened_new
     
