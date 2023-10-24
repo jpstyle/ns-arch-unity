@@ -5,6 +5,7 @@ from itertools import product, combinations
 from collections import defaultdict
 
 import clingo
+import numpy as np
 import networkx as nx
 
 from ..literal import Literal
@@ -42,10 +43,10 @@ def compile(prog):
     if bjt is not None:
         # Run modified Shafer-Shenoy belief propagation on the constructed binary
         # join tree, filling in the output (unnormalized) belief storage registers
-        output_node_sets = [frozenset({atm}) for atm in bjt.graph["atoms_map_inv"]]
+        output_atom_subsets = [frozenset({atm}) for atm in bjt.graph["atoms_map_inv"]]
 
-        for node_set in output_node_sets:
-            _belief_propagation(bjt, node_set)
+        for atom_subset in output_atom_subsets:
+            _belief_propagation(bjt, atom_subset)
 
     return bjt
 
@@ -53,14 +54,14 @@ def compile(prog):
 def bjt_query(bjt, q_key):
     """ Query a BJT for (unnormalized) belief table """
     relevant_nodes = frozenset({abs(n) for n in q_key})
-    relevant_cliques = [n for n in bjt.nodes if relevant_nodes <= n]
+    relevant_cliques = [n for n in bjt.nodes if relevant_nodes <= n[0]]
 
     if len(relevant_cliques) > 0:
         # In-clique query; find the BJT node with the smallest node set that
         # comply with the key
-        smallest_rel_nodeset = sorted(relevant_cliques, key=len)[0]
-        _belief_propagation(bjt, smallest_rel_nodeset)
-        beliefs = bjt.nodes[smallest_rel_nodeset]["output_beliefs"]
+        smallest_node = sorted(relevant_cliques, key=lambda x: len(x[0]))[0]
+        _belief_propagation(bjt, smallest_node[0])
+        beliefs = bjt.nodes[smallest_node]["output_beliefs"]
 
         # Marginalize and return
         return _marginalize_simple(beliefs, relevant_nodes)
@@ -103,13 +104,13 @@ class _Observer:
 def _construct_BJT(prog):
     bjt = nx.DiGraph()
 
-    if _grounded_facts_only([r for r, _ in prog.rules]):
+    if _grounded_facts_only([r for r, _, _ in prog.rules]):
         # Can take simpler shortcut for constructing binary join tree if program
         # consists only of grounded facts
         bjt.graph["atoms_map"] = {}
         bjt.graph["atoms_map_inv"] = {}
 
-        for i, (rule, r_pr) in enumerate(prog.rules):
+        for i, (rule, r_pr, weighting) in enumerate(prog.rules):
             # Integer indexing should start from 1, to represent negated atoms as
             # negative ints
             i += 1
@@ -118,11 +119,13 @@ def _construct_BJT(prog):
             bjt.graph["atoms_map"][rule.head[0]] = i
             bjt.graph["atoms_map_inv"][i] = rule.head[0]
 
-            fact_input_potential = _rule_to_potential(rule, r_pr, { rule.head[0]: i })
+            fact_input_potential = _rule_to_potential(
+                rule, r_pr, weighting, { rule.head[0]: i }
+            )
 
             # Add singleton atom set node for the atom, with an appropriate input
             # potential from the rule weight
-            bjt.add_node(frozenset({i}), input_potential=fact_input_potential)
+            bjt.add_node((frozenset({i}), 0), input_potential=fact_input_potential)
 
     else:
         grounded_rules_by_atms, atoms_map, atoms_map_inv = _ground_and_index(prog)
@@ -131,69 +134,138 @@ def _construct_BJT(prog):
         bjt.graph["atoms_map"] = atoms_map
         bjt.graph["atoms_map_inv"] = atoms_map_inv
 
+        # Identifying duplicate variable subsets in multisets by indexing
+        ss_inds = defaultdict(int)
+
         if len(atoms_map) == 0 or len(grounded_rules_by_atms) == 0:
             # Happens to have no atoms and rules grounded; nothing to do here
             pass
         else:
             # Binary join tree construction (cf. Shenoy, 1997)
-            node_sets_unpr = set(atoms_map_inv)
-            node_set_sets_unpr = set(grounded_rules_by_atms)
-            node_set_sets_unpr |= {frozenset({atm}) for atm in atoms_map_inv}
 
-            while len(node_set_sets_unpr) > 1:
+            # Set of variables to be processed; Psi_u in Shenoy
+            atoms_unpr = set(atoms_map_inv)
+
+            # 'Multiset' of variables to be processed; Phi_u in Shenoy. Initialized
+            # from 1) subset of variables for which we have rules (hence potentials),
+            # and 2) subsets for which we need marginals --- all singletons in our case
+            # (Multiset implemented with dicts, with variable subsets as key and
+            # sets of indices defined per subset as values)
+            atomsets_unpr = set()
+            atomsets_unpr |= {(atms, 0) for atms in grounded_rules_by_atms}
+            atomsets_unpr |= {(frozenset({atm}), 0) for atm in atoms_map_inv}
+
+            while len(atomsets_unpr) > 1:
                 # Pick a variable with a heuristic, namely one that would lead to smallest
                 # union of relevant nodes in factors
-                node_set_unions = {
-                    n: frozenset.union(*{ns for ns in node_set_sets_unpr if n in ns})
-                    for n in node_sets_unpr
+                atomset_unions = {
+                    atm: frozenset.union(*{atms for atms, _ in atomsets_unpr if atm in atms})
+                    for atm in atoms_unpr
                 }
-                node = sorted(node_sets_unpr, key=lambda n: len(node_set_unions[n]))[0]
-                relevant_node_sets = {ns for ns in node_set_sets_unpr if node in ns}
+                # Variable picked for the loop by the heuristic; Y in Shenoy
+                picked = sorted(atoms_unpr, key=lambda atm: len(atomset_unions[atm]))[0]
 
-                while len(relevant_node_sets) > 1:
+                # Set of variable subsets; Phi_Y in Shenoy
+                atomsets_relevant = {
+                    (atms, a_i) for atms, a_i in atomsets_unpr if picked in atms
+                }
+
+                while len(atomsets_relevant) > 1:
                     # Pick a node set pair that would give smallest union
-                    node_set_pair_unions = {
-                        (ns1, ns2): ns1 | ns2
-                        for ns1, ns2 in combinations(relevant_node_sets, 2)
+                    atomset_pair_unions = {
+                        (n1, n2): n1[0] | n2[0]
+                        for n1, n2 in combinations(atomsets_relevant, 2)
                     }
-                    ns1, ns2 = sorted(
-                        node_set_pair_unions, key=lambda nsp: len(node_set_pair_unions[nsp])
-                    )[0]
-                    ns_union = ns1 | ns2
+                    n1, n2 = sorted(
+                        atomset_pair_unions,
+                        key=lambda atmsp: len(atomset_pair_unions[atmsp])
+                    )[0]                                # r_1 and r_2 in Shenoy
+                    smallest_union = n1[0] | n2[0]      # s_k in Shenoy
 
-                    # Add (possibly new) nodes and edges (both directions, for storing messages
-                    # of two opposite directions)
-                    bjt.add_node(ns1); bjt.add_node(ns2); bjt.add_node(ns_union)
-                    if ns1 != ns_union:
-                        bjt.add_edge(ns1, ns_union); bjt.add_edge(ns_union, ns1)
-                    if ns2 != ns_union:
-                        bjt.add_edge(ns2, ns_union); bjt.add_edge(ns_union, ns2)
+                    # Distinct subset (possibly duplicate with n1 or n2) with fresh index
+                    ss_inds[smallest_union] += 1
+                    nu = (smallest_union, ss_inds[smallest_union])
 
-                    # Update relevant node set set; # element reduced exactly by one
-                    relevant_node_sets -= {ns1, ns2}
-                    relevant_node_sets |= {ns_union}
+                    # Add new nodes and edges; note that the node set (`N` in Shenoy)
+                    # is a multiset as long as we don't distinguish among the possibly
+                    # duplicate variable subsets. We implement N as a set by indexing
+                    # each entry of each variable subset.
+                    bjt.add_node(n1); bjt.add_node(n2); bjt.add_node(nu)
 
-                if len(node_sets_unpr) > 1:
-                    node_set = list(relevant_node_sets)[0]
-                    node_set_compl_node = node_set - {node}
+                    # Both directions for the edges, for storing messages of two opposite
+                    # directions
+                    bjt.add_edge(n1, nu); bjt.add_edge(nu, n1)
+                    bjt.add_edge(n2, nu); bjt.add_edge(nu, n2)
 
-                    bjt.add_node(node_set)
-                    if len(node_set_compl_node) > 0:
-                        # Should process empty set only; usually (I think) empty
-                        # node_set_compl_node signals disconnected components
-                        # Add (possibly new) nodes and edges
-                        bjt.add_node(node_set_compl_node)
-                        if node_set != node_set_compl_node:
-                            bjt.add_edge(node_set, node_set_compl_node)
-                            bjt.add_edge(node_set_compl_node, node_set)
+                    # Update relevant subset set; set size reduced exactly by one
+                    atomsets_relevant -= {n1, n2}
+                    atomsets_relevant |= {nu}
 
-                        # Update node_sets_unpr and node_set_sets_unpr
-                        node_set_sets_unpr |= {node_set_compl_node}
+                if len(atoms_unpr) >= 1:
+                    # Sole subset in Phi_Y, which must be a singleton set here; r in Shenoy
+                    n = list(atomsets_relevant)[0]
+                    atms, a_i = n
+                    # s_k := r - {Y} in Shenoy
+                    atms_cmpl_picked = atms - {picked}
+                    # Note that the two subsets just assigned are different by definition,
+                    # as atms must include the picked atom and atms_cmpl_picked must not
 
-                    node_set_sets_unpr -= {ns for ns in node_set_sets_unpr if node in ns}
-                    node_sets_unpr -= {node}
-            
-            bjt.add_node(list(node_set_sets_unpr)[0])
+                    n = (atms, a_i)
+
+                    # Add corresponding nodes and edges
+                    bjt.add_node(n)
+                    if len(atms_cmpl_picked) > 0:
+                        # Should process atms_cmpl_picked only if non-empty; empty ones
+                        # usually signals isolated nodes without any neighbors
+                        ss_inds[atms_cmpl_picked] += 1
+                        nc = (atms_cmpl_picked, ss_inds[atms_cmpl_picked])
+
+                        bjt.add_node(nc)
+                        bjt.add_edge(n, nc); bjt.add_edge(nc, n)
+
+                        # Updating atomsets_unpr with a new element (marked with the
+                        # fresh index)
+                        atomsets_unpr.add(nc)
+
+                    # Updating atoms_unpr & atomsets_unpr by complement
+                    atoms_unpr -= {picked}
+                    atomsets_unpr = {
+                        (atms, a_i) for (atms, a_i) in atomsets_unpr
+                        if picked not in atms
+                    }
+
+            if len(atomsets_unpr) > 0:
+                # atomsets_unpr must be a singleton set if entered
+                assert len(atomsets_unpr) == 1
+                atms_last = list(atomsets_unpr)[0]
+                bjt.add_node((atms_last, ss_inds[atms_last]))
+
+        # Condense the compiled BJT; merge nodes sharing the same variable subset,
+        # as long as the merging wouldn't breach the binary constraint (i.e., keeps
+        # neighbor counts no larger than 3)
+        while True:
+            undirected_edges = bjt.to_undirected().edges
+            for n1, n2 in undirected_edges:
+                # Not mergeable if nodes have different var subsets
+                if n1[0] != n2[0]: continue
+                # Not mergeable if merging would result in neighbor count larger than 3
+                if (bjt.in_degree[n1]-1)+(bjt.in_degree[n2]-1) > 3: continue
+
+                # Sort to leave lower index --- just my OCD
+                n1, n2 = sorted([n1, n2])
+
+                # Merge by removing n2 and connecting n2's other neighbors to n1
+                n2_neighbors = [nb for nb, _ in bjt.in_edges(n2) if nb != n1]
+                bjt.remove_node(n2)
+                for nb in n2_neighbors:
+                    bjt.add_edge(n1, nb); bjt.add_edge(nb, n1)
+                
+                # End this loop and start anew
+                break
+
+            else:
+                # No more nodes to merge, BJT fully condensed
+                break
 
         # Associate each ground rule with an appropriate BJT node that covers all and
         # only atoms occurring in the rule, then populate the BJT node with appropriate
@@ -201,8 +273,8 @@ def _construct_BJT(prog):
         for atms, gr_rules in grounded_rules_by_atms.items():
             # Convert each rule to matching potential, and combine into single potential
             input_potentials = [
-                _rule_to_potential(gr_rule, r_pr, atoms_map)
-                for gr_rule, r_pr, _ in gr_rules
+                _rule_to_potential(gr_rule, r_pr, weighting, atoms_map)
+                for gr_rule, (r_pr, weighting), _ in gr_rules
             ]
 
             if any(inp is None for inp in input_potentials):
@@ -211,13 +283,16 @@ def _construct_BJT(prog):
 
             if len(atms) > 0:
                 inps_combined = _combine_factors_outer(input_potentials)
-                bjt.nodes[atms]["input_potential"] = inps_combined
+                target_node = [n for n in bjt.nodes if atms==n[0]][0]
+                    # There can be multiple candidates; pick one and only one
+                bjt.nodes[target_node]["input_potential"] = inps_combined
         
         # Null-potentials for BJT nodes without any input potentials
-        for atms in bjt.nodes:
-            if "input_potential" not in bjt.nodes[atms]:
+        for node in bjt.nodes:
+            if "input_potential" not in bjt.nodes[node]:
+                atms = node[0]
                 cases = {frozenset(case) for case in product(*[(ai, -ai) for ai in atms])}
-                bjt.nodes[atms]["input_potential"] = {
+                bjt.nodes[node]["input_potential"] = {
                     case: { (frozenset(), frozenset()): Polynomial(float_val=1.0) }
                     for case in cases
                 }
@@ -270,7 +345,7 @@ def _ground_and_index(prog):
     #   2) Index the grounded rule by occurring atoms, positive or negative
     grounded_rules_by_atms = defaultdict(set)
 
-    for ri, (rule, r_pr) in enumerate(prog.rules):
+    for ri, (rule, r_pr, weighting) in enumerate(prog.rules):
         # All possible grounded rules that may originate from this rule
         gr_head_insts = [instantiable_atoms[hl.as_atom()] for hl in rule.head]
         gr_head_insts = [
@@ -330,12 +405,12 @@ def _ground_and_index(prog):
             occurring_atoms = frozenset([
                 atoms_map[lit.as_atom()] for lit in gr_rule.head+gr_rule.body
             ])
-            grounded_rules_by_atms[occurring_atoms].add((gr_rule, r_pr, ri))
+            grounded_rules_by_atms[occurring_atoms].add((gr_rule, (r_pr, weighting), ri))
 
     return grounded_rules_by_atms, atoms_map, atoms_map_inv
 
 
-def _rule_to_potential(rule, r_pr, atoms_map):
+def _rule_to_potential(rule, r_pr, weighting, atoms_map):
     """
     Subroutine for converting a (grounded) rule weighted with probability r_pr into
     an appropriate input potential
@@ -383,7 +458,13 @@ def _rule_to_potential(rule, r_pr, atoms_map):
     }
 
     if r_pr is not None:
-        r_pr_logit = logit(r_pr[0], large="a")
+        # Convert probability to logit/log-weight, depending on weighting scheme
+        if weighting == "logit":
+            r_weight = logit(r_pr[0], large="a")
+        else:
+            assert weighting == "log"
+            r_weight = float(np.log(r_pr[0])) if r_pr[0] > 0 else "-a"
+
         potential = {
             # Singleton dict (with pos_non_req as key) as value
             frozenset(case): {
@@ -391,7 +472,7 @@ def _rule_to_potential(rule, r_pr, atoms_map):
                 # when body is true but head is not)
                 pos_clearances[case]:  Polynomial(float_val=1.0)
                     if (rb_by_ind <= case) and (len(rh_by_ind)==0 or not rh_by_ind <= case)
-                    else Polynomial.from_primitive(r_pr_logit)
+                    else Polynomial.from_primitive(r_weight)
             }
             for case in cases
         }
@@ -409,26 +490,26 @@ def _rule_to_potential(rule, r_pr, atoms_map):
     return potential
 
 
-def _belief_propagation(bjt, node_set):
+def _belief_propagation(bjt, atom_subset):
     """
     (Modified) Shafer-Shenoy belief propagation on binary join trees, whose input
     potential storage registers are properly filled in. Populate output belief storage
     registers as demanded by node_set.
     """
-    # Corresponding node in BJT
-    bjt_node = bjt.nodes[node_set]
+    # Corresponding node in BJT; there can be multiple, pick any
+    bjt_node = [n for n in bjt.nodes if atom_subset==n[0]][0]
 
     # Fetch input potentials for the BJT node
-    input_potential = bjt_node["input_potential"]
+    input_potential = bjt.nodes[bjt_node]["input_potential"]
 
     # Fetch incoming messages for the BJT node, if any
     incoming_messages = []
-    for from_node_set, _, msg in bjt.in_edges(node_set, data="message"):
+    for from_node, _, msg in bjt.in_edges(bjt_node, data="message"):
         if msg is None:
             # If message not computed already, compute it (once and for all)
             # and store it in the directed edge's storage register
-            _compute_message(bjt, from_node_set, node_set)
-            msg = bjt.edges[(from_node_set, node_set)]["message"]
+            _compute_message(bjt, from_node, bjt_node)
+            msg = bjt.edges[(from_node, bjt_node)]["message"]
 
         incoming_messages.append(msg)
 
@@ -447,7 +528,7 @@ def _belief_propagation(bjt, node_set):
         inps_msgs_combined = input_potential
 
     # (Partial) marginalization down to domain for the node set for this BJT node
-    output_beliefs = _marginalize_outer(inps_msgs_combined, node_set)
+    output_beliefs = _marginalize_outer(inps_msgs_combined, bjt_node[0])
 
     # Weed out any subcases that still have lingering positive atom requirements
     # (i.e. non-complete positive clearances), then fully marginalize per case
@@ -463,29 +544,29 @@ def _belief_propagation(bjt, node_set):
     }
 
     # Populate the output belief storage register for the BJT node
-    bjt.nodes[node_set]["output_beliefs"] = output_beliefs
+    bjt.nodes[bjt_node]["output_beliefs"] = output_beliefs
 
 
-def _compute_message(bjt, from_node_set, to_node_set):
+def _compute_message(bjt, from_node, to_node):
     """
     Recursive subroutine called during belief propagation for computing outgoing
     message from one BJT node to another; populates the corresponding directed edge's
     message storage register
     """
     # Fetch input potentials for the BJT node
-    input_potential = bjt.nodes[from_node_set]["input_potential"]
+    input_potential = bjt.nodes[from_node]["input_potential"]
 
     # Fetch incoming messages for the BJT node from the neighbors, except the
     # message recipient
     incoming_messages = []
-    for neighbor_node_set, _, msg in bjt.in_edges(from_node_set, data="message"):
-        if neighbor_node_set == to_node_set: continue    # Disregard to_node_set
+    for neighbor_node, _, msg in bjt.in_edges(from_node, data="message"):
+        if neighbor_node == to_node: continue    # Disregard to_node
 
         if msg is None:
             # If message not computed already, compute it (once and for all)
             # and store it in the directed edge's storage register
-            _compute_message(bjt, neighbor_node_set, from_node_set)
-            msg = bjt.edges[(neighbor_node_set, from_node_set)]["message"]
+            _compute_message(bjt, neighbor_node, from_node)
+            msg = bjt.edges[(neighbor_node, from_node)]["message"]
 
         incoming_messages.append(msg)
     
@@ -502,10 +583,10 @@ def _compute_message(bjt, from_node_set, to_node_set):
     else:
         inps_msgs_combined = input_potential
 
-    # (Partial) Marginalization down to domain for the intersection of from_node_set
-    # and to_node_set
-    common_nodes = from_node_set & to_node_set
-    outgoing_msg = _marginalize_outer(inps_msgs_combined, common_nodes)
+    # (Partial) Marginalization down to domain for the intersection of from_node
+    # and to_node
+    common_atoms = from_node[0] & to_node[0]
+    outgoing_msg = _marginalize_outer(inps_msgs_combined, common_atoms)
 
     # Dismissable nodes; if some nodes occur in the message sender but not in the
     # message recipient, such nodes will never appear again at any point of the
@@ -514,7 +595,7 @@ def _compute_message(bjt, from_node_set, to_node_set):
     # we can now stop caring about clearances of such dismissable nodes, and if
     # needed, safely eliminating subcases that still have lingering uncleared
     # requirements of dismissable nodes.
-    dismissables = from_node_set - to_node_set
+    dismissables = from_node[0] - to_node[0]
     if len(dismissables) > 0:
         outgoing_msg = {
             case: {
@@ -526,7 +607,7 @@ def _compute_message(bjt, from_node_set, to_node_set):
         }
 
     # Populate the outgoing message storage register for the BJT edge
-    bjt.edges[(from_node_set, to_node_set)]["message"] = outgoing_msg
+    bjt.edges[(from_node, to_node)]["message"] = outgoing_msg
 
 
 def _combine_factors_outer(factors):
@@ -615,19 +696,19 @@ def _combine_factors_simple(factors):
     return combined_factor
 
 
-def _marginalize_outer(factor, node_set):
+def _marginalize_outer(factor, atom_subset):
     """
     Subroutine for (partially) marginalizing a factor at the outer-layer (while
     maintaining subdivision by positive requirement clearance) down to some domain
-    specified by node_set
+    specified by atom_subset
     """
     marginalized_factor = defaultdict(
         lambda: defaultdict(lambda: Polynomial(float_val=0.0))
     )
-    node_set_pn = frozenset(sum([(n, -n) for n in node_set], ()))
+    atomset_pn = frozenset(sum([(atm, -atm) for atm in atom_subset], ()))
 
     for f_case, f_inner in factor.items():
-        matching_case = node_set_pn & f_case
+        matching_case = atomset_pn & f_case
 
         for pos_clrs, val in f_inner.items():
             marginalized_factor[matching_case][pos_clrs] += val
@@ -640,17 +721,17 @@ def _marginalize_outer(factor, node_set):
     return marginalized_factor
 
 
-def _marginalize_simple(factor, node_set):
+def _marginalize_simple(factor, atom_subset):
     """
     Subroutine for simple marginalization of factor without layers (likely those
     stored in 'output_beliefs' register for a BJT node) down to some domain specified
-    by node_set
+    by atom_subset
     """
     marginalized_factor = defaultdict(lambda: Polynomial(float_val=0.0))
-    node_set_pn = frozenset(sum([(n, -n) for n in node_set], ()))
+    atomset_pn = frozenset(sum([(atm, -atm) for atm in atom_subset], ()))
 
     for f_case, f_val in factor.items():
-        matching_case = node_set_pn & f_case
+        matching_case = atomset_pn & f_case
         marginalized_factor[matching_case] += f_val
 
     return dict(marginalized_factor)

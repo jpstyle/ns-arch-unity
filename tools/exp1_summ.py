@@ -61,8 +61,8 @@ def main(cfg):
         for data in dir_contents:
             name_parse = data.split(".")[0].split("_")
             data_type = name_parse[0]
-            strat_fb, strat_gn = name_parse[1], name_parse[2]
-            seed = name_parse[3]
+            strat_fb, strat_gn, strat_as = name_parse[1], name_parse[2], name_parse[3]
+            seed = name_parse[4]
 
             all_seeds.add(seed)
 
@@ -77,15 +77,16 @@ def main(cfg):
                     curve = np.array([[int(ep_num), int(regret)] for ep_num, regret in reader])
 
                     # Aggregate cumulative regret curve data
-                    if (strat_fb, strat_gn) in results_cumulReg:
-                        stats_agg = results_cumulReg[(strat_fb, strat_gn)]
+                    strat_combi = (strat_fb, strat_gn, strat_as)
+                    if strat_combi in results_cumulReg:
+                        stats_agg = results_cumulReg[strat_combi]
                         for ep_num, regret in curve:
                             if ep_num in stats_agg:
                                 stats_agg[ep_num].append(regret)
                             else:
                                 stats_agg[ep_num] = [regret]
                     else:
-                        results_cumulReg[(strat_fb, strat_gn)] = {
+                        results_cumulReg[strat_combi] = {
                             ep_num: [regret] for ep_num, regret in curve
                         }
 
@@ -119,12 +120,13 @@ def main(cfg):
                     ) / len(confusion_matrix)           # Mean accuracy across ground truths
 
                     # Aggregate learning curve data
-                    results_learningCurve[(strat_fb, strat_gn)][num_exs].append(accuracy)
+                    strat_combi = (strat_fb, strat_gn, strat_as)
+                    results_learningCurve[strat_combi][num_exs].append(accuracy)
 
                     # Aggregate confusion matrix data
                     for gt_conc, answers in confusion_matrix.items():
                         for ans_conc, ratio in answers.items():
-                            matrix_slot = results_confMat[(strat_fb, strat_gn)][gt_conc][ans_conc]
+                            matrix_slot = results_confMat[strat_combi][gt_conc][ans_conc]
                             matrix_slot[num_exs].append(ratio)
 
             else:
@@ -132,30 +134,67 @@ def main(cfg):
 
     # Pre-defined ordering for listing legends
     config_ord = [
-        "semOnly_minHelp", "semOnly_medHelp", "semOnly_maxHelp",
-        "semNeg_maxHelp",
-        "semNegScal_maxHelp"
+        "semOnly_minHelp_doNotLearn", "semOnly_minHelp_alwaysLearn",
+        "semOnly_medHelp_doNotLearn", "semOnly_medHelp_alwaysLearn",
+        "semOnly_maxHelp_doNotLearn", "semOnly_maxHelp_alwaysLearn",
+        "semNeg_maxHelp_doNotLearn", "semNeg_maxHelp_alwaysLearn",
+        "semNegScal_maxHelp_doNotLearn", "semNegScal_maxHelp_alwaysLearn",
     ]
     config_aliases = {
-        "semOnly_minHelp": "minHelp",
-        "semOnly_medHelp": "medHelp",
-        "semOnly_maxHelp": "maxHelp_semOnly",
-        "semNeg_maxHelp": "maxHelp_semNeg",
-        "semNegScal_maxHelp": "maxHelp_semNegScal"
+        "semOnly_minHelp_doNotLearn": "minHelp_doNotLearn",
+        "semOnly_minHelp_alwaysLearn": "minHelp_alwaysLearn",
+
+        "semOnly_medHelp_doNotLearn": "medHelp_doNotLearn",
+        "semOnly_medHelp_alwaysLearn": "medHelp_alwaysLearn",
+
+        "semOnly_maxHelp_doNotLearn": "maxHelp_semOnly_doNotLearn",
+        "semOnly_maxHelp_alwaysLearn": "maxHelp_semOnly_alwaysLearn",
+
+        "semNeg_maxHelp_doNotLearn": "maxHelp_semNeg_doNotLearn",
+        "semNeg_maxHelp_alwaysLearn": "maxHelp_semNeg_alwaysLearn",
+        
+        "semNegScal_maxHelp_doNotLearn": "maxHelp_semNegScal_doNotLearn",
+        "semNegScal_maxHelp_alwaysLearn": "maxHelp_semNegScal_alwaysLearn",
     }   # To be actually displayed in legend
     config_colors = {
-        "semOnly_minHelp": "tab:red",
-        "semOnly_medHelp": "tab:orange",
-        "semOnly_maxHelp": "tab:green",
-        "semNeg_maxHelp": "tab:blue",
-        "semNegScal_maxHelp": "tab:purple"
+        "semOnly_minHelp_doNotLearn": "tab:red",
+        "semOnly_minHelp_alwaysLearn": "tab:red",
+
+        "semOnly_medHelp_doNotLearn": "tab:orange",
+        "semOnly_medHelp_alwaysLearn": "tab:orange",
+
+        "semOnly_maxHelp_doNotLearn": "tab:green",
+        "semOnly_maxHelp_alwaysLearn": "tab:green",
+
+        "semNeg_maxHelp_doNotLearn": "tab:blue",
+        "semNeg_maxHelp_alwaysLearn": "tab:blue",
+
+        "semNegScal_maxHelp_doNotLearn": "tab:purple",
+        "semNegScal_maxHelp_alwaysLearn": "tab:purple",
+    }
+    config_lineStyles = {
+        "semOnly_minHelp_doNotLearn": "--",
+        "semOnly_minHelp_alwaysLearn": "-",
+
+        "semOnly_medHelp_doNotLearn": "--",
+        "semOnly_medHelp_alwaysLearn": "-",
+
+        "semOnly_maxHelp_doNotLearn": "--",
+        "semOnly_maxHelp_alwaysLearn": "-",
+
+        "semNeg_maxHelp_doNotLearn": "--",
+        "semNeg_maxHelp_alwaysLearn": "-",
+
+        "semNegScal_maxHelp_doNotLearn": "--",
+        "semNegScal_maxHelp_alwaysLearn": "-",
     }
 
     # Aggregate and visualize: cumulative regret curve
-    _, ax = plt.subplots()
+    _, ax = plt.subplots(figsize=(8, 6), dpi=80)
     ymax = 0
 
-    for (strat_fb, strat_gn), data in results_cumulReg.items():
+    for (strat_fb, strat_gn, strat_as), data in results_cumulReg.items():
+        if strat_fb == "minHelp": continue
         stats = [
             (i, np.mean(rgs), 1.96 * np.std(rgs)/np.sqrt(len(rgs)))
             for i, rgs in data.items()
@@ -166,21 +205,22 @@ def main(cfg):
         ax.plot(
             [i+1 for i, _, _ in stats],
             [mrg for _, mrg, _ in stats],
-            label=f"{strat_gn}_{strat_fb}",
-            color=config_colors[f"{strat_gn}_{strat_fb}"]
+            label=f"{strat_gn}_{strat_fb}_{strat_as}",
+            color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
+            linestyle=config_lineStyles[f"{strat_gn}_{strat_fb}_{strat_as}"]
         )
         # Plot confidence intervals
         ax.fill_between(
             [i+1 for i, _, _ in stats],
             [mrg-cl for _, mrg, cl in stats],
             [mrg+cl for _, mrg, cl in stats],
-            color=config_colors[f"{strat_gn}_{strat_fb}"], alpha=0.2
+            color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
         )
 
     # Plot curve
     ax.set_xlabel("# training episodes")
     ax.set_ylabel("cumulative regret")
-    ax.set_ylim(0, ymax * 1.2)
+    ax.set_ylim(0, ymax * 1.1)
     ax.grid()
 
     # Ordering legends according to the prespecified ordering above
@@ -197,9 +237,9 @@ def main(cfg):
     plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulReg.png"))
 
     # Aggregate and visualize: learning curve
-    _, ax = plt.subplots()
+    _, ax = plt.subplots(figsize=(8, 6), dpi=80)
 
-    for (strat_fb, strat_gn), data in results_learningCurve.items():
+    for (strat_fb, strat_gn, strat_as), data in results_learningCurve.items():
         data = sorted([entry for entry in data.items()], key=lambda x: x[0])
         stats = [
             (num_exs, np.mean(accs), 1.96 * np.std(accs)/np.sqrt(len(accs)))
@@ -210,19 +250,20 @@ def main(cfg):
         ax.plot(
             [num_exs for num_exs, _, _ in stats],
             [mmAP for _, mmAP, _ in stats],
-            label=f"{strat_gn}_{strat_fb}",
-            color=config_colors[f"{strat_gn}_{strat_fb}"]
+            label=f"{strat_gn}_{strat_fb}_{strat_as}",
+            color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
+            linestyle=config_lineStyles[f"{strat_gn}_{strat_fb}_{strat_as}"]
         )
         ax.plot(
             [0, stats[0][0]], [0, stats[0][1]],
-            color=config_colors[f"{strat_gn}_{strat_fb}"], linestyle="dashed"
+            color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], linestyle="dashed"
         )
         # Plot confidence intervals
         ax.fill_between(
             [0]+[num_exs for num_exs, _, _ in stats],
             [0]+[mmAP-cl for _, mmAP, cl in stats],
             [0]+[mmAP+cl for _, mmAP, cl in stats],
-            color=config_colors[f"{strat_gn}_{strat_fb}"], alpha=0.2
+            color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
         )
 
     # Plot curve
@@ -250,7 +291,7 @@ def main(cfg):
     gs = fig.add_gridspec(len(all_concs), len(all_concs), hspace=0, wspace=0)
     axs = gs.subplots(sharex='col', sharey='row')
 
-    for (strat_fb, strat_gn), data in results_confMat.items():
+    for (strat_fb, strat_gn, strat_as), data in results_confMat.items():
         # Draw a confusion matrix, with curve plots as matrix entries (instead of single
         # numbers at the last)
         for gt_conc, per_gt_conc in data.items():
@@ -279,19 +320,20 @@ def main(cfg):
                 ax.plot(
                     [num_exs for num_exs, _, _ in stats],
                     [mmAP for _, mmAP, _ in stats],
-                    label=f"{strat_gn}_{strat_fb}",
-                    color=config_colors[f"{strat_gn}_{strat_fb}"]
+                    label=f"{strat_gn}_{strat_fb}_{strat_as}",
+                    color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
+                    linestyle=config_lineStyles[f"{strat_gn}_{strat_fb}_{strat_as}"]
                 )
                 ax.plot(
                     [0, stats[0][0]], [0, stats[0][1]],
-                    color=config_colors[f"{strat_gn}_{strat_fb}"], linestyle="dashed"
+                    color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], linestyle="dashed"
                 )
                 # Plot confidence intervals
                 ax.fill_between(
                     [0]+[num_exs for num_exs, _, _ in stats],
                     [0]+[mmAP-cl for _, mmAP, cl in stats],
                     [0]+[mmAP+cl for _, mmAP, cl in stats],
-                    color=config_colors[f"{strat_gn}_{strat_fb}"], alpha=0.2
+                    color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
                 )
 
     for ax in fig.get_axes():

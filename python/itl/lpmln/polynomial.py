@@ -5,8 +5,6 @@ unnormalized probability masses, where exp("a") is considered to be variable
 limit).
 """
 import re
-from itertools import product
-from collections import defaultdict
 
 import numpy as np
 

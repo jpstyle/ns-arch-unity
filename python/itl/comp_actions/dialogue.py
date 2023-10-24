@@ -6,8 +6,6 @@ import random
 from functools import reduce
 from collections import defaultdict
 
-import numpy as np
-
 from ..lpmln import Literal
 from ..lpmln.utils import flatten_cons_ante
 

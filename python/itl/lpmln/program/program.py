@@ -6,15 +6,9 @@ from collections import defaultdict
 from .compile import compile
 from .optimize import optimize
 from .split import split_program
-from .reduce import reduce_program
 from ..literal import Literal
 from ..rule import Rule
-from ..utils import logit
 
-
-LARGE = 2e1           # Sufficiently large logit to use in place of, say, float('inf')
-SCALE_PREC = 3e2      # For preserving some float weight precision
-TOPK_RATIO = 0.75     # Percentage of answer sets to cover, by probability mass
 
 class Program:
     """ Probabilistic ASP program, implemented as a list of weighted ASP rules. """
@@ -36,20 +30,20 @@ class Program:
         prog_s = ""
 
         weight_strs = []; max_ws_len = 0
-        for _, r_pr in self.rules:
+        for _, r_pr, weighting in self.rules:
             if r_pr is None:
                 weight_strs.append("A")
             else:
                 if len(r_pr) == 1:
-                    r_pr_str = f"logit({r_pr[0]:.3f})"
+                    r_pr_str = f"{weighting}({r_pr[0]:.3f})"
                 else:
-                    r_pr_str = ",".join([f"logit({p:.3f})" for p in r_pr])
+                    r_pr_str = ",".join([f"{weighting}({p:.3f})" for p in r_pr])
                     r_pr_str = f"[{r_pr_str}]"
                 weight_strs.append(r_pr_str)
             
             max_ws_len = max(len(weight_strs[-1]), max_ws_len)
 
-        for (rule, _), ws in zip(self.rules, weight_strs):
+        for (rule, _, _), ws in zip(self.rules, weight_strs):
             ws = ws + (" " * (max_ws_len-len(ws)))
             prog_s += f"{ws} ::   {str(rule)}\n"
 
@@ -66,14 +60,20 @@ class Program:
     def __iadd__(self, other):
         return self + other
     
-    def add_rule(self, rule, r_pr=None):
+    def add_rule(self, rule, r_pr=None, weighting="logit"):
         """
-        Probability value of 0 or 1 indicates hard-weighted rules. If r_pr is not provided,
-        assume value(s) of 0.5 (effectively giving zero weights)
+        Probability value of 0 or 1 indicates hard-weighted rules. Can specify
+        whether to use logit or log of the provided probability value for rule
+        weight: default logit. If r_pr is not provided where rule is logit-weighted,
+        assume value(s) of 0.5 (effectively giving zero weights). Equivalently,
+        assume value(s) of 1 if log-weighted.
         """
+        assert weighting=="logit" or weighting=="log"
+
         if len(rule.head) > 0:
             if r_pr is None:
-                r_pr = [0.5] * len(rule.head)
+                zero_val = 0.5 if weighting=="logit" else 1.0
+                r_pr = [zero_val] * len(rule.head)
             if type(r_pr) != list:
                 r_pr = [r_pr] * len(rule.head)
         else:
@@ -84,7 +84,7 @@ class Program:
         for p in r_pr:
             assert 0 <= p <= 1, "Must provide valid probability value to compute rule weight"
 
-        self.rules.append((rule, r_pr))
+        self.rules.append((rule, r_pr, weighting))
 
         for hl in rule.head:
             self._rules_by_atom[hl.as_atom()].add(len(self.rules)-1)
@@ -97,7 +97,7 @@ class Program:
         goodness, these are rather 'definitional' rules such that there's really
         no point in suspecting them they might not hold after all
         """
-        self.rules.append((rule, None))
+        self.rules.append((rule, None, None))
 
         for hl in rule.head:
             self._rules_by_atom[hl.as_atom()].add(len(self.rules)-1)
@@ -122,10 +122,6 @@ class Program:
         Statements that come earlier in the list will have higher priority.
         """
         return optimize(self, statements)
-        
-    def reduce(self, atoms):
-        """ Return the program obtained by reducing self with given values of atoms """
-        return reduce_program(self, atoms)
 
     @staticmethod
     def split(comp, atoms_map, grounded_rules_rel):
@@ -137,66 +133,39 @@ class Program:
         """
         return split_program(comp, atoms_map, grounded_rules_rel)
 
-    def _pure_ASP_str(self, unsats=False):
+    def _pure_ASP_str(self):
         """
         Return string compilation into to pure ASP program string understandable by
-        clingo.
-
-        Feeding unsats=True adds 'unsat' atoms, which enables tracking of model weight
-        sums as well as violated choice rules.
-        
-        Feeding unsats=False is primarily for the purpose of computing dependency
-        graph of the grounded program, or for preparing vanilla ASP program (i.e. not
-        a LP^MLN program) not related to any type of probabilistic inference.
+        clingo. Primarily purpose is to ground the program to obtain a mapping between
+        grounded atoms <=> integer indices, or for preparing vanilla ASP program (i.e.
+        not a LP^MLN program) not related to any type of probabilistic inference.
         """
         as_str = ""
 
-        for ri, (rule, r_pr) in enumerate(self.rules):
+        for ri, (rule, r_pr, _) in enumerate(self.rules):
             if r_pr is None:
                 # No point in casting these 'absolute' rules as choice rules,
                 # simply add them as rule string as it stands
                 as_str += str(rule) + "\n"
                 continue
 
-            if unsats:
-                if len(rule.head) <= 1:
-                    if len(rule.head) == 1:
-                        # Add original rule as choice rule, as possibly deriving
-                        # rule head when body holds
-                        as_str += rule.str_as_choice() + "\n"
-
-                    # Add rule that derives unsat atom with appropriate rule weight
-                    # whenever rule body holds but none of rule head holds
-                    weight = logit(r_pr[0], large="a")
-                    if type(weight)!=str:
-                        weight = int(weight * SCALE_PREC)
-
-                    unsat_args = [(ri, False), (weight, False)]
-                    unsat_rule = Rule(
-                        head=Literal("unsat", unsat_args),
-                        body=rule.body+[hl.flip() for hl in rule.head]
-                    )
-                    as_str += str(unsat_rule) + "\n"
-                else:
-                    raise NotImplementedError
-            else:
-                if len(rule.head) <= 1:
-                    if len(rule.head) == 1:
-                        as_str += rule.str_as_choice() + "\n"
-                    else:
-                        # Even when unsats=False, should add a modified rule with
-                        # an auxiliary atom as head when body contains more than
-                        # one literal, so that body literals are connected in the
-                        # dependency graph
-                        if len(rule.body) > 1:
-                            aux_args = [(ri, False)]
-                            aux_rule = Rule(
-                                head=Literal("unsat", aux_args),
-                                body=rule.body
-                            )
-                            as_str += str(aux_rule) + "\n"
-                else:
-                    # Choice rules with multiple head literals
+            if len(rule.head) <= 1:
+                if len(rule.head) == 1:
                     as_str += rule.str_as_choice() + "\n"
+                else:
+                    # Even when unsats=False, should add a modified rule with
+                    # an auxiliary atom as head when body contains more than
+                    # one literal, so that body literals are connected in the
+                    # dependency graph
+                    if len(rule.body) > 1:
+                        aux_args = [(ri, False)]
+                        aux_rule = Rule(
+                            head=Literal("unsat", aux_args),
+                            body=rule.body
+                        )
+                        as_str += str(aux_rule) + "\n"
+            else:
+                # Choice rules with multiple head literals
+                as_str += rule.str_as_choice() + "\n"
 
         return as_str
