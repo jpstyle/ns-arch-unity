@@ -1,11 +1,16 @@
 import re
 from collections import defaultdict
 
+import numpy as np
+
 from ..lpmln import Literal, Rule, Program
 from ..lpmln.utils import wrap_args, flatten_cons_ante
 
 
-P_C = 0.01          # Catchall hypothesis probability
+P_C = 0.00              # Default catchall hypothesis probability
+SCORE_THRES = 0.35      # Only consider recognised categories with category score higher
+                        # than this value, unless focused attention warranted by KB
+LOWER_THRES = 0.15      # Lower threshold for predicates that deserve closer look
 
 class KnowledgeBase:
     """
@@ -224,34 +229,23 @@ class KnowledgeBase:
 
     def export_reasoning_program(self):
         """
-        Returns an ASP program that implements deductive & abductive reasonings by
-        virtue of the listed entries
+        Returns an LP^MLN program fragment that implements deductive & abductive
+        reasonings by virtue of the listed entries
         """
-        inference_prog = Program()
+        kb_prog = Program()
 
         # Add rules implementing deductive inference
         entries_by_cons, intermediate_outputs = \
-            self._add_deductive_inference_rules(inference_prog)
+            self._add_deductive_inference_rules(kb_prog)
 
         # Add rules implementing abductive inference
         self._add_abductive_inference_rules(
-            inference_prog, entries_by_cons, intermediate_outputs
+            kb_prog, entries_by_cons, intermediate_outputs
         )
 
-        # Set of predicates that warrant consideration as possibility even with score
-        # below the threshold because they're mentioned in KB
-        preds_in_kb = set(self.entries_by_pred)
-        preds_in_kb = {
-            conc_type: {
-                int(name.strip(f"{conc_type}_")) for name in preds_in_kb
-                if name.startswith(conc_type)
-            }
-            for conc_type in ["cls", "att", "rel"]
-        }
+        return kb_prog
 
-        return inference_prog, preds_in_kb
-
-    def _add_deductive_inference_rules(self, inference_prog):
+    def _add_deductive_inference_rules(self, kb_prog):
         """
         As self.export_reasoning_program() was getting too long, refactored code for
         deductive inference program synthesis from KB
@@ -345,10 +339,10 @@ class KnowledgeBase:
 
                 if len(c_sat_conds_pure+c_fn_assign) > 0:
                     # Skip cons-less rules
-                    inference_prog.add_absolute_rule(
+                    kb_prog.add_absolute_rule(
                         Rule(head=c_sat_lit, body=c_sat_conds_pure+c_fn_assign)
                     )
-                inference_prog.add_absolute_rule(
+                kb_prog.add_absolute_rule(
                     Rule(head=a_sat_lit, body=a_sat_conds_pure+a_fn_assign)
                 )
 
@@ -371,7 +365,7 @@ class KnowledgeBase:
 
                         # Filter relevant conditions for filtering options worth considering
                         rel_conds = [cl for cl in sat_conds if ft_lifted in cl.args]
-                        inference_prog.add_absolute_rule(
+                        kb_prog.add_absolute_rule(
                             Rule(
                                 head=Literal(
                                     f"assign_{ft[0][0]}", wrap_args(*ft[0][1])+[ft_lifted]
@@ -384,14 +378,14 @@ class KnowledgeBase:
 
                 # Rule violation flag
                 r_unsat_lit = Literal(f"deduc_viol_{i}_{j}", wrap_args(*a_var_signature))
-                inference_prog.add_absolute_rule(Rule(
+                kb_prog.add_absolute_rule(Rule(
                     head=r_unsat_lit,
                     body=[a_sat_lit] + ([c_sat_lit.flip()] if len(cons) > 0 else [])
                 ))
                 
                 # Add appropriately weighted rule for applying 'probabilistic pressure'
                 # against deductive rule violation
-                inference_prog.add_rule(Rule(body=r_unsat_lit), weight)
+                kb_prog.add_rule(Rule(body=r_unsat_lit), weight)
 
                 # Store intermediate outputs for later reuse
                 intermediate_outputs.append((
@@ -401,7 +395,7 @@ class KnowledgeBase:
         return entries_by_cons, intermediate_outputs
 
     def _add_abductive_inference_rules(
-        self, inference_prog, entries_by_cons, intermediate_outputs
+        self, kb_prog, entries_by_cons, intermediate_outputs
     ):
         """
         As self.export_reasoning_program() was getting too long, refactored code for
@@ -437,7 +431,7 @@ class KnowledgeBase:
 
             for s_out in standardized_outputs:
                 # coll_c_sat_lit holds when any (and all) of the cons hold
-                inference_prog.add_absolute_rule(
+                kb_prog.add_absolute_rule(
                     Rule(head=coll_c_sat_lit, body=s_out[0])
                 )
 
@@ -450,14 +444,109 @@ class KnowledgeBase:
             # r_catchall_lit holds when coll_c_sat_lit holds but none of the
             # explanantia (bodies) hold
             unexpl_lits = [s_out[1].flip() for s_out in standardized_outputs]
-            inference_prog.add_absolute_rule(Rule(
+            kb_prog.add_absolute_rule(Rule(
                 head=coll_c_catchall_lit, body=[coll_c_sat_lit]+unexpl_lits
             ))
 
             # Add appropriately weighted rule for applying 'probabilistic pressure'
             # against resorting to catchall hypothesis due to absence of abductive
             # explanation of cons
-            inference_prog.add_rule(Rule(body=coll_c_catchall_lit), 1-P_C)
+            kb_prog.add_rule(Rule(body=coll_c_catchall_lit), 1-P_C)
+
+    def visual_evidence_from_scene(self, scene):
+        """
+        Returns an LP^MLN program fragment that implements introduction of 'virtual
+        evidence' (a la Pearl's terminology) that modulates likelihoods of grounded
+        facts by virtue of visual observations, contained in provided visual scene.
+        The fragment also opens possibilities of such facts holding by virtue of
+        choice rule heads, including predicates not mentioned in the KB if they have
+        high enough likelihoods.
+        """
+        ev_prog = Program()
+
+        # Set of predicates that warrant consideration as possibility even with score
+        # below the threshold because they're mentioned in KB
+        preds_in_kb = {
+            pred for pred, eis in self.entries_by_pred.items()
+            if any(
+                any(
+                    isinstance(cnjt, Literal) and cnjt.name==pred
+                    for cnjt in self.entries[ei][0][0]
+                )
+                for ei in eis
+            )
+            # I.e., those derivable as being a positive literal in a rule consequent
+        }
+        preds_in_kb = {
+            conc_type: {
+                int(name.strip(f"{conc_type}_")) for name in preds_in_kb
+                if name.startswith(conc_type)
+            }
+            for conc_type in ["cls", "att", "rel"]
+        }
+
+        # Helper method for adding rules that implement the choices and evidence
+        # likelihoods
+        def add_evidence(pred, args, likelihood):
+            grounded_fact = Literal(pred, args)
+            grounded_fact_neg = Literal(pred, args, naf=True)
+            grounded_evidence = Literal(f"v_{pred}", args)
+            grounded_evidence_neg = Literal(f"v_{pred}", args, naf=True)
+
+            # Opening possibilities of grounded fact and visual evidence
+            ev_prog.add_rule(Rule(head=grounded_fact))
+            ev_prog.add_rule(Rule(head=grounded_evidence))
+
+            # Rule pairs penalizing cases with/without grounded facts, given evidence
+            ev_prog.add_rule(
+                Rule(body=[grounded_fact, grounded_evidence]),
+                1 - likelihood, weighting="log"
+            )       # Assigns weight by log(1-likelihood) to case where fact doesn't hold
+            ev_prog.add_rule(
+                Rule(body=[grounded_fact_neg, grounded_evidence]),
+                1 - (1 - likelihood), weighting="log"
+            )       # Assigns weight by log(likelihood) to case where fact does hold
+
+            # Denying possibility of NOT observing the visual evidence
+            ev_prog.add_absolute_rule(Rule(body=[grounded_evidence_neg]))
+
+        # Introducing virtual evidence with specified likelihood ratios, along with
+        # body-less choice rules for enabling possibilities
+        for oi, obj in scene.items():
+            # Object classes
+            if "pred_classes" in obj:
+                classes = set(np.where(obj["pred_classes"] > SCORE_THRES)[0])
+                classes |= preds_in_kb["cls"] & \
+                    set(np.where(obj["pred_classes"] > LOWER_THRES)[0])
+                for c in classes:
+                    pred = f"cls_{c}"; args = [(oi, False)]
+                    likelihood = float(obj["pred_classes"][c])
+                    add_evidence(pred, args, likelihood)
+
+            # Object attributes
+            if "pred_attributes" in obj:
+                attributes = set(np.where(obj["pred_attributes"] > SCORE_THRES)[0])
+                attributes |= preds_in_kb["att"] & \
+                    set(np.where(obj["pred_attributes"] > LOWER_THRES)[0])
+                for a in attributes:
+                    pred = f"att_{a}"; args = [(oi, False)]
+                    likelihood = float(obj["pred_attributes"][a])
+                    add_evidence(pred, args, likelihood)
+
+            # Object relations
+            if "pred_relations" in obj:
+                relations = {
+                    oj: set(np.where(per_obj > SCORE_THRES)[0]) | \
+                        (preds_in_kb["rel"] & set(np.where(per_obj > LOWER_THRES)[0]))
+                    for oj, per_obj in obj["pred_relations"].items()
+                }
+                for oj, per_obj in relations.items():
+                    for r in per_obj:
+                        pred = f"rel_{r}"; args = [(oi, False), (oj, False)]
+                        likelihood = float(obj["pred_relations"][oj][r])
+                        add_evidence(pred, args, likelihood)
+
+        return ev_prog
 
 
 # Recursive helper methods for fetching predicate terms and names, substituting

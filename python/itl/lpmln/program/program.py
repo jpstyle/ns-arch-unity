@@ -16,7 +16,7 @@ class Program:
         self.rules = [] if rules is None else rules
 
         self._rules_by_atom = defaultdict(set)      
-        for i, (rule, _) in enumerate(self.rules):
+        for i, (rule, _, _) in enumerate(self.rules):
             for hl in rule.head:
                 self._rules_by_atom[hl.as_atom()].add(i)
             for bl in rule.body:

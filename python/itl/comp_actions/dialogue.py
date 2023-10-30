@@ -110,7 +110,8 @@ def prepare_answer_Q(agent, utt_pointer):
 
             #  ... and another round of sensemaking
             exported_kb = agent.lt_mem.kb.export_reasoning_program()
-            agent.symbolic.sensemake_vis(agent.vision.scene, exported_kb)
+            visual_evidence = agent.lt_mem.kb.visual_evidence_from_scene(agent.vision.scene)
+            agent.symbolic.sensemake_vis(exported_kb, visual_evidence)
             agent.symbolic.resolve_symbol_semantics(dialogue_state, agent.lt_mem.lexicon)
             # symbolic.sensemake_vis_lang(dialogue_state)
 

@@ -16,10 +16,6 @@ Here, we resort to declarative programming to encode individual sensemaking prob
 logic programs (written in the language of weighted ASP), which are solved with a belief
 propagation method.
 """
-from itertools import product
-
-import numpy as np
-
 from .query import query
 from ..lpmln import Literal, Rule, Program
 from ..lpmln.utils import wrap_args, flatten_cons_ante
@@ -29,9 +25,6 @@ TAB = "\t"              # For use in format strings
 
 EPS = 1e-10             # Value used for numerical stabilization
 U_IN_PR = 1.0           # How much the agent values information provided by the user
-SCORE_THRES = 0.35      # Only consider recognised categories with category score higher
-                        # than this value, unless focused attention warranted by KB
-LOWER_THRES = 0.25      # Lower threshold for predicates that deserve closer look
 
 class SymbolicReasonerModule:
 
@@ -48,71 +41,22 @@ class SymbolicReasonerModule:
     def refresh(self):
         self.__init__()
 
-    def sensemake_vis(self, vis_scene, exported_kb):
+    def sensemake_vis(self, exported_kb, visual_evidence):
         """
         Combine raw visual perception outputs from the vision module (predictions with
-        confidence) with existing knowledge to make final verdicts on the state of affairs,
-        'all things considered'.
+        confidence) with existing knowledge to make final verdicts on the state of
+        affairs, 'all things considered'.
 
         Args:
-            vis_scene: Predictions (scene graphs) from the vision module
             exported_kb: Output from KnowledgeBase().export_reasoning_program()
+            visual_evidence: Output from KnowledgeBase().visual_evidence_from_scene()
         """
-        kb_prog, preds_in_kb = exported_kb
-
-        # Build ASP program for processing perception outputs
-        pr_prog = Program()
-
-        # Biasing literals by visual evidence
-        for oi, obj in vis_scene.items():
-            # Object classes
-            if "pred_classes" in obj:
-                classes = set(np.where(obj["pred_classes"] > SCORE_THRES)[0])
-                classes |= preds_in_kb["cls"] & \
-                    set(np.where(obj["pred_classes"] > LOWER_THRES)[0])
-                for c in classes:
-                    # p_vis ::  cls_C(oi).
-                    event_lit = Literal(f"cls_{c}", [(oi,False)])
-                    rule = Rule(head=event_lit)
-                    r_pr = float(obj["pred_classes"][c])
-
-                    pr_prog.add_rule(rule, r_pr)
-
-            # Object attributes
-            if "pred_attributes" in obj:
-                attributes = set(np.where(obj["pred_attributes"] > SCORE_THRES)[0])
-                attributes |= preds_in_kb["att"] & \
-                    set(np.where(obj["pred_attributes"] > LOWER_THRES)[0])
-                for a in attributes:
-                    # p_vis ::  att_A(oi).
-                    event_lit = Literal(f"att_{a}", [(oi,False)])
-                    rule = Rule(head=event_lit)
-                    r_pr = float(obj["pred_attributes"][a])
-
-                    pr_prog.add_rule(rule, r_pr)
-
-            # Object relations
-            if "pred_relations" in obj:
-                relations = {
-                    oj: set(np.where(per_obj > SCORE_THRES)[0]) | \
-                        (preds_in_kb["rel"] & set(np.where(per_obj > LOWER_THRES)[0]))
-                    for oj, per_obj in obj["pred_relations"].items()
-                }
-                for oj, per_obj in relations.items():
-                    for r in per_obj:
-                        # p_vis ::  rel_R(oi,oj).
-                        event_lit = Literal(f"rel_{r}", [(oi,False),(oj,False)])
-                        rule = Rule(head=event_lit)
-                        r_pr = float(obj["pred_relations"][oj][r])
-
-                        pr_prog.add_rule(rule, r_pr)
-
         # Solve with clingo to find the best models of the program
-        prog = pr_prog + kb_prog
+        prog = exported_kb + visual_evidence
         bjt_v = prog.compile()
 
         # Store sensemaking result as module state
-        self.concl_vis = bjt_v, (pr_prog, kb_prog)
+        self.concl_vis = bjt_v, (exported_kb, visual_evidence)
     
     def resolve_symbol_semantics(self, dialogue_state, lexicon):
         """

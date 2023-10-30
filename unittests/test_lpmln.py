@@ -201,102 +201,38 @@ class TestProgramCompile(unittest.TestCase):
         )
 
     def test_compile_causal_ex(self):
+        # Test-case knowledge base and visual scene
         kb = KnowledgeBase()
         kb.add(
-            ((Literal("p", [("O", True)]),), (Literal("c1", [("O", True)]),)),
+            ((Literal("att_0", [("O", True)]),), (Literal("cls_0", [("O", True)]),)),
             1.0,
-            "p(O) <- c1(O)"
+            "att_0(O) <- cls_0(O)"
         )
-        prog, _ = kb.export_reasoning_program()
-        prog.add_rule(Rule(head=Literal("c1", [("o1", False)])))
-        prog.add_rule(
-            Rule(
-                head=Literal("p", [("O", True)]),
-                body=[Literal("c1", [("O", True)])]
-            )
-        )
+        kb_prog = kb.export_reasoning_program()
 
-        v_c1_conf = 0.9; v_p_conf = 0.25
-        prog.add_rule(
-            Rule(
-                head=Literal("v_c1", [("o1", False)]),
-                body=[Literal("c1", [("o1", False)])]
-            )
-        )
-        prog.add_rule(
-            Rule(
-                head=Literal("v_c1", [("o1", False)]),
-                body=[Literal("c1", [("o1", False)], naf=True)]
-            )
-        )
-        prog.add_rule(
-            Rule(
-                body=[
-                    Literal("v_c1", [("o1", False)]),
-                    Literal("c1", [("o1", False)])
-                ]
-            ),
-            1 - v_c1_conf,
-            weighting="log"
-        )
-        prog.add_rule(
-            Rule(
-                body=[
-                    Literal("v_c1", [("o1", False)]),
-                    Literal("c1", [("o1", False)], naf=True)
-                ]
-            ),
-            1 - (1 - v_c1_conf),
-            weighting="log"
-        )
-        prog.add_absolute_rule(Rule(body=[Literal("v_c1", [("o1", False)], naf=True)]))
-        prog.add_rule(
-            Rule(
-                head=Literal("v_p", [("o1", False)]),
-                body=[Literal("p", [("o1", False)])]
-            )
-        )
-        prog.add_rule(
-            Rule(
-                head=Literal("v_p", [("o1", False)]),
-                body=[Literal("p", [("o1", False)], naf=True)]
-            )
-        )
-        prog.add_rule(
-            Rule(
-                body=[
-                    Literal("v_p", [("o1", False)]),
-                    Literal("p", [("o1", False)])
-                ]
-            ),
-            1 - v_p_conf,
-            weighting="log"
-        )
-        prog.add_rule(
-            Rule(
-                body=[
-                    Literal("v_p", [("o1", False)]),
-                    Literal("p", [("o1", False)], naf=True)
-                ]
-            ),
-            1 - (1 - v_p_conf),
-            weighting="log"
-        )
-        prog.add_absolute_rule(Rule(body=[Literal("v_p", [("o1", False)], naf=True)]))
+        v_cls_0_conf = 0.9; v_att_0_conf = 0.25
+        scene = {
+            "o0": {
+                "pred_classes": np.array([v_cls_0_conf]),
+                "pred_attributes": np.array([v_att_0_conf]),
+            }
+        }
+        ev_prog = kb.visual_evidence_from_scene(scene)
 
+        prog = kb_prog + ev_prog
         bjt = prog.compile()
 
-        c1_id = bjt.graph["atoms_map"][Literal("c1", [("o1", False)])]
-        c1_clique = frozenset([c1_id])
-        nc1_clique = frozenset([-c1_id])
-        c1_outs = bjt_query(bjt, c1_clique)
-        c1_marginal = c1_outs[c1_clique] / (c1_outs[c1_clique] + c1_outs[nc1_clique])
-        c1_marginal = np.exp(c1_marginal.primitivize())
+        c0_id = bjt.graph["atoms_map"][Literal("cls_0", [("o0", False)])]
+        c0_clique = frozenset([c0_id])
+        nc0_clique = frozenset([-c0_id])
+        c0_outs = bjt_query(bjt, c0_clique)
+        c0_marginal = c0_outs[c0_clique] / (c0_outs[c0_clique] + c0_outs[nc0_clique])
+        c0_marginal = np.exp(c0_marginal.primitivize())
 
         # Final expected odds ratio is 9/1 * 1/3 = 3/1, and hence marginal 0.75
         self.assertAlmostEqual(
-            float(c1_marginal), (9/1) * (1/3) / ((9/1) * (1/3) + 1)
+            float(c0_marginal), (9/1) * (1/3) / ((9/1) * (1/3) + 1)
         )
-        # Ensure the compiled join tree is binary: i.e., no nodes have more than three
-        # neighbor nodes
+        # Also check here the compiled join tree is binary: i.e., no nodes have more
+        # than three neighbor nodes
         self.assertTrue(all(deg <= 3 for _, deg in bjt.in_degree))

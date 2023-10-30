@@ -301,7 +301,8 @@ class ITLAgent:
             if self.vision.new_input_provided or ents_updated or xb_updated or kb_updated:
                 # Sensemaking from vision input only
                 exported_kb = self.lt_mem.kb.export_reasoning_program()
-                self.symbolic.sensemake_vis(self.vision.scene, exported_kb)
+                visual_evidence = self.lt_mem.kb.visual_evidence_from_scene(self.vision.scene)
+                self.symbolic.sensemake_vis(exported_kb, visual_evidence)
 
             if self.lang.new_input_provided:
                 # Reference & word sense resolution to connect vision & discourse
