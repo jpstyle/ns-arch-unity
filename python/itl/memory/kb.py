@@ -10,7 +10,7 @@ from ..lpmln.utils import wrap_args, flatten_cons_ante
 P_C = 0.00              # Default catchall hypothesis probability
 SCORE_THRES = 0.35      # Only consider recognised categories with category score higher
                         # than this value, unless focused attention warranted by KB
-LOWER_THRES = 0.15      # Lower threshold for predicates that deserve closer look
+LOWER_THRES = 0.25      # Lower threshold for predicates that deserve closer look
 
 class KnowledgeBase:
     """
@@ -38,7 +38,7 @@ class KnowledgeBase:
         """ Test if an entry isomorphic to item exists """
         cons, ante = item
 
-        for (ent_cons, ent_ante), _ in self.entries:
+        for (ent_cons, ent_ante), _, _, _ in self.entries:
             # Don't even bother with different set sizes
             if len(cons) != len(ent_cons): continue
             if len(ante) != len(ent_ante): continue
@@ -51,7 +51,7 @@ class KnowledgeBase:
 
         return False
 
-    def add(self, rule, weight, source):
+    def add(self, rule, weight, source, abductive_force=True):
         """ Returns whether KB is expanded or not """
         cons, ante = rule
 
@@ -94,7 +94,7 @@ class KnowledgeBase:
         entries_entailed = set()       # KB entries entailed by input
         entries_entailing = set()      # KB entries that entail input
         for ent_id in entries_with_overlap:
-            (ent_cons, ent_ante), ent_weight, _ = self.entries[ent_id]
+            (ent_cons, ent_ante), ent_weight, _, _ = self.entries[ent_id]
 
             # Find (partial) term mapping between the KB entry and input with
             # which they can unify
@@ -115,7 +115,9 @@ class KnowledgeBase:
         if len(entries_entailing) == len(entries_entailed) == 0:
             # Add the input as a whole new entry along with the weight & source
             # and index it by occurring predicates
-            self.entries.append(((cons, ante), weight, {(source, weight)}))
+            self.entries.append(
+                ((cons, ante), weight, {(source, weight)}, abductive_force)
+            )
             for pred in preds_cons | preds_ante:
                 self.entries_by_pred[pred].add(len(self.entries)-1)
             
@@ -143,7 +145,7 @@ class KnowledgeBase:
 
                     # Add the stronger input as new entry
                     self.entries.append(
-                        ((cons, ante), weight, {(source, weight)})
+                        ((cons, ante), weight, {(source, weight)}, abductive_force)
                     )
                     for pred in preds_cons | preds_ante:
                         self.entries_by_pred[pred].add(len(self.entries)-1)
@@ -202,7 +204,7 @@ class KnowledgeBase:
             # in entirety
             candidate_preds = defaultdict(set)
 
-            for rule, _, _ in self.entries:
+            for rule, _, _, _ in self.entries:
                 for cons, ante in flatten_cons_ante(*rule):
                     # Disregard the cons-ante pair if cons doesn't contain any literals
                     # with concepts of interest
@@ -259,7 +261,7 @@ class KnowledgeBase:
         intermediate_outputs = []
 
         # Process each entry
-        for i, (rule, weight, _) in enumerate(self.entries):
+        for i, (rule, weight, _, abductive_force) in enumerate(self.entries):
             for j, (cons, ante) in enumerate(flatten_cons_ante(*rule)):
                 # Keep track of variable names used to avoid accidentally using
                 # overlapping names for 'lifting' variables (see below)
@@ -347,8 +349,9 @@ class KnowledgeBase:
                 )
 
                 # Indexing & storing the entry by cons for later abductive rule
-                # translation (thus, no need to consider cons-less constraints)
-                if len(cons) > 0:
+                # translation. No need to consider cons-less constraints, or rules
+                # without abductive force like hyper/hyponymy statements.
+                if len(cons) > 0 and abductive_force:
                     for c_lits in entries_by_cons:
                         ism, ent_dir = Literal.entailing_mapping_btw(cons, c_lits)
                         if ent_dir == 0:

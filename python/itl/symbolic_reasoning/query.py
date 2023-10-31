@@ -199,12 +199,14 @@ def _query_bjt(bjt, q_key):
         # Trivially satisfiable query
         return { q_key: Polynomial(float_val=1.0) }
 
-    relevant_nodes = frozenset({abs(n) for n in q_key})
+    relevant_atoms = frozenset({abs(n) for n in q_key})
     if len(q_key) == 1:
         # Simpler case of single-item key, just fetch the smallest BJT node covering
         # the key node, which always exists, and is guaranteed to be as small as possible
         # (since all singleton node sets are included during construction of BJT)
-        return bjt.nodes[relevant_nodes]["output_beliefs"]
+        # Corresponding node in BJT; there can be multiple, pick any
+        bjt_node = [n for n in bjt.nodes if relevant_atoms==n[0]][0]
+        return bjt.nodes[bjt_node]["output_beliefs"]
     else:
         # General case; call bjt_query
         return bjt_query(bjt, q_key)

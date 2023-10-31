@@ -386,8 +386,10 @@ class ITLAgent:
                     self.lang.dialogue.acknowledged_stms[stm_ind] = acknowledgement_data
 
             # Update knowledge base with obtained generic statements
-            for rule, w_pr, provenance in generics:
-                kb_updated |= self.lt_mem.kb.add(rule, w_pr, provenance)
+            for rule, w_pr, knowledge_source, abductive_force in generics:
+                kb_updated |= self.lt_mem.kb.add(
+                    rule, w_pr, knowledge_source, abductive_force
+                )
 
             # Compute scalar implicature if required by agent's strategy
             if self.strat_generic == "semNegScal":

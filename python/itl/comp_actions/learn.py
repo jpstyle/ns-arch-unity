@@ -177,8 +177,11 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
     if rule_is_lifted:
         # Lifted generic rule statement, without any grounded term arguments
 
+        # Assume abductive forces on rules added here
+        abductive_force = True
+
         # First add the face-value semantics of the explicitly stated rule
-        generics.append((rule, U_IN_PR, provenance))
+        generics.append((rule, U_IN_PR, provenance, abductive_force))
 
         if agent.strat_generic == "semNeg" or agent.strat_generic == "semNegScal":
             # Current rule cons conjunction & ante conjunction as list
@@ -225,8 +228,9 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
                     l.substitute(preds={ c1: c2 }) for l in ante
                 )
                 negImpl = ((list(cons_repl),), ante_repl)
+                knowledge_source = f"{provenance} (Neg. Impl.)"
                 generics.append(
-                    (negImpl, A_IM_PR, f"{provenance} (Neg. Impl.)")
+                    (negImpl, A_IM_PR, knowledge_source, abductive_force)
                 )
 
                 # Collect explicit generics provided for the concept pair and negative
@@ -287,11 +291,13 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
             if len(entailing_preds) == 0: continue
 
             entailment_rule = (
-                [Literal(pred, [("X", True)]) for pred in entailed_preds],
-                [Literal(pred, [("X", True)]) for pred in entailing_preds]
+                tuple(Literal(pred, [("X", True)]) for pred in entailed_preds),
+                tuple(Literal(pred, [("X", True)]) for pred in entailing_preds)
             )
+            knowledge_source = f"{context_Qs[pred_var]} => {provenance}"
+            abductive_force = False         # Assume no abductive forces on these rules
             generics.append(
-                (entailment_rule, U_IN_PR, f"{context_Qs[pred_var]} => {provenance}")
+                (entailment_rule, U_IN_PR, knowledge_source, abductive_force)
             )
 
 def handle_mismatch(agent, mismatch):
@@ -501,15 +507,16 @@ def add_scalar_implicature(agent, pair_rules):
         scal_impls += _compute_scalar_implicature(c2, c1, rules, agent.kb_snap)
 
         for cons, ante in scal_impls:
+            knowledge_source = f"[{c1} ~= {c2}] (Scal. Impl.)"
             agent.lt_mem.kb.add(
-                (cons, ante), A_IM_PR, f"[{c1} ~= {c2}] (Scal. Impl.)"
+                (cons, ante), A_IM_PR, knowledge_source, abductive_force=True
             )
 
     # Regular inspection of KB by weeding out defeasible rules inferred
     # from scalar implicatures, by comparison against episodic memory
     entries_from_scalImpl = [
         (ent_id, rule)
-        for ent_id, (rule, _, provenances) in enumerate(agent.lt_mem.kb.entries)
+        for ent_id, (rule, _, provenances, _) in enumerate(agent.lt_mem.kb.entries)
         if all(prov[0].endswith("(Scal. Impl.)") for prov in provenances)
     ]
     entries_to_remove = {}
