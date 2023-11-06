@@ -83,12 +83,12 @@ class SymbolicReasonerModule:
         # Discourse referents
         for rf, v in dialogue_state["referents"]["dis"].items():
             # No need to assign if universally quantified or wh-quantified
-            if v["is_univ_quantified"] or v["is_wh_quantified"]: continue
+            if v["univ_quantified"] or v["wh_quantified"]: continue
             # No need to assign if not an entity referent
             if not rf.startswith("x"): continue
 
             sm_prog.add_absolute_rule(Rule(head=Literal("dis", wrap_args(rf))))
-            if v["is_referential"]:
+            if v["referential"]:
                 sm_prog.add_absolute_rule(Rule(head=Literal("referential", wrap_args(rf))))
 
         # Hard assignments by pointing, etc.
@@ -134,11 +134,11 @@ class SymbolicReasonerModule:
 
         # Understood dialogue record contents
         occurring_preds = set()
-        for ti, (speaker, turn_sentences) in enumerate(dialogue_state["record"]):
+        for ti, (speaker, turn_clauses) in enumerate(dialogue_state["record"]):
             # Nothing particular to do with agent's own utterances
             if speaker == "A": continue
 
-            for si, ((rule, question), _) in enumerate(turn_sentences):
+            for ci, ((rule, question), _) in enumerate(turn_clauses):
                 if rule is not None:
                     cons, ante = rule
 
@@ -157,7 +157,7 @@ class SymbolicReasonerModule:
                             src_loc = "_".join(str(i) for i in src)
 
                             sym = f"{p[1]}_{p[0].split('/')[0]}"
-                            tok_loc = f"t{ti}_s{si}_r{c}_{src_loc}"
+                            tok_loc = f"t{ti}_c{ci}_r{c}_{src_loc}"
                             sm_prog.add_absolute_rule(
                                 Rule(head=Literal("pred_token", wrap_args(tok_loc, sym)))
                             )
@@ -249,7 +249,7 @@ class SymbolicReasonerModule:
                             src_loc = "_".join(str(i) for i in src)
 
                             sym = f"{p[1]}_{p[0].split('/')[0]}"
-                            tok_loc = f"t{ti}_s{si}_q{c}_{src_loc}"
+                            tok_loc = f"t{ti}_c{ci}_q{c}_{src_loc}"
                             sm_prog.add_absolute_rule(
                                 Rule(head=Literal("pred_token", wrap_args(tok_loc, sym)))
                             )
@@ -389,26 +389,26 @@ class SymbolicReasonerModule:
 
         # Recursive helper methods for encoding pre-translation tuples representing
         # literals into actual Literal objects
-        encode_lits = lambda cnjt, ti, si, rqca, inds: Literal(
+        encode_lits = lambda cnjt, ti, ci, rqca, inds: Literal(
                 self.word_senses.get(
-                    (f"t{ti}",f"s{si}",rqca)+tuple(str(i) for i in inds),
+                    (f"t{ti}",f"c{ci}",rqca)+tuple(str(i) for i in inds),
                     # If not found (likely reserved predicate), fall back to cnjt's pred
                     (None, "_".join(cnjt[1::-1]))
                 )[1],
                 args=wrap_args(*a_map(cnjt[2])), naf=cnjt[3]
             ) \
             if isinstance(cnjt, tuple) \
-            else [encode_lits(nc, ti, si, rqca, inds+(i,)) for i, nc in enumerate(cnjt)]
+            else [encode_lits(nc, ti, ci, rqca, inds+(i,)) for i, nc in enumerate(cnjt)]
 
         record_translated = []
-        for ti, (speaker, turn_sentences) in enumerate(dialogue_state["record"]):
+        for ti, (speaker, turn_clauses) in enumerate(dialogue_state["record"]):
             turn_translated = []
-            for si, ((rule, question), raw) in enumerate(turn_sentences):
+            for ci, ((rule, question), raw) in enumerate(turn_clauses):
                 # If the utterance contains an unresolved neologism, give up translation
                 # for the time being
                 contains_unresolved_neologism = any([
                     den is None for tok, (_, den) in self.word_senses.items()
-                    if tok[:2]==(f"t{ti}", f"s{si}")
+                    if tok[:2]==(f"t{ti}", f"c{ci}")
                 ])
                 if contains_unresolved_neologism:
                     turn_translated.append(((None, None), raw))
@@ -420,14 +420,16 @@ class SymbolicReasonerModule:
 
                     if len(cons) > 0:
                         tr_cons = tuple(
-                            encode_lits(c,ti,si,"rc",(ci,)) for ci, c in enumerate(cons)
+                            encode_lits(c_lit, ti, ci, "rc", (rci,))
+                            for rci, c_lit in enumerate(cons)
                         )
                     else:
                         tr_cons = None
 
                     if len(ante) > 0:
                         tr_ante = tuple(
-                            encode_lits(a,ti,si,"ra",(ai,)) for ai, a in enumerate(ante)
+                            encode_lits(a_lit, ti, ci, "ra", (rai,))
+                            for rai, a_lit in enumerate(ante)
                         )
                     else:
                         tr_ante = None
@@ -442,14 +444,16 @@ class SymbolicReasonerModule:
 
                     if len(cons) > 0:
                         tr_cons = tuple(
-                            encode_lits(c,ti,si,"qc",(ci,)) for ci, c in enumerate(cons)
+                            encode_lits(c_lit, ti, ci, "qc", (qci,))
+                            for qci, c_lit in enumerate(cons)
                         )
                     else:
                         tr_cons = None
 
                     if len(ante) > 0:
                         tr_ante = tuple(
-                            encode_lits(a,ti,si,"qa",(ai,)) for ai, a in enumerate(ante)
+                            encode_lits(a_lit, ti, ci, "qa", (qai,))
+                            for qai, a_lit in enumerate(ante)
                         )
                     else:
                         tr_ante = None
@@ -482,10 +486,16 @@ class SymbolicReasonerModule:
 
         # Incorporate additional information provided by the user in language for updated
         # sensemaking
-        for speaker, turn_sentences in self.translate_dialogue_content(dialogue_state):
+        translated = self.translate_dialogue_content(dialogue_state)
+        for ti, (speaker, turn_clauses) in enumerate(translated):
             if speaker != "U": continue
 
-            for (rule, _), _ in turn_sentences:
+            for ci, ((rule, _), _) in enumerate(turn_clauses):
+                # Disregard clause if it is not domain-describing or is in irrealis mood
+                clause_info = dialogue_state["clause_info"][f"t{ti}c{ci}"]
+                if not clause_info["domain_describing"]: continue
+                if clause_info["irrealis"]: continue
+
                 if rule is not None:
                     for cons, ante in flatten_cons_ante(*rule):
                         # Skip any non-grounded content

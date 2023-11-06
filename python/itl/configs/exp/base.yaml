@@ -1,0 +1,3 @@
+concept_set: main
+num_episodes: 3000
+strat_feedback: "minHelp"             # Options: "minHelp", "medHelp", "maxHelpNoexpl", "maxHelpExpl"

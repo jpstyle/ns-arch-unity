@@ -279,6 +279,7 @@ class ITLAgent:
                 # If a new entity is registered as a result of understanding the latest
                 # input, re-run vision module to update with new predictions for it
                 new_ents = set(self.lang.dialogue.referents["env"]) - set(self.vision.scene)
+                new_ents.remove("_self")
                 if len(new_ents) > 0:
                     masks = {
                         ent: self.lang.dialogue.referents["env"][ent]["mask"]
@@ -336,15 +337,15 @@ class ITLAgent:
             prev_statements = []
             prev_Qs = []
             for ti, (spk, turn_clauses) in enumerate(prev_translated):
-                for si, ((rule, ques), raw) in enumerate(turn_clauses):
+                for ci, ((rule, ques), raw) in enumerate(turn_clauses):
                     # Factual statement
                     if rule is not None and len(rule[0])==1 and rule[1] is None:
-                        prev_statements.append(((ti, si), (spk, rule)))
+                        prev_statements.append(((ti, ci), (spk, rule)))
 
                     # Question
                     if ques is not None:
                         # Here, `rule` represents presuppositions included in `ques`
-                        prev_Qs.append(((ti, si), (spk, ques, rule, raw)))
+                        prev_Qs.append(((ti, ci), (spk, ques, rule, raw)))
 
             # Translate dialogue record into processable format based on the result
             # of symbolic.resolve_symbol_semantics
@@ -354,11 +355,18 @@ class ITLAgent:
             #   - Identify recognition mismatch btw. user provided vs. agent
             #   - Identify visual concept confusion
             #   - Identify new generic rules to be integrated into KB
-            for speaker, turn_clauses in translated:
+            for ti, (speaker, turn_clauses) in enumerate(translated):
                 if speaker != "U": continue
 
-                for (rule, _), raw in turn_clauses:
+                for ci, ((rule, _), raw) in enumerate(turn_clauses):
                     if rule is None: continue
+
+                    # Disregard clause if it is not domain-describing or is in irrealis mood
+                    clause_info = updated_dialogue_state["clause_info"][f"t{ti}c{ci}"]
+                    if not clause_info["domain_describing"]:
+                        continue
+                    if clause_info["irrealis"]:
+                        continue
 
                     # Identify learning opportunities; i.e., any deviations from the agent's
                     # estimated states of affairs, generic rules delivered via NL generic
@@ -377,10 +385,10 @@ class ITLAgent:
             # By default, treat lack of any negative acknowledgements to an agent's statement
             # as positive acknowledgement
             prev_or_curr = "prev" if self.vision.new_input_provided else "curr"
-            for (ti, si), (speaker, (statement, _)) in prev_statements:
+            for (ti, ci), (speaker, (statement, _)) in prev_statements:
                 if speaker != "A": continue         # Not interested
 
-                stm_ind = (prev_or_curr, ti, si)
+                stm_ind = (prev_or_curr, ti, ci)
                 if stm_ind not in self.lang.dialogue.acknowledged_stms:
                     acknowledgement_data = (statement, True, prev_context)
                     self.lang.dialogue.acknowledged_stms[stm_ind] = acknowledgement_data
@@ -424,8 +432,8 @@ class ITLAgent:
         # purpose right now; we will see later if we'll ever need to generalize and implement
         # the said procedure.)
 
-        for ti, si in self.lang.dialogue.unanswered_Qs:
-            self.practical.agenda.append(("address_unanswered_Q", (ti, si)))
+        for ti, ci in self.lang.dialogue.unanswered_Qs:
+            self.practical.agenda.append(("address_unanswered_Q", (ti, ci)))
         for a in self.lang.dialogue.acknowledged_stms.items():
             self.practical.agenda.append(("address_acknowledgement", a))
         for n in self.lang.unresolved_neologisms:

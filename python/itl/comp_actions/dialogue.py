@@ -24,8 +24,8 @@ def attempt_answer_Q(agent, utt_pointer):
     dialogue_state = agent.lang.dialogue.export_as_dict()
     translated = agent.symbolic.translate_dialogue_content(dialogue_state)
 
-    ti, si = utt_pointer
-    (_, question), _ = translated[ti][1][si]
+    ti, ci = utt_pointer
+    (_, question), _ = translated[ti][1][ci]
 
     if question is None:
         # Question cannot be answered for some reason
@@ -48,8 +48,8 @@ def prepare_answer_Q(agent, utt_pointer):
     dialogue_state = agent.lang.dialogue.export_as_dict()
     translated = agent.symbolic.translate_dialogue_content(dialogue_state)
 
-    ti, si = utt_pointer
-    (presup, question), _ = translated[ti][1][si]
+    ti, ci = utt_pointer
+    (presup, question), _ = translated[ti][1][ci]
     assert question is not None
 
     q_vars, (cons, ante) = question
@@ -58,7 +58,7 @@ def prepare_answer_Q(agent, utt_pointer):
 
     # # New dialogue turn & clause index for the answer to be provided
     ti_new = len(agent.lang.dialogue.record)
-    si_new = 0
+    ci_new = 0
 
     # Mapping from predicate variables to their associated entities
     pred_var_to_ent_ref = {
@@ -67,7 +67,7 @@ def prepare_answer_Q(agent, utt_pointer):
     }
 
     qv_to_dis_ref = {
-        qv: f"x{ri}t{ti_new}s{si_new}" for ri, (qv, _) in enumerate(q_vars)
+        qv: f"x{ri}t{ti_new}c{ci_new}" for ri, (qv, _) in enumerate(q_vars)
     }
     conc_type_to_pos = { "cls": "n" }
 
@@ -170,7 +170,7 @@ def prepare_answer_Q(agent, utt_pointer):
                     # Update cognitive state w.r.t. value assignment and word sense
                     agent.symbolic.value_assignment[ri] = \
                         pred_var_to_ent_ref[qv]
-                    tok_ind = (f"t{ti_new}", f"s{si_new}", "rc", "0")
+                    tok_ind = (f"t{ti_new}", f"c{ci_new}", "rc", "0")
                     agent.symbolic.word_senses[tok_ind] = \
                         ((conc_type_to_pos[ans[1]], nl_val), f"{ans[1]}_{ans[0]}")
 

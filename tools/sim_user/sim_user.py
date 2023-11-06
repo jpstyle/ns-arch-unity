@@ -22,7 +22,7 @@ class SimulatedTeacher:
         # Teacher's strategy on how to give feedback upon student's wrong answer
         # (provided the student has taken initiative for extended ITL interactions
         # by asking further questions after correct answer feedback)
-        self.strat_feedback = cfg.exp1.strat_feedback
+        self.strat_feedback = cfg.exp.strat_feedback
 
         # Load any domain knowledge stored as yamls in assets dir
         self.domain_knowledge = {}
@@ -143,10 +143,18 @@ class SimulatedTeacher:
                         "pointing": { (0, 4): gameObject_handle }
                     })
 
+                # Ask for an explanation why the agent have the incorrect answer, if the
+                # strategy is to take interest
+                if self.strat_feedback == "maxHelpExpl":
+                    response.append({
+                        "utterance": f"Why did you think this is a {answer_content}?",
+                        "pointing": { (18, 22): gameObject_handle }
+                    })
+
         elif any(utt.startswith("How are") and utt.endswith("different?")
             for utt in agent_reactions):
             # Agent requested generic differences between two similar concepts
-            assert self.strat_feedback == "maxHelp"
+            assert self.strat_feedback.startswith("maxHelp")
 
             # if contrast_concepts in self.taught_diffs:
             #     # Concept diffs requested again; do something? This would 'annoy'

@@ -3,17 +3,22 @@ class Lexicon:
     Lexicon of open-classed words <-> their denoted concepts in physical world. Should
     allow many-to-many mappings between symbols and denotations.
     """
-    # Special reserved symbols
-    RESERVED = {
+    # Special reserved symbols; any predicates obtainable from the parsing-translation
+    # pipeline, that do NOT refer to first-order domain concepts
+    RESERVED = [
         # Invokes object identity check
-        ("=", "*"): ("=", "*"),
+        ("=", "*"),
         # Invokes concept instance (i.e., set element) check
-        ("isinstance", "*"): ("isinstance", "*"),
+        ("isinstance", "*"),
         # Invokes concept entailment check (against KB)
-        ("entail", "*"): ("entail", "*"),
+        ("entail", "*"),
         # Invokes concept difference computation
-        ("diff", "*"): ("diff", "*"),
-    }
+        ("diff", "*"),
+        # Pronoun indicator
+        ("pronoun", "*"),
+        # Expresses a dialogue participant's belief on a statement w/ irrealis mood
+        ("think", "*")
+    ]
 
     def __init__(self):
         self.s2d = {}     # Symbol-to-denotation
@@ -21,7 +26,7 @@ class Lexicon:
         self.d_freq = {}  # Denotation frequency
 
         # Add reserved symbols & denotations
-        for s, d in Lexicon.RESERVED.items(): self.add(s, d)
+        for r in Lexicon.RESERVED: self.add(r, r)
 
         # (Temp) Inventory of relation concept is a fixed singleton set, containing "have"
         self.add(("have", "v"), (0, "rel"))

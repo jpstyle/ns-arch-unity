@@ -68,9 +68,9 @@ def identify_confusion(agent, rule, prev_statements, novel_concepts):
         (ante is None or has_pred_referent(ante))
 
     if (rule_is_grounded and ante is None and not rule_has_pred_referent and
-        agent.cfg.exp1.strat_feedback == "maxHelp"):
+        agent.cfg.exp.strat_feedback.startswith("maxHelp")):
         # Grounded fact without constant predicate referents, only if the user
-        # adopts maxHelp strategy and provides generic NL feedback
+        # adopts maxHelp* strategy and provides generic NL feedback
 
         # Fetch agent's last answer; this assumes the last factual statement
         # by agent is provided as answer to the last question from user. This
@@ -134,7 +134,7 @@ def identify_acknowledgement(agent, rule, prev_statements, prev_context):
             # Discussion about irrelevant contexts, can return early without doing anything
             return
 
-        for (ti, si), (speaker, (statement, _)) in prev_statements:
+        for (ti, ci), (speaker, (statement, _)) in prev_statements:
             # Only interested in whether an agent's statement is acknowledged
             if speaker != "A": continue
 
@@ -153,7 +153,7 @@ def identify_acknowledgement(agent, rule, prev_statements, prev_context):
             # from prev_scene, and then record
             polarity = pos_ack
             acknowledgement_data = (statement, polarity, prev_context)
-            agent.lang.dialogue.acknowledged_stms[("curr", ti, si)] = acknowledgement_data
+            agent.lang.dialogue.acknowledged_stms[("curr", ti, ci)] = acknowledgement_data
                 # "curr" indicates the acknowledgement is relevant to a statement in the
                 # ongoing dialogue record
 
@@ -351,7 +351,7 @@ def handle_confusion(agent, confusion):
 
     # New dialogue turn & clause index for the question to be asked
     ti_new = len(agent.lang.dialogue.record)
-    si_new = 0
+    ci_new = 0
 
     conc_type, conc_inds = confusion
     conc_inds = list(conc_inds)
@@ -360,9 +360,9 @@ def handle_confusion(agent, confusion):
     assert conc_type == "cls"
 
     # Prepare logical form of the concept-diff question to ask
-    q_vars = ((f"X2t{ti_new}s{si_new}", False),)
+    q_vars = ((f"X2t{ti_new}c{ci_new}", False),)
     q_rules = (
-        (("diff", "*", tuple(f"{ri}t{ti_new}s{si_new}" for ri in ["x0", "x1", "X2"]), False),),
+        (("diff", "*", tuple(f"{ri}t{ti_new}c{ci_new}" for ri in ["x0", "x1", "X2"]), False),),
         ()
     )
     ques_logical_form = (q_vars, q_rules)
@@ -384,8 +384,8 @@ def handle_confusion(agent, confusion):
 
     # Update cognitive state w.r.t. value assignment and word sense
     agent.symbolic.value_assignment.update({
-        f"x0t{ti_new}s{si_new}": f"{conc_type}_{conc_inds[0]}",
-        f"x1t{ti_new}s{si_new}": f"{conc_type}_{conc_inds[1]}"
+        f"x0t{ti_new}c{ci_new}": f"{conc_type}_{conc_inds[0]}",
+        f"x1t{ti_new}c{ci_new}": f"{conc_type}_{conc_inds[1]}"
     })
 
     ques_translated = f"How are {conc_names[0]} and {conc_names[1]} different?"
@@ -668,8 +668,8 @@ def handle_neologism(agent, novel_concepts, dialogue_state):
             agent.lt_mem.lexicon.add((name, pos), novel_concept)
 
             ti = int(tok[0].strip("t"))
-            si = int(tok[1].strip("s"))
-            rule_cons, rule_ante = dialogue_state["record"][ti][1][si][0][0]
+            ci = int(tok[1].strip("c"))
+            rule_cons, rule_ante = dialogue_state["record"][ti][1][ci][0][0]
 
             if len(rule_ante) == 0:
                 # Labelled exemplar provided; add new concept exemplars to

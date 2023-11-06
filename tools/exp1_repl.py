@@ -43,7 +43,7 @@ def main(cfg):
 
     # Experiment tag
     exp_tag = "_".join([
-        cfg.exp1.strat_feedback,
+        cfg.exp.strat_feedback,
         cfg.agent.strat_generic,
         cfg.agent.strat_assent,
         str(cfg.seed)
@@ -72,7 +72,7 @@ def main(cfg):
     #   "main": Distinguishing between fine-grained types of trucks, assuming
     #       prior knowledge of whole truck & load part visual concepts (i.e., those
     #       injected by "prior" repertoire)
-    repertoire = cfg.exp1.concept_set
+    repertoire = cfg.exp.concept_set
 
     # Set up target concepts to teach in each episode as a list of dicts, where
     # each index corresponds to a truck type
@@ -110,7 +110,7 @@ def main(cfg):
         timeout_wait=600, seed=cfg.seed
     )
 
-    for i in range(cfg.exp1.num_episodes):
+    for i in range(cfg.exp.num_episodes):
         logger.info(f"Sys> Episode {i+1})")
 
         # Obtain random initialization of each episode

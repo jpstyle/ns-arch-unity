@@ -59,34 +59,39 @@ class LanguageModule:
         new_record = []                     # New dialogue record for the turn
 
         # Processing natural language into appropriate logical form
-        asp_contents, ref_maps = self.semantic.asp_translate(parses)
+        translations, ref_maps = self.semantic.asp_translate(parses)
 
         # For indexing clauses in dialogue turn
-        se2i = defaultdict(lambda: len(se2i))
+        se2ci = defaultdict(lambda: len(se2ci))
 
-        per_sentence = enumerate(zip(parses, asp_contents, ref_maps))
-        for si, (parse, asp_content, ref_map) in per_sentence:
+        per_sentence = enumerate(zip(parses, translations, ref_maps))
+        for si, (parse, translation, ref_map) in per_sentence:
             # For indexing referents within individual clauses
             reind_per_src = {
                 ei: defaultdict(lambda: len(reind_per_src[ei]))
-                for ei in asp_content
+                for ei in translation
             }
             r2i = {
-                rf: reind_per_src[v["source_ind"]][v["map_id"]]
-                for rf, v in ref_map.items() if v is not None
+                rf: reind_per_src[v["source_evt"]][v["map_id"]]
+                for rf, v in ref_map.items()
+                if v is not None and rf.startswith("x")
             }
+            # For indexing individual clauses
+            r2i.update({
+                rf: f"t{ti}c{se2ci[(si,rf)]}" for rf in translation
+            })
 
             # Add to the list of discourse referents
             for rf, v in ref_map.items():
                 if v is not None:
-                    term_char = "p" if ref_map[rf]["is_pred"] else "x"
-                    turn_clause_tag = f"t{ti}c{se2i[(si,v['source_ind'])]}"
-
                     if type(rf) == tuple:
-                        # Function term
+                        # Annotate instance referents (function terms)
+                        term_char = "p" if ref_map[rf]["is_pred"] else "x"
+                        turn_clause_tag = f"t{ti}c{se2ci[(si,v['source_evt'])]}"
+
                         f_args = tuple(
                             f"{term_char.upper()}{r2i[arg]}{turn_clause_tag}"
-                                if ref_map[arg]["is_univ_quantified"] or ref_map[arg]["is_wh_quantified"]
+                                if ref_map[arg]["univ_quantified"] or ref_map[arg]["wh_quantified"]
                                 else f"{term_char}{r2i[arg]}{turn_clause_tag}"
                             for arg in rf[1]
                         )
@@ -94,23 +99,35 @@ class LanguageModule:
 
                         self.dialogue.referents["dis"][rf] = {
                             "provenance": v["provenance"],
-                            "is_referential": v["is_referential"],
-                            "is_univ_quantified": v["is_univ_quantified"],
-                            "is_wh_quantified": v["is_wh_quantified"]
+                            "referential": v["referential"],
+                            "univ_quantified": v["univ_quantified"],
+                            "wh_quantified": v["wh_quantified"]
                         }
                     else:
                         assert type(rf) == str
-                        if v["is_univ_quantified"] or v["is_wh_quantified"]:
-                            rf = f"{term_char.upper()}{r2i[rf]}{turn_clause_tag}"
-                        else:
-                            rf = f"{term_char}{r2i[rf]}{turn_clause_tag}"
+                        if rf.startswith("x"):
+                            # Annotate instance referents (const terms)
+                            term_char = "p" if ref_map[rf]["is_pred"] else "x"
+                            turn_clause_tag = f"t{ti}c{se2ci[(si,v['source_evt'])]}"
 
-                        self.dialogue.referents["dis"][rf] = {
-                            "provenance": v["provenance"],
-                            "is_referential": v["is_referential"],
-                            "is_univ_quantified": v["is_univ_quantified"],
-                            "is_wh_quantified": v["is_wh_quantified"]
-                        }
+                            if v["univ_quantified"] or v["wh_quantified"]:
+                                rf_i = f"{term_char.upper()}{r2i[rf]}{turn_clause_tag}"
+                            else:
+                                rf_i = f"{term_char}{r2i[rf]}{turn_clause_tag}"
+
+                            self.dialogue.referents["dis"][rf_i] = {
+                                "provenance": v["provenance"],
+                                "referential": v["referential"],
+                                "univ_quantified": v["univ_quantified"],
+                                "wh_quantified": v["wh_quantified"]
+                            }
+                        elif rf.startswith("e"):
+                            # Annotate eventuality referents (i.e. clauses)
+                            self.dialogue.clause_info[r2i[rf]] = {
+                                "provenance": v["provenance"],
+                                "irrealis": v["irrealis"],
+                                "domain_describing": v["domain_describing"]
+                            }
 
             # Fetch arg1 of index (i.e. sentence 'subject' referent)
             index = parse["relations"]["by_id"][parse["index"]]
@@ -119,6 +136,13 @@ class LanguageModule:
 
             # Handle certain hard assignments
             for rel in parse["relations"]["by_id"].values():
+
+                # Hard assignments handling is for instance referents only
+                if rel["args"][0].startswith("x"):
+                    ri = r2i[rel["args"][0]]
+                    clause_tag = se2ci[(si, ref_map[rel["args"][0]]["source_evt"])]
+                else:
+                    continue
 
                 if rel["pos"] == "q":
                     # Demonstratives need pointing
@@ -135,9 +159,6 @@ class LanguageModule:
                             dem_mask = None
 
                         pointed = self.dialogue.dem_point(dem_mask)
-
-                        ri = r2i[rel["args"][0]]
-                        clause_tag = se2i[(si, ref_map[rel["args"][0]]["source_ind"])]
                         self.dialogue.assignment_hard[f"x{ri}t{ti}c{clause_tag}"] = pointed
 
                 if rel["predicate"] == "named":
@@ -147,13 +168,16 @@ class LanguageModule:
                         # TODO: Update to comply with recent changes
                         raise NotImplementedError
 
-                    ri = r2i[rel["args"][0]]
-                    clause_tag = se2i[(si, ref_map[rel["args"][0]]["source_ind"])]
                     self.dialogue.assignment_hard[f"x{ri}t{ti}c{clause_tag}"] = \
                         self.dialogue.referent_names[rel["carg"]]
 
+                if rel["predicate"] == "pron":
+                    # Handle resolvable pronouns ('you' only, for now)
+                    if rel["pronoun"] == "you":
+                        self.dialogue.assignment_hard[f"x{ri}t{ti}c{clause_tag}"] = "_self"
+
             # ASP-compatible translation
-            for ev_id, (topic_msgs, focus_msgs) in asp_content.items():
+            for ev_id, (topic_msgs, focus_msgs) in translation.items():
                 cons = []; ante = []
 
                 # Process topic messages
@@ -163,7 +187,7 @@ class LanguageModule:
                         occurring_args = sum([arg[1] if type(arg)==tuple else (arg,) for arg in m[2]], ())
                         occurring_args = tuple(set(occurring_args))
 
-                        var_free = not any([ref_map[arg]["is_univ_quantified"] for arg in occurring_args])
+                        var_free = not any([ref_map[arg]["univ_quantified"] for arg in occurring_args])
 
                         if var_free:
                             # Add the grounded literal to cons
@@ -178,7 +202,7 @@ class LanguageModule:
                         ], ())
                         occurring_args = tuple(set(occurring_args))
 
-                        var_free = not any([ref_map[arg]["is_univ_quantified"] for arg in occurring_args])
+                        var_free = not any([ref_map[arg]["univ_quantified"] for arg in occurring_args])
 
                         conj = [l[:2]+(tuple(l[2]),False) for l in m]
                         conj = list(set(conj))      # Remove duplicate literals
@@ -203,9 +227,9 @@ class LanguageModule:
 
                 if parse["utt_type"][ev_id] == "prop":
                     # Indicatives
-                    prop = _map_and_format((cons, ante), ref_map, ti, si, r2i, se2i)
+                    prop = _map_and_format((cons, ante), ref_map, ti, si, r2i, se2ci)
 
-                    new_record.append(((prop, None), parse["conjunct_raw"][ev_id]))
+                    new_record.append(((prop, None), parse["clause_source"][ev_id]))
 
                 elif parse["utt_type"][ev_id] == "ques":
                     # Interrogatives
@@ -213,7 +237,7 @@ class LanguageModule:
                     # Determine type of question: Y/N or wh-
                     wh_refs = {
                         rf for rf, v in ref_map.items()
-                        if v is not None and v["is_wh_quantified"]
+                        if rf.startswith("x") and v is not None and v["wh_quantified"]
                     }
 
                     if len(wh_refs) == 0:
@@ -242,13 +266,15 @@ class LanguageModule:
                     question = (q_vars, (cons, ante))
 
                     if len(presup) > 0:
-                        presup = _map_and_format((presup, []), ref_map, ti, si, r2i, se2i)
+                        presup = _map_and_format((presup, []), ref_map, ti, si, r2i, se2ci)
                     else:
                         presup = None
-                    question = _map_and_format(question, ref_map, ti, si, r2i, se2i)
+                    question = _map_and_format(question, ref_map, ti, si, r2i, se2ci)
 
-                    new_record.append(((presup, question), parse["conjunct_raw"][ev_id]))
-                    self.dialogue.unanswered_Qs.add((ti, si))
+                    new_record.append(((presup, question), parse["clause_source"][ev_id]))
+
+                    # Record turn-clause index of unanswered question
+                    self.dialogue.unanswered_Qs.add((ti, se2ci[(si, ev_id)]))
 
                 elif parse["utt_type"][ev_id] == "comm":
                     # Imperatives
@@ -288,7 +314,7 @@ class LanguageModule:
             return
 
 
-def _map_and_format(data, ref_map, ti, si, r2i, se2i):
+def _map_and_format(data, ref_map, ti, si, r2i, se2ci):
     # Map MRS referents to ASP terms and format
 
     def fmt(rf):
@@ -296,13 +322,21 @@ def _map_and_format(data, ref_map, ti, si, r2i, se2i):
             return (rf[0], tuple(fmt(arg) for arg in rf[1]))
         else:
             assert type(rf) == str
-            is_var = ref_map[rf]['is_univ_quantified'] or ref_map[rf]['is_wh_quantified']
 
-            term_char = "p" if ref_map[rf]["is_pred"] else "x"
-            term_char = term_char.upper() if is_var else term_char
-            turn_clause_tag = f"t{ti}c{se2i[(si, ref_map[rf]['source_ind'])]}"
+            if rf.startswith("x"):
+                # Instance referents, may be variable or constant for now
+                is_var = ref_map[rf]['univ_quantified'] or ref_map[rf]['wh_quantified']
 
-            return f"{term_char}{r2i[rf]}{turn_clause_tag}"
+                term_char = "p" if ref_map[rf]["is_pred"] else "x"
+                term_char = term_char.upper() if is_var else term_char
+                turn_clause_tag = f"t{ti}c{se2ci[(si, ref_map[rf]['source_evt'])]}"
+
+                return f"{term_char}{r2i[rf]}{turn_clause_tag}"
+            else:
+                # Eventuality referents, always constant, referring to clauses that
+                # already took place and are part of dialogue records
+                assert rf.startswith("e")
+                return r2i[rf]
 
     process_conjuncts = lambda conjuncts: tuple(
         (cnjt[0], cnjt[1], tuple(fmt(arg) for arg in cnjt[2]), cnjt[3])
