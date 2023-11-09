@@ -217,9 +217,6 @@ class ITLAgent:
         # For showing visual UI on only the first time
         vis_ui_on = self.vis_ui_on
 
-        # Index of latest dialogue turn
-        ti_last = len(self.lang.dialogue.record)
-
         # Previous dialogue record and visual context from currently stored values
         prev_dialogue_state = self.lang.dialogue.export_as_dict()
         prev_translated = self.symbolic.translate_dialogue_content(prev_dialogue_state)
@@ -227,6 +224,28 @@ class ITLAgent:
         prev_pr_prog = self.symbolic.concl_vis[1][0] if self.symbolic.concl_vis else None
         prev_kb = self.kb_snap
         prev_context = (prev_scene, prev_pr_prog, prev_kb)
+
+        # Some cleaning steps needed whenever visual context changes
+        if self.vision.new_input_provided:
+            # Prior to resetting visual context, store current one into the episodic
+            # memory (visual perceptions & user language inputs), in the form of
+            # LP^MLN program fragments
+            if (self.vision.scene is not None and
+                len(self.vision.scene) > 1 and
+                self.symbolic.concl_vis_lang is not None):
+
+                pr_prog, _, dl_prog = self.symbolic.concl_vis_lang[1]
+                self.episodic_memory.append((pr_prog, dl_prog))
+            
+            # Refresh dialogue manager & symbolic reasoning module states
+            self.lang.dialogue.refresh()
+            self.symbolic.refresh()
+
+            # Update KB snapshot on episode-basis
+            self.kb_snap = copy.deepcopy(self.lt_mem.kb)
+
+        # Index of latest dialogue turn
+        ti_last = len(self.lang.dialogue.record)
 
         # Set of new visual concepts (equivalently, neologisms) newly registered
         # during the loop
@@ -242,17 +261,6 @@ class ITLAgent:
             ###################################################################
 
             if self.vision.new_input_provided or xb_updated:
-                # Prior to resetting visual context, store current one into the
-                # episodic memory (visual perceptions & user language inputs),
-                # in the form of LP^MLN program fragments
-                if self.vision.new_input_provided:
-                    if (self.vision.scene is not None and
-                        len(self.vision.scene) > 1 and
-                        self.symbolic.concl_vis_lang is not None):
-
-                        pr_prog, _, dl_prog = self.symbolic.concl_vis_lang[1]
-                        self.episodic_memory.append((pr_prog, dl_prog))
-
                 # Ground raw visual perception with scene graph generation module
                 self.vision.predict(
                     self.vision.last_input, self.lt_mem.exemplars,
@@ -261,17 +269,14 @@ class ITLAgent:
                 vis_ui_on = False
 
             if self.vision.new_input_provided:
-                # Inform the language module of the visual context
+                # Inform the language module of the new visual context
                 self.lang.situate(self.vision.scene)
-                self.symbolic.refresh()
 
-                # Update KB snapshot on episode-basis
-                self.kb_snap = copy.deepcopy(self.lt_mem.kb)
-
-            # Understand the user input in the context of the dialogue
             if self.lang.new_input_provided:
                 # Revert to pre-update dialogue state at the start of each loop iteration
                 self.lang.dialogue.record = self.lang.dialogue.record[:ti_last]
+
+                # Understand the user input in the context of the dialogue
                 self.lang.understand(self.lang.last_input, pointing=pointing)
 
             ents_updated = False
@@ -304,6 +309,7 @@ class ITLAgent:
                 exported_kb = self.lt_mem.kb.export_reasoning_program()
                 visual_evidence = self.lt_mem.kb.visual_evidence_from_scene(self.vision.scene)
                 self.symbolic.sensemake_vis(exported_kb, visual_evidence)
+                self.lang.dialogue.sensemaking_v_snaps[ti_last] = self.symbolic.concl_vis
 
             if self.lang.new_input_provided:
                 # Reference & word sense resolution to connect vision & discourse
@@ -314,6 +320,8 @@ class ITLAgent:
                 if self.vision.scene is not None:
                     # Sensemaking from vision & language input
                     self.symbolic.sensemake_vis_lang(updated_dialogue_state)
+                    self.lang.dialogue.sensemaking_vl_snaps[ti_last] = \
+                        self.symbolic.concl_vis_lang
 
             ###################################################################
             ##           Identify & exploit learning opportunities           ##

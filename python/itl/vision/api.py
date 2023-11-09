@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 WB_PREFIX = "wandb://"
-DEF_CON = 0.8       # Default confidence value in absence of binary concept classifier
+DEF_CON = 0.6       # Default confidence value in absence of binary concept classifier
 
 class VisionModule:
 

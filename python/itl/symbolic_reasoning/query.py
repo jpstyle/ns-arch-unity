@@ -123,23 +123,33 @@ def query(bjt, q_vars, event, restrictors):
 
     # Obtain unnormalized potential table
     unnorm_potentials = {
-        assig: _query_bjt(bjt, q_key) for assig, q_key in query_keys.items()
+        assig: _query_wrapper(bjt, q_key) for assig, q_key in query_keys.items()
     }
 
-    # Compute normalized marginals
-    answers = {
+    # Compute normalized marginals, then fetch probability scores for the event
+    prob_scores = {
         assig: (
-            p_table[query_keys[assig]],
-            sum(p_table.values(), Polynomial(float_val=0.0))
+            pt_table,
+            sum(pt_table.values(), Polynomial(float_val=0.0))
         )
-        for assig, p_table in unnorm_potentials.items()
+        for assig, pt_table in unnorm_potentials.items()
+    }
+    prob_scores = {
+        assig: {
+            ev: ((unnorm / Z).at_limit(), ev==query_keys[assig])
+            for ev, unnorm in pt_table.items()
+        }
+        for assig, (pt_table, Z) in prob_scores.items()
     }
     answers = {
-        assig: (unnorm / Z).at_limit()
-        for assig, (unnorm, Z) in answers.items()
+        assig: prob_table[query_keys[assig]][0]
+        for assig, prob_table in prob_scores.items()
     }
 
-    return answers
+    # Return both (answers, probability scores) and full score tables for reference;
+    # `answers` is basically an abridged version of `prob_scores` that only lists
+    # probabilities for the queried event only
+    return answers, prob_scores
 
 
 def _ev_ins_to_query_key(bjt, ev_ins):
@@ -180,16 +190,11 @@ def _ev_ins_to_query_key(bjt, ev_ins):
     return frozenset(query_key)
 
 
-def _query_bjt(bjt, q_key):
+def _query_wrapper(bjt, q_key):
     """
-    Subroutine for obtaining an appropriate table of unnormalized potential values
-    for the provided query keys. Queries may be:
-        1) in-clique (i.e. there exists a BJT node that contains all key nodes),
-            in which case we can simply fetch the table from the corresponding
-            node's "output_belief" storage, marginalizing if necessary
-        2) out-clique, in which case keys are first divided by belonging connected
-            components, subtrees are taken for each component, and variable elim.
-            have to be performed as necessary
+    Wrapper subroutine for obtaining an appropriate table of unnormalized potential
+    values for the provided query keys. Handle unsatisfiable & trivially satisfiable
+    queries, or invoke the 'proper' query method.
     """
     if q_key is None:
         # Unsatisfiable query
@@ -199,14 +204,4 @@ def _query_bjt(bjt, q_key):
         # Trivially satisfiable query
         return { q_key: Polynomial(float_val=1.0) }
 
-    relevant_atoms = frozenset({abs(n) for n in q_key})
-    if len(q_key) == 1:
-        # Simpler case of single-item key, just fetch the smallest BJT node covering
-        # the key node, which always exists, and is guaranteed to be as small as possible
-        # (since all singleton node sets are included during construction of BJT)
-        # Corresponding node in BJT; there can be multiple, pick any
-        bjt_node = [n for n in bjt.nodes if relevant_atoms==n[0]][0]
-        return bjt.nodes[bjt_node]["output_beliefs"]
-    else:
-        # General case; call bjt_query
-        return bjt_query(bjt, q_key)
+    return bjt_query(bjt, q_key)

@@ -31,9 +31,6 @@ class LanguageModule:
         if vis_scene is None:
             return
 
-        # Start a dialogue information state anew
-        self.dialogue.refresh()
-
         # Incorporate parsed scene graph into dialogue context
         for oi, obj in vis_scene.items():
             mask = obj["pred_mask"]

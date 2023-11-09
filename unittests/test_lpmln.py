@@ -1,10 +1,10 @@
+""" Test suite for basic probabilistic reasoning by LP^MLN """
 import unittest
 
 import numpy as np
 
 from python.itl.lpmln import Literal, Rule, Program
 from python.itl.lpmln.program.compile import bjt_query
-from python.itl.memory.kb import KnowledgeBase
 
 
 class TestProgramCompile(unittest.TestCase):
@@ -21,6 +21,8 @@ class TestProgramCompile(unittest.TestCase):
         # 0.9/0.1 when exp'ed
         p_ind = bjt.graph["atoms_map"][Literal("p", [])]
         p_singleton = frozenset({p_ind})
+        bjt_query(bjt, p_singleton)         # Run belief propagation
+
         bjt_node = [n for n in bjt.nodes if p_singleton==n[0]][0]
         p_output = bjt.nodes[bjt_node]["output_beliefs"]
 
@@ -42,6 +44,8 @@ class TestProgramCompile(unittest.TestCase):
         # should equal 0.9/0.1 * 0.8/0.2 when exp'ed
         q_ind = bjt.graph["atoms_map"][Literal("q", [])]
         q_singleton = frozenset({q_ind})
+        bjt_query(bjt, q_singleton)         # Run belief propagation
+
         bjt_node = [n for n in bjt.nodes if q_singleton==n[0]][0]
         q_output = bjt.nodes[bjt_node]["output_beliefs"]
 
@@ -67,6 +71,8 @@ class TestProgramCompile(unittest.TestCase):
         # should equal 0.9/0.1 * 0.8/0.2 when exp'ed
         p_ind = bjt.graph["atoms_map"][Literal("p", [])]
         p_singleton = frozenset({p_ind})
+        bjt_query(bjt, p_singleton)         # Run belief propagation
+
         bjt_node = [n for n in bjt.nodes if p_singleton==n[0]][0]
         p_output = bjt.nodes[bjt_node]["output_beliefs"]
 
@@ -141,6 +147,8 @@ class TestProgramCompile(unittest.TestCase):
         # Weight for {s} in the singleton node should equal 1296 when exp'ed
         s_ind = bjt.graph["atoms_map"][Literal("s", [])]
         s_singleton = frozenset({s_ind})
+        bjt_query(bjt, s_singleton)         # Run belief propagation
+
         bjt_node = [n for n in bjt.nodes if s_singleton==n[0]][0]
         s_output = bjt.nodes[bjt_node]["output_beliefs"]
 
@@ -193,9 +201,14 @@ class TestProgramCompile(unittest.TestCase):
         # Weight for {t(1)} in the singleton node should equal 432 when exp'ed
         t1_ind = bjt.graph["atoms_map"][Literal("t", [(1, False)])]
         t1_singleton = frozenset({t1_ind})
+        bjt_query(bjt, t1_singleton)        # Run belief propagation
+
         bjt_node = [n for n in bjt.nodes if t1_singleton==n[0]][0]
         t1_output = bjt.nodes[bjt_node]["output_beliefs"]
 
         self.assertAlmostEqual(
             float(np.exp(t1_output[t1_singleton].primitivize())), 432
         )
+
+if __name__ == '__main__':
+    unittest.main()

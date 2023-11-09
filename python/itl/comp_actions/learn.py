@@ -46,7 +46,7 @@ def identify_mismatch(agent, rule):
 
         # Make a yes/no query to obtain the likelihood of content
         bjt_v, _ = agent.symbolic.concl_vis
-        q_response = agent.symbolic.query(bjt_v, None, rule)
+        q_response, _ = agent.symbolic.query(bjt_v, None, rule)
         ev_prob = q_response[()]
 
         surprisal = -math.log(ev_prob + EPS)

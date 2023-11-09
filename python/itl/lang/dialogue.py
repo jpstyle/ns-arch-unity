@@ -29,6 +29,11 @@ class DialogueManager:
         #   3) original user input string
         self.record = []
 
+        # Sensemaking results after processing each dialogue input, indexed by dialogue
+        # turns
+        self.sensemaking_v_snaps = {}
+        self.sensemaking_vl_snaps = {}
+
         self.unanswered_Qs = set()
         if hasattr(self, "acknowledged_stms"):
             # If acknowledgement info exists for current record when refreshing, outdate

@@ -17,6 +17,7 @@ logic programs (written in the language of weighted ASP), which are solved with 
 propagation method.
 """
 from .query import query
+from .attribute import attribute
 from ..lpmln import Literal, Rule, Program
 from ..lpmln.utils import wrap_args, flatten_cons_ante
 
@@ -537,3 +538,7 @@ class SymbolicReasonerModule:
     @staticmethod
     def query(bjt, q_vars, event, restrictors=None):
         return query(bjt, q_vars, event, restrictors or {})
+
+    @staticmethod
+    def attribute(bjt, target_event, evidence):
+        return attribute(bjt, target_event, evidence)

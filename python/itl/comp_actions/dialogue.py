@@ -45,18 +45,30 @@ def prepare_answer_Q(agent, utt_pointer):
     # The question is about to be answered
     agent.lang.dialogue.unanswered_Qs.remove(utt_pointer)
 
+    ti, ci = utt_pointer
     dialogue_state = agent.lang.dialogue.export_as_dict()
     translated = agent.symbolic.translate_dialogue_content(dialogue_state)
 
+    if dialogue_state["clause_info"][f"t{ti}c{ci}"]["domain_describing"]:
+        _answer_domain_Q(agent, utt_pointer, dialogue_state, translated)
+    else:
+        _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated)
+
+def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
+    """
+    Helper method factored out for computation of answers to an in-domain question;
+    i.e. having to do with the current states of affairs of the task domain.
+    """
     ti, ci = utt_pointer
-    (presup, question), _ = translated[ti][1][ci]
+    presup, question = translated[ti][1][ci][0]
     assert question is not None
 
     q_vars, (cons, ante) = question
+
     bjt_v, _ = agent.symbolic.concl_vis
     # bjt_vl, _ = symbolic.concl_vis_lang
 
-    # # New dialogue turn & clause index for the answer to be provided
+    # New dialogue turn & clause index for the answer to be provided
     ti_new = len(agent.lang.dialogue.record)
     ci_new = 0
 
@@ -112,14 +124,17 @@ def prepare_answer_Q(agent, utt_pointer):
             exported_kb = agent.lt_mem.kb.export_reasoning_program()
             visual_evidence = agent.lt_mem.kb.visual_evidence_from_scene(agent.vision.scene)
             agent.symbolic.sensemake_vis(exported_kb, visual_evidence)
+            agent.lang.dialogue.sensemaking_v_snaps[ti_new-1] = agent.symbolic.concl_vis
+
             agent.symbolic.resolve_symbol_semantics(dialogue_state, agent.lt_mem.lexicon)
-            # symbolic.sensemake_vis_lang(dialogue_state)
+            # agent.symbolic.sensemake_vis_lang(dialogue_state)
+            # agent.lang.dialogue.sensemaking_vl_snaps[ti_new-1] = agent.symbolic.concl_vis_lang
 
             bjt_v, _ = agent.symbolic.concl_vis
             # bjt_vl, _ = symbolic.concl_vis_lang
 
     # Compute raw answer candidates by appropriately querying compiled BJT
-    answers_raw = agent.symbolic.query(bjt_v, q_vars, (cons, ante), restrictors)
+    answers_raw, _ = agent.symbolic.query(bjt_v, q_vars, (cons, ante), restrictors)
 
     # Pick out an answer to deliver; maximum confidence
     if len(answers_raw) > 0:
@@ -197,9 +212,117 @@ def prepare_answer_Q(agent, utt_pointer):
         (answer_logical_form, None), answer_translated, { (0, 4): dem_mask }
     ))
 
+def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
+    """
+    Helper method factored out for computation of answers to a question that needs
+    procedures different from those for in-domain questions for obtaining. Currently
+    includes why-questions.
+    """
+    ti, ci = utt_pointer
+    _, question = translated[ti][1][ci][0]
+    assert question is not None
+
+    q_vars, (cons, ante) = question
+
+    # New dialogue turn & clause index for the answer to be provided
+    ti_new = len(agent.lang.dialogue.record)
+    ci_new = 0
+
+    if any(lit.name=="*_expl" for lit in cons):
+        # Answering why-question
+
+        # Extract target event to explain from the question; fetch the explanandum
+        # statement
+        expl_lits = [lit for lit in cons if lit.name=="*_expl"]
+        expd_utts = [
+            re.search("^t(\d+)c(\d+)$", lit.args[1][0])
+            for lit in expl_lits
+        ]
+        expd_utts = [
+            (int(clause_ind.group(1)), int(clause_ind.group(2)))
+            for clause_ind in expd_utts
+        ]
+        expd_contents = [
+            translated[ti_exd][1][ci_exd][0]
+            for ti_exd, ci_exd in expd_utts
+        ]
+
+        # Can treat "why ~" and "why did you think ~" as the same for our purpose
+        self_think_lits = [
+            [
+                lit for lit in expd_cons[0]
+                if lit.name=="*_think" and lit.args[0][0]=="_self"
+            ]
+            for expd_cons, _ in expd_contents
+        ]
+        st_expd_utts = [
+            [
+                re.search("^t(\d+)c(\d+)$", st_lit.args[1][0])
+                for st_lit in per_expd
+            ]
+            for per_expd in self_think_lits
+        ]
+        st_expd_utts = [
+            [
+                (int(clause_ind.group(1)), int(clause_ind.group(2)))
+                for clause_ind in per_expd
+            ]
+            for per_expd in st_expd_utts
+        ]
+        # Assume all explananda consist of consequent-only rules
+        st_expd_contents = [
+            translated[ti_exd][1][ci_exd][0][0][0]
+            for per_expd in st_expd_utts
+            for ti_exd, ci_exd in per_expd
+        ]
+        nst_expd_contents = [
+            tuple(
+                lit for lit in expd_cons[0]
+                if not (lit.name=="*_think" and lit.args[0][0]=="_self")
+            )
+            for expd_cons, _ in expd_contents
+        ]
+        target_events = nst_expd_contents + st_expd_contents
+
+        # Fetch the BJT based on which the explanandum (i.e. explanation target)
+        # utterance have been made; that is, shouldn't use BJT compiled *after*
+        # agent has uttered the explanandum statement
+        latest_reasoning_ind = max(
+            snap_ti for snap_ti in dialogue_state["sensemaking_v_snaps"]
+            if snap_ti < ti
+        )
+        bjt_v, _ = dialogue_state["sensemaking_v_snaps"][latest_reasoning_ind]
+
+        # Specify evidence atoms as candidate explanans; here, virtual evidence atoms
+        # standing for visual observations. (May be more selective in choosing the
+        # candidate explanantia by virtue of KB rules perhaps?)
+        evidence_atoms = {
+            atm for atm in bjt_v.graph["atoms_map"]
+            if atm.name.startswith("v_cls") or atm.name.startswith("v_att")
+                # Considering visual evidence for class & attributes concepts only,
+                # which are neurally predicted
+        }
+        evidence_atoms = {
+            atm for atm in evidence_atoms
+            if not (atm.name in [f"v_cls_{ci}" for ci in [0,4,5,6,7]])
+                # Constrain the potential explanans so as to prevent 'unhelpful'
+                # answers; in particular, truck types as explanations
+        }
+        evidence_atoms = tuple(evidence_atoms)
+
+        for tgt_ev in target_events:
+            if len(tgt_ev) == 0: continue
+
+            # Obtain all sufficient explanations by causal attribution
+            suff_expls = agent.symbolic.attribute(bjt_v, tgt_ev, evidence_atoms)
+
+    else:
+        # Don't know how to handle other non-domain questions
+        raise NotImplementedError
+
 def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
     """
-    Factored helper method for extracting specifications for visual search,
+    Helper method factored out for extracting specifications for visual search,
     based on the agent's current knowledge-base entries and some sensemaking
     result provided as a compiled binary join tree (BJT)
     """
@@ -335,7 +458,7 @@ def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
 
             # Check if the agent is already (visually) aware of the potential search
             # targets; if so, disregard this one
-            check_result = agent.symbolic.query(
+            check_result, _ = agent.symbolic.query(
                 ref_bjt, tuple((v, False) for v in search_vars), (lits, None)
             )
             if len(check_result) > 0:

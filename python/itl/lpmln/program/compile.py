@@ -36,72 +36,6 @@ def compile(prog):
     Returns a binary join tree populated with the required values resulting from belief
     propagation.
     """
-    # Construct a binary join tree that contains all procedural information and data
-    # needed for belief propagation
-    bjt = _construct_BJT(prog)
-
-    if bjt is not None:
-        # Run modified Shafer-Shenoy belief propagation on the constructed binary
-        # join tree, filling in the output (unnormalized) belief storage registers
-        output_atom_subsets = [frozenset({atm}) for atm in bjt.graph["atoms_map_inv"]]
-
-        for atom_subset in output_atom_subsets:
-            _belief_propagation(bjt, atom_subset)
-
-    return bjt
-
-
-def bjt_query(bjt, q_key):
-    """ Query a BJT for (unnormalized) belief table """
-    relevant_nodes = frozenset({abs(n) for n in q_key})
-    relevant_cliques = [n for n in bjt.nodes if relevant_nodes <= n[0]]
-
-    if len(relevant_cliques) > 0:
-        # In-clique query; find the BJT node with the smallest node set that
-        # comply with the key
-        smallest_node = sorted(relevant_cliques, key=lambda x: len(x[0]))[0]
-        _belief_propagation(bjt, smallest_node[0])
-        beliefs = bjt.nodes[smallest_node]["output_beliefs"]
-
-        # Marginalize and return
-        return _marginalize_simple(beliefs, relevant_nodes)
-    else:
-        # Out-clique query; first divide query key node set by belonging components
-        # in the BJT
-        components = {
-            frozenset.union(*comp): bjt.subgraph(comp)
-            for comp in nx.connected_components(bjt.to_undirected())
-        }
-
-        divided_keys_and_subtrees = {
-            frozenset({l for l in q_key if abs(l) in comp_nodes}): sub_bjt
-            for comp_nodes, sub_bjt in components.items()
-            if len(comp_nodes & relevant_nodes) > 0
-        }
-
-        if len(divided_keys_and_subtrees) == 1:
-            # All query key nodes in the same component; variable elimination needed
-            raise NotImplementedError
-        else:
-            # Recursively query each subtree with corresponding 'subkey'
-            query_results = {
-                subkey: bjt_query(sub_bjt, subkey)
-                for subkey, sub_bjt in divided_keys_and_subtrees.items()
-            }
-
-            # Combine independent query results
-            return _combine_factors_simple(list(query_results.values()))
-
-
-class _Observer:
-    """ For tracking added grounded rules """
-    def __init__(self):
-        self.rules = []
-    def rule(self, choice, head, body):
-        self.rules.append((head, body, choice))
-
-
-def _construct_BJT(prog):
     bjt = nx.DiGraph()
 
     if _grounded_facts_only([r for r, _, _ in prog.rules]):
@@ -297,7 +231,73 @@ def _construct_BJT(prog):
                     for case in cases
                 }
 
+    # Mark 'not-up-to-date' to all nodes & edges (i.e., values nonexistent or
+    # potentially incorrect b/c input changed)
+    for n in bjt.nodes:
+        bjt.nodes[n]["update_needed"] = True
+        for e in bjt.in_edges(n):
+            bjt.edges[e]["update_needed"] = True
+
     return bjt
+
+
+def bjt_query(bjt, q_key):
+    """ Query a BJT for (unnormalized) belief table """
+    relevant_nodes = frozenset({abs(n) for n in q_key})
+    relevant_cliques = [n for n in bjt.nodes if relevant_nodes <= n[0]]
+
+    if len(relevant_cliques) > 0:
+        # In-clique query; find the BJT node with the smallest node set that
+        # comply with the key
+        smallest_node = sorted(relevant_cliques, key=lambda x: len(x[0]))[0]
+
+        if bjt.nodes[smallest_node]["update_needed"]:
+            belief_propagation(bjt, smallest_node[0])
+            assert not bjt.nodes[smallest_node]["update_needed"]
+        beliefs = bjt.nodes[smallest_node]["output_beliefs"]
+
+        # Marginalize and return
+        return _marginalize_simple(beliefs, relevant_nodes)
+
+    else:
+        # Not really used for now. Make sure later, when needed, this works correctly;
+        # in particular, ensure it works alright with the newly introduced incremental
+        # belief propagation feature
+        raise NotImplementedError
+
+        # Out-clique query; first divide query key node set by belonging components
+        # in the BJT
+        components = {
+            frozenset.union(*comp): bjt.subgraph(comp)
+            for comp in nx.connected_components(bjt.to_undirected())
+        }
+
+        divided_keys_and_subtrees = {
+            frozenset({l for l in q_key if abs(l) in comp_nodes}): sub_bjt
+            for comp_nodes, sub_bjt in components.items()
+            if len(comp_nodes & relevant_nodes) > 0
+        }
+
+        if len(divided_keys_and_subtrees) == 1:
+            # All query key nodes in the same component; variable elimination needed
+            raise NotImplementedError
+        else:
+            # Recursively query each subtree with corresponding 'subkey'
+            query_results = {
+                subkey: bjt_query(sub_bjt, subkey)
+                for subkey, sub_bjt in divided_keys_and_subtrees.items()
+            }
+
+            # Combine independent query results
+            return _combine_factors_simple(list(query_results.values()))
+
+
+class _Observer:
+    """ For tracking added grounded rules """
+    def __init__(self):
+        self.rules = []
+    def rule(self, choice, head, body):
+        self.rules.append((head, body, choice))
 
 
 def _grounded_facts_only(rules):
@@ -470,7 +470,7 @@ def _rule_to_potential(rule, r_pr, weighting, atoms_map):
             frozenset(case): {
                 # Rule weight of exp(w) missed in case of deductive violations (i.e.
                 # when body is true but head is not)
-                pos_clearances[case]:  Polynomial(float_val=1.0)
+                pos_clearances[case]: Polynomial(float_val=1.0)
                     if (rb_by_ind <= case) and (len(rh_by_ind)==0 or not rh_by_ind <= case)
                     else Polynomial.from_primitive(r_weight)
             }
@@ -490,11 +490,17 @@ def _rule_to_potential(rule, r_pr, weighting, atoms_map):
     return potential
 
 
-def _belief_propagation(bjt, atom_subset):
+def belief_propagation(bjt, atom_subset):
     """
-    (Modified) Shafer-Shenoy belief propagation on binary join trees, whose input
-    potential storage registers are properly filled in. Populate output belief storage
-    registers as demanded by node_set.
+    (Modified) Shafer-Shenoy belief propagation on binary join trees, whose
+    input potential storage registers are properly filled in. Populate output
+    belief storage registers as demanded by `atom_subset`.
+
+    Lazy, incremental belief propagation is achieved by use of "updated_needed"
+    fields on nodes and edges. On nodes, true "updated_needed" indicates its
+    "output_beliefs" value is nonexistent or incorrect due to changes in some
+    input potentials. Similarly, true "updated_needed" on edges indicates its
+    message for the edge direction is nonexistent or incorrect.
     """
     # Corresponding node in BJT; there can be multiple, pick any
     bjt_node = [n for n in bjt.nodes if atom_subset==n[0]][0]
@@ -505,11 +511,10 @@ def _belief_propagation(bjt, atom_subset):
     # Fetch incoming messages for the BJT node, if any
     incoming_messages = []
     for from_node, _, msg in bjt.in_edges(bjt_node, data="message"):
-        if msg is None:
-            # If message not computed already, compute it (once and for all)
-            # and store it in the directed edge's storage register
-            _compute_message(bjt, from_node, bjt_node)
-            msg = bjt.edges[(from_node, bjt_node)]["message"]
+        # Message will be computed if nonexistent or outdated; otherwise,
+        # cached value will be used
+        _compute_message(bjt, from_node, bjt_node)
+        msg = bjt.edges[(from_node, bjt_node)]["message"]
 
         incoming_messages.append(msg)
 
@@ -543,8 +548,10 @@ def _belief_propagation(bjt, atom_subset):
         for case, inner in output_beliefs.items()
     }
 
-    # Populate the output belief storage register for the BJT node
+    # Populate the output belief storage register for the BJT node, and mark
+    # node as up-to-date
     bjt.nodes[bjt_node]["output_beliefs"] = output_beliefs
+    bjt.nodes[bjt_node]["update_needed"] = False
 
 
 def _compute_message(bjt, from_node, to_node):
@@ -553,6 +560,11 @@ def _compute_message(bjt, from_node, to_node):
     message from one BJT node to another; populates the corresponding directed edge's
     message storage register
     """
+    if not bjt.edges[(from_node, to_node)]["update_needed"]:
+        # Can use existing message value, saving computation
+        assert "message" in bjt.edges[(from_node, to_node)]
+        return
+
     # Fetch input potentials for the BJT node
     input_potential = bjt.nodes[from_node]["input_potential"]
 
@@ -562,11 +574,10 @@ def _compute_message(bjt, from_node, to_node):
     for neighbor_node, _, msg in bjt.in_edges(from_node, data="message"):
         if neighbor_node == to_node: continue    # Disregard to_node
 
-        if msg is None:
-            # If message not computed already, compute it (once and for all)
-            # and store it in the directed edge's storage register
-            _compute_message(bjt, neighbor_node, from_node)
-            msg = bjt.edges[(neighbor_node, from_node)]["message"]
+        # Message will be computed if nonexistent or outdated; otherwise,
+        # cached value will be used
+        _compute_message(bjt, neighbor_node, from_node)
+        msg = bjt.edges[(neighbor_node, from_node)]["message"]
 
         incoming_messages.append(msg)
     
@@ -606,8 +617,10 @@ def _compute_message(bjt, from_node, to_node):
             for case, inner in outgoing_msg.items()
         }
 
-    # Populate the outgoing message storage register for the BJT edge
+    # Populate the outgoing message storage register for the BJT edge, and mark
+    # edge as up-to-date
     bjt.edges[(from_node, to_node)]["message"] = outgoing_msg
+    bjt.edges[(from_node, to_node)]["update_needed"] = False
 
 
 def _combine_factors_outer(factors):
