@@ -17,7 +17,7 @@ from ..lpmln import Literal, Polynomial
 LOW = 0.25
 HIGH = 0.75
 
-def attribute(bjt, target_event, evidence_atoms, threshold=0.0):
+def attribute(bjt, target_event, evidence_atoms, threshold):
     """
     Query a BJT compiled from LP^MLN program to attribute why the specified target
     event holds, in terms of specified evidence atoms. The provided BJT might or
@@ -53,8 +53,13 @@ def attribute(bjt, target_event, evidence_atoms, threshold=0.0):
     # Compute mode and label for the top element
     _, prob_scores = query(bjt, None, (target_event, None), {})
 
-    # Sanity check; corresponding probability value should be the highest among
-    # possible outcomes and should be above the threshold
+    # Sanity check;
+    #   1) Corresponding probability value should be the highest among possible
+    #      outcomes; i.e., agent itself should be believing the target event is
+    #      the most probable outcome in the marginal table)
+    #   2) Corresponding probability value should be above the threshold; i.e.,
+    #      in addition to the necessary condition 1), the target event should
+    #      be 'sufficiently likely'
     tgt_prob = [prob for prob, is_tgt in prob_scores[()].values() if is_tgt][0]
     mode_prob = max(prob for prob, _ in prob_scores[()].values())
     assert tgt_prob == mode_prob and tgt_prob > threshold
@@ -190,12 +195,12 @@ def attribute(bjt, target_event, evidence_atoms, threshold=0.0):
             # invoking incremental belief propagation as needed
             _, prob_scores = query(bjt_new, None, (target_event, None), {})
 
-            # Mode check and labeling
-            tgt_prob = [prob for prob, is_tgt in prob_scores[()].values() if is_tgt][0]
-            mode_prob = max(prob for prob, _ in prob_scores[()].values())
-
             # Record the updated BJT to lattice along with the counterfactual case
             expl_lattice[node][1][cf_case] = bjt_new
+
+            # Mode & threshold check for labeling
+            tgt_prob = [prob for prob, is_tgt in prob_scores[()].values() if is_tgt][0]
+            mode_prob = max(prob for prob, _ in prob_scores[()].values())
 
             if not (tgt_prob == mode_prob and tgt_prob > threshold):
                 # No further processing necessary for our purpose, can break

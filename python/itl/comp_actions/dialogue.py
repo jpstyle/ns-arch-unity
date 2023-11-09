@@ -120,15 +120,26 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
                 specs=search_specs, visualize=False, lexicon=agent.lt_mem.lexicon
             )
 
+            # If new entities is registered as a result of visual search, update env
+            # referent list
+            new_ents = set(agent.vision.scene) - set(agent.lang.dialogue.referents["env"])
+            for ent in new_ents:
+                mask = agent.vision.scene[ent]["pred_mask"]
+                agent.lang.dialogue.referents["env"][ent] = {
+                    "mask": mask,
+                    "area": mask.sum().item()
+                }
+                agent.lang.dialogue.referent_names[ent] = ent
+
             #  ... and another round of sensemaking
             exported_kb = agent.lt_mem.kb.export_reasoning_program()
             visual_evidence = agent.lt_mem.kb.visual_evidence_from_scene(agent.vision.scene)
             agent.symbolic.sensemake_vis(exported_kb, visual_evidence)
-            agent.lang.dialogue.sensemaking_v_snaps[ti_new-1] = agent.symbolic.concl_vis
+            agent.lang.dialogue.sensemaking_v_snaps[ti_new] = agent.symbolic.concl_vis
 
             agent.symbolic.resolve_symbol_semantics(dialogue_state, agent.lt_mem.lexicon)
             # agent.symbolic.sensemake_vis_lang(dialogue_state)
-            # agent.lang.dialogue.sensemaking_vl_snaps[ti_new-1] = agent.symbolic.concl_vis_lang
+            # agent.lang.dialogue.sensemaking_vl_snaps[ti_new] = agent.symbolic.concl_vis_lang
 
             bjt_v, _ = agent.symbolic.concl_vis
             # bjt_vl, _ = symbolic.concl_vis_lang
@@ -313,8 +324,33 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
         for tgt_ev in target_events:
             if len(tgt_ev) == 0: continue
 
+            # Only considers singleton events right now
+            assert len(tgt_ev) == 1
+
+            # Manually select 'competitor' atoms that could've been the answer
+            # in place of the true one (not necessarily mutually exclusive);
+            # this is a band-aid solution right now as we are manually providing
+            # the truck subtype predicates, may need a more principled selection
+            # logic (by referring to the question that invoked the answer, etc.)
+            competing_evs = [
+                atm for atm in bjt_v.graph["atoms_map"]
+                if (
+                    atm.name in [f"v_cls_{ci}" for ci in [4,5,6,7]] and
+                    atm.name!=f"v_{tgt_ev[0].name}" and
+                    atm.args==tgt_ev[0].args
+                )
+            ]
+            # Determine the probability threshold to be provided into the causal
+            # attribution procedure method
+            ans_threshold = 0.0
+            for ev_atm in competing_evs:
+                ans, _ = agent.symbolic.query(bjt_v, None, ((ev_atm,), None), {})
+                ans_threshold = max(ans_threshold, ans[()])
+
             # Obtain all sufficient explanations by causal attribution
-            suff_expls = agent.symbolic.attribute(bjt_v, tgt_ev, evidence_atoms)
+            suff_expls = agent.symbolic.attribute(
+                bjt_v, tgt_ev, evidence_atoms, threshold=ans_threshold
+            )
 
     else:
         # Don't know how to handle other non-domain questions

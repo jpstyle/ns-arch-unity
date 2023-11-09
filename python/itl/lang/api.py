@@ -71,7 +71,7 @@ class LanguageModule:
             r2i = {
                 rf: reind_per_src[v["source_evt"]][v["map_id"]]
                 for rf, v in ref_map.items()
-                if v is not None and rf.startswith("x")
+                if v is not None and (isinstance(rf, tuple) or rf.startswith("x"))
             }
             # For indexing individual clauses
             r2i.update({
@@ -135,7 +135,7 @@ class LanguageModule:
             for rel in parse["relations"]["by_id"].values():
 
                 # Hard assignments handling is for instance referents only
-                if rel["args"][0].startswith("x"):
+                if rel["args"][0].startswith("x") and rel["args"][0] in r2i:
                     ri = r2i[rel["args"][0]]
                     clause_tag = se2ci[(si, ref_map[rel["args"][0]]["source_evt"])]
                 else:

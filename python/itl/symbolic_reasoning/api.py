@@ -540,5 +540,5 @@ class SymbolicReasonerModule:
         return query(bjt, q_vars, event, restrictors or {})
 
     @staticmethod
-    def attribute(bjt, target_event, evidence):
-        return attribute(bjt, target_event, evidence)
+    def attribute(bjt, target_event, evidence, threshold=0.0):
+        return attribute(bjt, target_event, evidence, threshold)

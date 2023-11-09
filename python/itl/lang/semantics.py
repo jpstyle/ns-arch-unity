@@ -330,7 +330,8 @@ class SemanticParser:
                         # Positive message, as single tuple entry
                         args = msg[2]
                         for arg in args:
-                            if not arg.startswith("x"): continue
+                            if not (isinstance(arg, tuple) or arg.startswith("x")):
+                                continue
                             ref_map[arg]["source_evt"] = index_id
                     else:
                         # Negative message, consisting of negated msgs
@@ -338,7 +339,8 @@ class SemanticParser:
                         for nmsg in msg:
                             args = nmsg[2]
                             for arg in args:
-                                if not arg.startswith("x"): continue
+                                if not (isinstance(arg, tuple) or arg.startswith("x")):
+                                    continue
                                 ref_map[arg]["source_evt"] = index_id
 
             # We assume bare NPs (underspecified quant.) have universal reading when they are arg1
