@@ -10,8 +10,8 @@ class Lexicon:
         ("=", "*"),
         # Invokes concept instance (i.e., set element) check
         ("isinstance", "*"),
-        # Invokes concept entailment check (against KB)
-        ("entail", "*"),
+        # Invokes supertype-subtype check (against taxonomy KB)
+        ("subtype", "*"),
         # Invokes concept difference computation
         ("diff", "*"),
         # Pronoun indicator

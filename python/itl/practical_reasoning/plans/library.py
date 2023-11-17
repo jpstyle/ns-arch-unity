@@ -64,11 +64,6 @@ library = {
         {
             "action_method": Val(referrable=["comp_actions", "handle_mismatch"]),
             "action_args_getter": lambda x: (Val(data=x),)
-        },
-        # Generate whatever response queued
-        {
-            "action_method": Val(referrable=["lang", "generate"]),
-            "action_args_getter": lambda x: ()
         }
     ],
 

@@ -336,7 +336,7 @@ def _ground_and_index(prog):
                 for rarg, marg in zip(ra.args, ma.args)
             ])
         }
-        for ra in prog._rules_by_atom
+        for ra in prog.rules_by_atom
     }
 
     # Iterate over the grounded rules for the following processes:

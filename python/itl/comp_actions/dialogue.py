@@ -4,11 +4,12 @@ Implements dialogue-related composite actions
 import re
 import random
 from functools import reduce
+from itertools import permutations
 from collections import defaultdict
 
 from ..lpmln import Literal
 from ..lpmln.utils import flatten_cons_ante
-
+from ..memory.kb import KnowledgeBase
 
 def attempt_answer_Q(agent, utt_pointer):
     """
@@ -32,7 +33,7 @@ def attempt_answer_Q(agent, utt_pointer):
         return
     else:
         # Schedule to answer the question
-        agent.practical.agenda.append(("answer_Q", utt_pointer))
+        agent.practical.agenda.insert(0, ("answer_Q", utt_pointer))
         return
 
 def prepare_answer_Q(agent, utt_pointer):
@@ -63,7 +64,7 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
     presup, question = translated[ti][1][ci][0]
     assert question is not None
 
-    q_vars, (cons, ante) = question
+    q_vars, (q_cons, q_ante) = question
 
     bjt_v, _ = agent.symbolic.concl_vis
     # bjt_vl, _ = symbolic.concl_vis_lang
@@ -74,7 +75,7 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
 
     # Mapping from predicate variables to their associated entities
     pred_var_to_ent_ref = {
-        ql.args[0][0]: ql.args[1][0] for ql in cons
+        ql.args[0][0]: ql.args[1][0] for ql in q_cons
         if ql.name == "*_isinstance"
     }
 
@@ -98,14 +99,14 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
         #     for pred_ref, concepts in conc_conjs.items()
         # }
 
-        # Extract any '*_entail' statements and cast into appropriate query restrictors
+        # Extract any '*_subtype' statements and cast into appropriate query restrictors
         restrictors = {
             lit.args[0][0]: agent.lt_mem.kb.find_entailer_concepts(conc_conjs[lit.args[1][0]])
-            for lit in cons if lit.name=="*_entail"
+            for lit in q_cons if lit.name=="*_subtype"
         }
-        # Remove the '*_entail' statements from cons now that they are processed
-        cons = tuple(lit for lit in cons if lit.name!="*_entail")
-        question = (q_vars, (cons, ante))
+        # Remove the '*_subtype' statements from q_cons now that they are processed
+        q_cons = tuple(lit for lit in q_cons if lit.name!="*_subtype")
+        question = (q_vars, (q_cons, q_ante))
 
     # Ensure it has every ingredient available needed for making most informed judgements
     # on computing the best answer to the question. Specifically, scene graph outputs from
@@ -145,7 +146,7 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
             # bjt_vl, _ = symbolic.concl_vis_lang
 
     # Compute raw answer candidates by appropriately querying compiled BJT
-    answers_raw, _ = agent.symbolic.query(bjt_v, q_vars, (cons, ante), restrictors)
+    answers_raw, _ = agent.symbolic.query(bjt_v, q_vars, (q_cons, q_ante), restrictors)
 
     # Pick out an answer to deliver; maximum confidence
     if len(answers_raw) > 0:
@@ -191,37 +192,36 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
                     ans = ans.split("_")
                     ans = (int(ans[1]), ans[0])
 
-                    nl_val = agent.lt_mem.lexicon.d2s[ans][0][0]
+                    pred_name = agent.lt_mem.lexicon.d2s[ans][0][0]
 
                     # Update cognitive state w.r.t. value assignment and word sense
                     agent.symbolic.value_assignment[ri] = \
                         pred_var_to_ent_ref[qv]
                     tok_ind = (f"t{ti_new}", f"c{ci_new}", "rc", "0")
                     agent.symbolic.word_senses[tok_ind] = \
-                        ((conc_type_to_pos[ans[1]], nl_val), f"{ans[1]}_{ans[0]}")
+                        ((conc_type_to_pos[ans[1]], pred_name), f"{ans[1]}_{ans[0]}")
 
                     answer_logical_form = (
-                        ((nl_val, conc_type_to_pos[ans[1]], (ri,), False),), ()
+                        ((pred_name, conc_type_to_pos[ans[1]], (ri,), False),), ()
                     )
+
+                    # Split camelCased predicate name
+                    splits = re.findall(
+                        r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", pred_name
+                    )
+                    splits = [w[0].lower()+w[1:] for w in splits]
+                    answer_nl = f"This is a {' '.join(splits)}."
             else:
-                # Entity by their constant name handle
-                nl_val = ans
-
-                # TODO?: Logical form for this case
+                # Need to give some referring expression as answer; TODO? implement
                 raise NotImplementedError
-
-        # Split camelCased predicate name
-        splits = re.findall(r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", nl_val)
-        splits = [w[0].lower()+w[1:] for w in splits]
-        answer_translated = f"This is a {' '.join(splits)}."
 
     # Fetch segmentation mask for the demonstratively referenced entity
     dem_mask = dialogue_state["referents"]["env"][pred_var_to_ent_ref[qv]]["mask"]
 
     # Push the translated answer to buffer of utterances to generate
-    agent.lang.dialogue.to_generate.append((
-        (answer_logical_form, None), answer_translated, { (0, 4): dem_mask }
-    ))
+    agent.lang.dialogue.to_generate.append(
+        ((answer_logical_form, None), answer_nl, { (0, 4): dem_mask })
+    )
 
 def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
     """
@@ -233,18 +233,20 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
     _, question = translated[ti][1][ci][0]
     assert question is not None
 
-    q_vars, (cons, ante) = question
+    _, (q_cons, _) = question
 
     # New dialogue turn & clause index for the answer to be provided
     ti_new = len(agent.lang.dialogue.record)
     ci_new = 0
 
-    if any(lit.name=="*_expl" for lit in cons):
+    conc_type_to_pos = { "cls": "n" }
+
+    if any(lit.name=="*_expl" for lit in q_cons):
         # Answering why-question
 
         # Extract target event to explain from the question; fetch the explanandum
         # statement
-        expl_lits = [lit for lit in cons if lit.name=="*_expl"]
+        expl_lits = [lit for lit in q_cons if lit.name=="*_expl"]
         expd_utts = [
             re.search("^t(\d+)c(\d+)$", lit.args[1][0])
             for lit in expl_lits
@@ -302,24 +304,12 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
             snap_ti for snap_ti in dialogue_state["sensemaking_v_snaps"]
             if snap_ti < ti
         )
-        bjt_v, _ = dialogue_state["sensemaking_v_snaps"][latest_reasoning_ind]
-
-        # Specify evidence atoms as candidate explanans; here, virtual evidence atoms
-        # standing for visual observations. (May be more selective in choosing the
-        # candidate explanantia by virtue of KB rules perhaps?)
-        evidence_atoms = {
-            atm for atm in bjt_v.graph["atoms_map"]
-            if atm.name.startswith("v_cls") or atm.name.startswith("v_att")
-                # Considering visual evidence for class & attributes concepts only,
-                # which are neurally predicted
+        bjt_v, (kb_prog, _) = dialogue_state["sensemaking_v_snaps"][latest_reasoning_ind]
+        analyzed_kb_prog = KnowledgeBase.analyze_exported_reasoning_program(kb_prog)
+        scene_ents = {
+            a[0] for atm in bjt_v.graph["atoms_map"]
+            for a in atm.args if isinstance(a[0], str)
         }
-        evidence_atoms = {
-            atm for atm in evidence_atoms
-            if not (atm.name in [f"v_cls_{ci}" for ci in [0,4,5,6,7]])
-                # Constrain the potential explanans so as to prevent 'unhelpful'
-                # answers; in particular, truck types as explanations
-        }
-        evidence_atoms = tuple(evidence_atoms)
 
         for tgt_ev in target_events:
             if len(tgt_ev) == 0: continue
@@ -327,23 +317,87 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
             # Only considers singleton events right now
             assert len(tgt_ev) == 1
 
+            # Select candidate explanans from the inference program used for answering
+            # the question; start from rules containing the target event predicate and
+            # continue spanning along (against?) the abductive direction until all
+            # potential evidence atoms are identified
+            evidence_atoms = set(); frontier = {tgt_ev[0]}
+            while len(frontier) > 0:
+                expd_atm = frontier.pop()       # Atom representing explanandum event
+
+                for rule_info in analyzed_kb_prog.values():
+                    # Disregard rules without abductive force
+                    if not rule_info.get("abductive"): continue
+
+                    # Check if rule is relevant; i.e. whether the popped explanandum
+                    # event is included in rule antecedent
+                    entail_dir, mapping = Literal.entailing_mapping_btw(
+                        rule_info["ante"], [expd_atm]
+                    )
+
+                    if entail_dir is not None and entail_dir == 1:
+                        # Rule relevant, target event may be abduced from (grounded)
+                        # consequent literals
+                        r_cons_subs = [
+                            c_lit.substitute(**mapping) for c_lit in rule_info["cons"]
+                        ]
+                        
+                        # All possible substitutions for the remaining variables; will
+                        # automatically give empty singleton list if len(remaining_vars)
+                        # is larger than len(remaining_ents)
+                        remaining_vars = {
+                            arg for c_lit in r_cons_subs for arg, is_var in c_lit.args
+                            if is_var
+                        }
+                        remaining_vars = tuple(remaining_vars)      # Int indexing
+                        remaining_ents = scene_ents - set(
+                            e for e, _ in mapping["terms"].values()
+                        )
+
+                        possible_remaining_subs = permutations(
+                            remaining_ents, len(remaining_vars)
+                        )
+                        for r_subs in possible_remaining_subs:
+                            r_subs = {
+                                (remaining_vars[i], True): (e, False)
+                                for i, e in enumerate(r_subs)
+                            }
+                            for c_lit in r_cons_subs:
+                                # Considering visual evidence for class & attributes
+                                # concepts only, which are neurally predicted
+                                if not (
+                                    c_lit.name.startswith("cls") or
+                                    c_lit.name.startswith("att")
+                                ):
+                                    continue
+
+                                # Substitute, add event atom to frontier, evidence atom
+                                # to the evidence atom set
+                                c_lit = c_lit.substitute(terms=r_subs)
+                                ev_lit = Literal(f"v_{c_lit.name}", c_lit.args)
+
+                                frontier.add(c_lit)
+                                evidence_atoms.add(ev_lit)
+
+            # Cast as tuple to assign (some arbitrary) ordered indexing
+            evidence_atoms = tuple(evidence_atoms)
+
             # Manually select 'competitor' atoms that could've been the answer
             # in place of the true one (not necessarily mutually exclusive);
             # this is a band-aid solution right now as we are manually providing
             # the truck subtype predicates, may need a more principled selection
             # logic (by referring to the question that invoked the answer, etc.)
-            competing_evs = [
+            competing_evts = [
                 atm for atm in bjt_v.graph["atoms_map"]
                 if (
-                    atm.name in [f"v_cls_{ci}" for ci in [4,5,6,7]] and
-                    atm.name!=f"v_{tgt_ev[0].name}" and
-                    atm.args==tgt_ev[0].args
+                    atm.name in [f"cls_{ci}" for ci in [4,5,6,7]] and
+                    atm.name!=tgt_ev[0].name and atm.args==tgt_ev[0].args
                 )
             ]
             # Determine the probability threshold to be provided into the causal
             # attribution procedure method
             ans_threshold = 0.0
-            for ev_atm in competing_evs:
+            for ev_atm in competing_evts:
                 ans, _ = agent.symbolic.query(bjt_v, None, ((ev_atm,), None), {})
                 ans_threshold = max(ans_threshold, ans[()])
 
@@ -351,6 +405,87 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
             suff_expls = agent.symbolic.attribute(
                 bjt_v, tgt_ev, evidence_atoms, threshold=ans_threshold
             )
+
+            if len(suff_expls) > 0:
+                # Found some sufficient explanations; report the first one as the
+                # answer using the template "Because {}, {} and {}."
+                answer_logical_form = []
+                answer_nl = "Because "
+                dem_refs = {}; dem_offset = len(answer_nl)
+
+                for i, exps_lit in enumerate(suff_expls[0]):
+                    # For each explanans literal, add the string "this is a X"
+                    conc_pred = exps_lit.name.strip("v_")
+                    conc_type, conc_ind = conc_pred.split("_")
+                    pred_name = agent.lt_mem.lexicon.d2s[(int(conc_ind), conc_type)][0][0]
+
+                    # Update cognitive state w.r.t. value assignment and word sense
+                    ri = f"x{i}t{ti_new}c{ci_new}"
+                    agent.symbolic.value_assignment[ri] = exps_lit.args[0][0]
+                    tok_ind = (f"t{ti_new}", f"c{ci_new}", "rc", "0")
+                    agent.symbolic.word_senses[tok_ind] = \
+                        ((conc_type_to_pos[conc_type], pred_name), conc_pred)
+
+                    answer_logical_form.append(
+                        (pred_name, conc_type_to_pos[conc_type], (ri,), False)
+                    )
+
+                    # Split camelCased predicate name
+                    splits = re.findall(
+                        r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", pred_name
+                    )
+                    splits = [w[0].lower()+w[1:] for w in splits]
+                    reason_nl = f"this is a {' '.join(splits)}"
+                
+                    # Append a suffix appropriate for the number of reasons
+                    if i == len(suff_expls[0])-1:
+                        # Last entry, period
+                        reason_nl += "."
+                    elif i == len(suff_expls[0])-2:
+                        # Next to last entry, comma+and
+                        reason_nl += ", and "
+                    else:
+                        # Otherwise, comma
+                        reason_nl += ", "
+
+                    answer_nl += reason_nl
+
+                    # Fetch mask for demonstrative reference and shift offset
+                    dem_refs[(dem_offset, dem_offset+4)] = \
+                        dialogue_state["referents"]["env"][exps_lit.args[0][0]]["mask"]
+                    dem_offset += len(reason_nl)
+
+                # Wrapping logical form (consequent part, to be precise) as needed
+                answer_logical_form = (tuple(answer_logical_form), ())
+
+                # Push the translated answer to buffer of utterances to generate
+                agent.lang.dialogue.to_generate.append(
+                    ((answer_logical_form, None), answer_nl, dem_refs)
+                )
+
+                # Push another record for the rhetorical relation as well, namely the
+                # fact that the provided answer clause explains the agent's previous
+                # question. Not to be uttered explicitly (already uttered, as a matter
+                # of fact), but for bookkeeping purpose.
+                rrel_logical_form = (
+                    "expl", "*", (f"t{ti_new}c{ci_new}", q_cons[0].args[1][0]), False
+                )
+                rrel_logical_form = ((rrel_logical_form,), ())
+                agent.lang.dialogue.to_generate.append(
+                    (
+                        (rrel_logical_form, None),
+                        "# rhetorical relation due to 'because'",
+                        {}
+                    )
+                )
+
+            else:
+                # Couldn't find any sufficient explanations that could be provided
+                # verbally; answer "I cannot explain."
+                agent.lang.dialogue.to_generate.append(
+                    # Will just pass None as "logical form" for this...
+                    (None, "I cannot explain.", {})
+                )
 
     else:
         # Don't know how to handle other non-domain questions
@@ -486,7 +621,7 @@ def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
 
             # Disregard if there's already an isomorphic literal set
             has_isomorphic_spec = any(
-                Literal.entailing_mapping_btw(lits, spc[1])[1] == 0
+                Literal.entailing_mapping_btw(lits, spc[1])[0] == 0
                 for spc in final_specs
             )
             if has_isomorphic_spec:

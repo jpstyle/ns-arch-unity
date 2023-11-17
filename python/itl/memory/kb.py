@@ -43,15 +43,15 @@ class KnowledgeBase:
             if len(cons) != len(ent_cons): continue
             if len(ante) != len(ent_ante): continue
 
-            cons_isomorphic = Literal.isomorphic_conj_pair(cons, ent_cons)
-            ante_isomorphic = Literal.isomorphic_conj_pair(ante, ent_ante)
+            cons_ent_dir, _ = Literal.entailing_mapping_btw(cons, ent_cons)
+            ante_ent_dir, _ = Literal.entailing_mapping_btw(ante, ent_ante)
 
-            if cons_isomorphic and ante_isomorphic:
+            if cons_ent_dir==0 and ante_ent_dir==0:
                 return True
 
         return False
 
-    def add(self, rule, weight, source, abductive_force=True):
+    def add(self, rule, weight, source, knowledge_type):
         """ Returns whether KB is expanded or not """
         cons, ante = rule
 
@@ -98,11 +98,11 @@ class KnowledgeBase:
 
             # Find (partial) term mapping between the KB entry and input with
             # which they can unify
-            mapping_a, ent_dir_a = Literal.entailing_mapping_btw(
+            ent_dir_a, mapping_a = Literal.entailing_mapping_btw(
                 ante, ent_ante
             )
             if mapping_a is not None:
-                mapping_c, ent_dir_c = Literal.entailing_mapping_btw(
+                ent_dir_c, mapping_c = Literal.entailing_mapping_btw(
                     cons, ent_cons, mapping_a
                 )
                 if mapping_c is not None and {ent_dir_c, ent_dir_a} != {1, -1}:
@@ -116,7 +116,7 @@ class KnowledgeBase:
             # Add the input as a whole new entry along with the weight & source
             # and index it by occurring predicates
             self.entries.append(
-                ((cons, ante), weight, {(source, weight)}, abductive_force)
+                ((cons, ante), weight, {(source, weight)}, knowledge_type)
             )
             for pred in preds_cons | preds_ante:
                 self.entries_by_pred[pred].add(len(self.entries)-1)
@@ -145,7 +145,7 @@ class KnowledgeBase:
 
                     # Add the stronger input as new entry
                     self.entries.append(
-                        ((cons, ante), weight, {(source, weight)}, abductive_force)
+                        ((cons, ante), weight, {(source, weight)}, knowledge_type)
                     )
                     for pred in preds_cons | preds_ante:
                         self.entries_by_pred[pred].add(len(self.entries)-1)
@@ -261,7 +261,7 @@ class KnowledgeBase:
         intermediate_outputs = []
 
         # Process each entry
-        for i, (rule, weight, _, abductive_force) in enumerate(self.entries):
+        for i, (rule, weight, _, knowledge_type) in enumerate(self.entries):
             for j, (cons, ante) in enumerate(flatten_cons_ante(*rule)):
                 # Keep track of variable names used to avoid accidentally using
                 # overlapping names for 'lifting' variables (see below)
@@ -350,10 +350,10 @@ class KnowledgeBase:
 
                 # Indexing & storing the entry by cons for later abductive rule
                 # translation. No need to consider cons-less constraints, or rules
-                # without abductive force like hyper/hyponymy statements.
-                if len(cons) > 0 and abductive_force:
+                # without abductive force like taxonomy statements.
+                if len(cons) > 0 and knowledge_type=="property":
                     for c_lits in entries_by_cons:
-                        ism, ent_dir = Literal.entailing_mapping_btw(cons, c_lits)
+                        ent_dir, ism = Literal.entailing_mapping_btw(cons, c_lits)
                         if ent_dir == 0:
                             entries_by_cons[c_lits].append((i, ism))
                             break
@@ -550,6 +550,89 @@ class KnowledgeBase:
                         add_evidence(pred, args, likelihood)
 
         return ev_prog
+
+    @staticmethod
+    def analyze_exported_reasoning_program(prog):
+        """
+        Analyze the program fragment exported from the knowledge base to do the
+        following:
+            1) Recover the original KB rules (consequents & antecedents) and index
+               them by occurring predicates
+            2) Annotate which rules have 'abductive forces' (e.g., taxonomy statements
+               are regarded to not have abductive forces)
+
+        Used for post-mortem extraction of information needed for causal attribution
+        of agent's reasoning process
+        """
+        assert isinstance(prog, Program)
+
+        analyzed_prog = defaultdict(dict)
+
+        # Preliminary looping for extracting skolem function assignment rules
+        f_assigs = {
+            rule.head[0]: rule.body for rule, _, _ in prog.rules
+            if len(rule.head) > 0 and rule.head[0].name.startswith("assign_")
+        }
+        # Extract remaining info to return
+        for rule, _, _ in prog.rules:
+            if len(rule.head) == 0: continue
+            rule_head = rule.head[0]
+
+            if rule_head.name.startswith("cons_sat_"):
+                # Rule consequent content
+                i, j = re.match("^cons_sat_(\d+)_(\d+)", rule_head.name).groups()
+                analyzed_prog[(int(i), int(j))]["cons"] = rule.body
+            elif rule_head.name.startswith("ante_sat_"):
+                # Rule antecedent content
+                i, j = re.match("^ante_sat_(\d+)_(\d+)", rule_head.name).groups()
+                analyzed_prog[(int(i), int(j))]["ante"] = rule.body
+            elif rule_head.name.startswith("abduc_catchall_"):
+                # Reasoning in abductive direction; collect potential explanantia
+                # to the explanandum, each represented as a (negated) `ante_sat_`
+                # literal, then annotate corresponding dict entry
+                explanantia = [
+                    b_lit for b_lit in rule.body
+                    if b_lit.naf and b_lit.name.startswith("ante_sat")
+                ]
+                for b_lit in explanantia:
+                    i, j = re.match("^ante_sat_(\d+)_(\d+)", b_lit.name).groups()
+                    analyzed_prog[(int(i), int(j))]["abductive"] = True
+
+        # Replace any function assignment literals with corresponding contents;
+        # note that the substitutions need to happen only for the rule consequents
+        # since antecedents do not need skolem functions in the ASP formalism
+        if len(f_assigs) > 0:
+            for rule_info in analyzed_prog.values():
+                if "cons" not in rule_info: continue
+
+                cons_new = []
+                for c_lit in rule_info["cons"]:
+                    # Find any matching assignment literal; check whether isomorphic,
+                    # as simple value equality check wouldn't work if variable names
+                    # are different (though I think would that rarely happen, but for
+                    # robustness' sake)
+                    isomorphic_checks = [
+                        (Literal.entailing_mapping_btw([c_lit], [f_lit]), f_contents)
+                        for f_lit, f_contents in f_assigs.items()
+                    ]
+                    isomorphic_checks = [
+                        (mapping, f_contents)
+                        for (ent_dir, mapping), f_contents in isomorphic_checks
+                        if ent_dir == 0
+                    ]
+                    if len(isomorphic_checks) > 0:
+                        # Substitute with appropriate contents
+                        mapping, f_contents = isomorphic_checks[0]      # This will do
+                        cons_new += [
+                            fc_lit.substitute(**mapping) for fc_lit in f_contents
+                        ]
+                    else:
+                        # Add as-is
+                        cons_new.append(c_lit)
+
+                rule_info["cons"] = cons_new
+
+        return dict(analyzed_prog)
 
 
 # Recursive helper methods for fetching predicate terms and names, substituting

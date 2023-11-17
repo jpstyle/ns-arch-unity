@@ -525,9 +525,8 @@ def _traverse_dt(parse, rel_id, ref_map, covered, negs):
         parse["utt_type"][expl_ev_id] = "ques"
         parse["utt_type"][for_msg[2][0]] = "prop"
 
-        # Also indicating the raw NL source clause for the eventuality
-        clause_source = parse["clause_source"][for_msg[2][0]]
-        clause_source += f" (rhetorical relation due to 'why')"
+        # Also annotating the source of the rhetorical relation
+        clause_source = f"# rhetorical relation due to 'why'"
         parse["clause_source"][expl_ev_id] = clause_source
 
         # Finally, mark this eventuality is not describing the task domain
@@ -653,9 +652,8 @@ def _process_rel(
         # Noun predicates with args (referent[, more optional referents])
 
         if rel["predicate"]=="kind" or rel["predicate"]=="type":
-            # Kind/type of X, specifying some predicate as a subtype of X;
-            # i.e. concept-level entailment
-            rel_lit = ("entail", "*", (rel_id, arg1))
+            # Kind/type of X, specifying some predicate as a subtype of X
+            rel_lit = ("subtype", "*", (rel_id, arg1))
             if negate_focus:
                 # Not sure yet what should happen in this case...
                 raise NotImplementedError
@@ -669,7 +667,7 @@ def _process_rel(
             # 'predicate(*arg)', where arg is a singleton list, has different meaning
             # depending on whether the argument refers to an entity (is_pred is False)
             # or a predicate (is_pred is True). The meaning of the former is rather
-            # straightforward, namely that the arg referemt is an instance of the
+            # straightforward, namely that the arg referent is an instance of the
             # predicate. For the latter, it means the arg referent is a 'conjunctive
             # concept', where the predicate is one of the concept pieces that make up
             # the conjunction.
@@ -711,7 +709,7 @@ def _process_rel(
                     focus_msgs.append(rel_lit)
 
                 # Any restrictor of the wh-quantified predicate, denoted as the
-                # reserved entailment check requirement predicates, included here
+                # reserved subtype check requirement predicates, included here
                 focus_msgs += dt_translations_flattened[arg2]
 
                 # Mark arg2 refers to a predicate, not an entity
@@ -752,8 +750,7 @@ def _process_rel(
             # from the daughter's translated content set, and add to the list of
             # utterances (segments).
             separable_clauses.update(dt_translations[arg2])
-            clause_source = parse["clause_source"][rel_id]
-            clause_source += f" (complement clause of '{rel['predicate']}')"
+            clause_source = f"# complement clause of '{rel['predicate']}'"
             parse["utt_type"][arg2] = "prop"
             parse["clause_source"][arg2] = clause_source
 

@@ -182,9 +182,9 @@ class Literal:
         """
         Helper method for testing whether two finite iterables of literals or negated
         conjunctions of literals, representing conjunctions of the components, are
-        (partially) mappable up to variable & function renaming, so that one entails
-        the other under the mapping. Return a mapping if found one, along with 3-valued
-        flag of the direction of entailment.
+        (partially) mappable up to variable & function renaming and variable assignment,
+        so that one entails the other under the mapping. Return a mapping if found one,
+        along with 3-valued flag of the direction of entailment.
         """
         mapping = mapping or { "terms": {}, "functions": {} }
 
@@ -193,18 +193,21 @@ class Literal:
         iter1 = tuple(iter1); iter2 = tuple(iter2)
         entailabilities = {}
 
+        # 'Typecheck'. Note: list type encodes negated conjunction
+        assert all(
+            isinstance(cnjt1, Literal) or isinstance(cnjt1, list) for cnjt1 in iter1
+        )
+        assert all(
+            isinstance(cnjt2, Literal) or isinstance(cnjt2, list) for cnjt2 in iter2
+        )
+
         # 3-valued flags indicate value of iter1 - iter2 (analogously...):
         #   0: iter1 and iter2 are equivalent (iter1 == iter2)
         #   1: iter1 is strictly stronger and entails iter2 (iter1 > iter2)
         #   -1: iter2 is strictly stronger and entails iter1 (iter1 < iter2)
 
-        for i1, cnjt1 in enumerate(iter1):
-            # Note: list type encodes negated conjunction
-            assert isinstance(cnjt1, Literal) or isinstance(cnjt1, list)
-
+        for i1, cnjt1 in enumerate(iter1):            
             for i2, cnjt2 in enumerate(iter2):
-                assert isinstance(cnjt2, Literal) or isinstance(cnjt2, list)
-
                 if isinstance(cnjt1, Literal) and isinstance(cnjt2, Literal):
                     # Base case, both cnjt1 and cnjt2 are literals
                     potential_mapping = { "terms": {}, "functions": {} }
@@ -219,11 +222,7 @@ class Literal:
                         sa_term, sa_is_var = sa
                         oa_term, oa_is_var = oa
 
-                        if sa_is_var != oa_is_var:
-                            # Term type mismatch
-                            args_mappable = False; break
-
-                        if sa_is_var == oa_is_var == False:
+                        if not sa_is_var and not oa_is_var:
                             if sa_term != oa_term:
                                 # Constant term mismatch
                                 args_mappable = False; break
@@ -287,7 +286,7 @@ class Literal:
 
                     if args_mappable:
                         # Potential mapping found
-                        entailabilities[(i1, i2)] = (potential_mapping, 0)
+                        entailabilities[(i1, i2)] = (0, potential_mapping)
                     else:
                         # Not entailable; discard potential mapping and move on
                         entailabilities[(i1, i2)] = (None, None)
@@ -295,10 +294,10 @@ class Literal:
                 elif isinstance(cnjt1, list) and isinstance(cnjt2, list):
                     # Recursive call for trying to find a mapping between the
                     # two negated conjunctions
-                    nc_mapping, nc_entail_dir = Literal.entailing_mapping_btw(
+                    nc_entail_dir, nc_mapping = Literal.entailing_mapping_btw(
                         cnjt1, cnjt2, mapping
                     )
-                    entailabilities[(i1, i2)] = (nc_mapping, nc_entail_dir)
+                    entailabilities[(i1, i2)] = (nc_entail_dir, nc_mapping)
 
                 else:
                     # Type mismatch or invalid types
@@ -316,19 +315,19 @@ class Literal:
                     entailabilities[(i1, i2)] for i2, i1 in enumerate(prm)
                 ]
                 all_matched = all(
-                    mapping_piece is not None for mapping_piece, _ in to_unify
+                    mapping_piece is not None for _, mapping_piece in to_unify
                 )
                 directions_consistent = not {1, -1}.issubset(
-                    {ent_dir for _, ent_dir in to_unify}
+                    {ent_dir for ent_dir, _ in to_unify}
                 )
                 if all_matched and directions_consistent:
                     terms_unified = unify_mappings(
                         [mapping["terms"]] + \
-                            [mapping_piece["terms"] for mapping_piece, _ in to_unify]
+                            [mapping_piece["terms"] for _, mapping_piece in to_unify]
                     )
                     fns_unified = unify_mappings(
                         [mapping["functions"]] + \
-                            [mapping_piece["functions"] for mapping_piece, _ in to_unify]
+                            [mapping_piece["functions"] for _, mapping_piece in to_unify]
                     )
                     if terms_unified is not None and fns_unified is not None:
                         valid_prms.append((terms_unified, fns_unified))
@@ -340,19 +339,19 @@ class Literal:
                     entailabilities[(i1, i2)] for i1, i2 in enumerate(prm)
                 ]
                 all_matched = all(
-                    mapping_piece is not None for mapping_piece, _ in to_unify
+                    mapping_piece is not None for _, mapping_piece in to_unify
                 )
                 directions_consistent = not {1, -1}.issubset(
-                    {ent_dir for _, ent_dir in to_unify}
+                    {ent_dir for ent_dir, _ in to_unify}
                 )
                 if all_matched and directions_consistent:
                     terms_unified = unify_mappings(
                         [mapping["terms"]] + \
-                            [mapping_piece["terms"] for mapping_piece, _ in to_unify]
+                            [mapping_piece["terms"] for _, mapping_piece in to_unify]
                     )
                     fns_unified = unify_mappings(
                         [mapping["functions"]] + \
-                            [mapping_piece["functions"] for mapping_piece, _ in to_unify]
+                            [mapping_piece["functions"] for _, mapping_piece in to_unify]
                     )
                     if terms_unified is not None and fns_unified is not None:
                         valid_prms.append((terms_unified, fns_unified))
@@ -363,46 +362,40 @@ class Literal:
             final_mapping = {
                 "terms": valid_prms[0][0], "functions": valid_prms[0][1]
             }
-            if len(iter1) > len(iter2):
-                entail_dir = 1
-            elif len(iter1) < len(iter2):
-                entail_dir = -1
-            else:
-                len(iter1) == len(iter2)
-                entail_dir = 0
-            
-            return final_mapping, entail_dir
-        else:
-            # No valid permutations found, no mapping
-            return None, None
+            # Check entailment direction constraints forced by any variable assignment;
+            # e.g. if term1 is a variable and term2 is a constant, entailment direction
+            # must be 1 to be valid (-1 for the opposite direction). In effect, we are
+            # treating all variables as universally quantified.
+            var_assig_dirs = [
+                t1_is_var - t2_is_var       # 1 if (var,cons), -1 if (cons,var), else 0
+                for (_, t1_is_var), (_, t2_is_var) in final_mapping["terms"].items()
+            ]
+            directions_consistent = not {1, -1}.issubset(set(var_assig_dirs))
 
-    @staticmethod
-    def isomorphic_conj_pair(iter1, iter2):
-        """
-        Recursive helper method for checking whether two nested lists of Literals
-        with arbitrary depths are isomorphic
-        """
-        leaves1 = {l for l in iter1 if isinstance(l, Literal)}
-        leaves2 = {l for l in iter2 if isinstance(l, Literal)}
+            if directions_consistent:
+                va_dirs_0 = all(va_dir==0 for va_dir in var_assig_dirs)
+                va_dirs_haspos = any(va_dir>0 for va_dir in var_assig_dirs)
+                va_dirs_hasneg = any(va_dir<0 for va_dir in var_assig_dirs)
 
-        branches1 = [nc for nc in iter1 if not isinstance(nc, Literal)]
-        branches2 = [nc for nc in iter2 if not isinstance(nc, Literal)]
+                if len(iter1) > len(iter2):
+                    if not va_dirs_hasneg:
+                        # iter1 entails iter2
+                        return 1, final_mapping
+                elif len(iter1) < len(iter2):
+                    if not va_dirs_haspos:
+                        # iter2 entails iter1
+                        return -1, final_mapping
+                else:
+                    # len(iter1) == len(iter2)
+                    if va_dirs_0:
+                        # Equivalent (isomorphic), only in this case
+                        return 0, final_mapping
+                    elif va_dirs_haspos:
+                        # iter1 entails iter2
+                        return 1, final_mapping
+                    elif va_dirs_hasneg:
+                        # iter2 entails iter1
+                        return -1, final_mapping
 
-        if Literal.entailing_mapping_btw(leaves1, leaves2)[1] != 0:
-            # Not isomorphic if sets of leaf nodes are not isomorphic
-            return False
-
-        if len(branches1) != len(branches2):
-            # Not isomorphic if sets of branch nodes have different lengths
-            return False
-
-        # Consider all possible bijections between branches1 vs. branches2;
-        # if any bijection is isomorphic, return True
-        for pm in permutations(range(len(branches1))):
-            bijections = [(branches1[i], branches2[j]) for i, j in enumerate(pm)]
-
-            if all(Literal.isomorphic_conj_pair(b1, b2) for b1, b2 in bijections):
-                return True
-
-        # If reached here, no isomorphic bijection found
-        return False
+        # No valid entailing mapping found if reached here
+        return None, None

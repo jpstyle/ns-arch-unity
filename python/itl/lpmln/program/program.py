@@ -15,12 +15,12 @@ class Program:
     def __init__(self, rules=None):
         self.rules = [] if rules is None else rules
 
-        self._rules_by_atom = defaultdict(set)      
+        self.rules_by_atom = defaultdict(set)      
         for i, (rule, _, _) in enumerate(self.rules):
             for hl in rule.head:
-                self._rules_by_atom[hl.as_atom()].add(i)
+                self.rules_by_atom[hl.as_atom()].add(i)
             for bl in rule.body:
-                self._rules_by_atom[bl.as_atom()].add(i)
+                self.rules_by_atom[bl.as_atom()].add(i)
 
     def __len__(self):
         return len(self.rules)
@@ -87,9 +87,9 @@ class Program:
         self.rules.append((rule, r_pr, weighting))
 
         for hl in rule.head:
-            self._rules_by_atom[hl.as_atom()].add(len(self.rules)-1)
+            self.rules_by_atom[hl.as_atom()].add(len(self.rules)-1)
         for bl in rule.body:
-            self._rules_by_atom[bl.as_atom()].add(len(self.rules)-1)
+            self.rules_by_atom[bl.as_atom()].add(len(self.rules)-1)
     
     def add_absolute_rule(self, rule):
         """
@@ -100,9 +100,9 @@ class Program:
         self.rules.append((rule, None, None))
 
         for hl in rule.head:
-            self._rules_by_atom[hl.as_atom()].add(len(self.rules)-1)
+            self.rules_by_atom[hl.as_atom()].add(len(self.rules)-1)
         for bl in rule.body:
-            self._rules_by_atom[bl.as_atom()].add(len(self.rules)-1)
+            self.rules_by_atom[bl.as_atom()].add(len(self.rules)-1)
 
     def compile(self):
         """

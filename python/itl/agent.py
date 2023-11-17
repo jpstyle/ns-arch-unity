@@ -402,9 +402,9 @@ class ITLAgent:
                     self.lang.dialogue.acknowledged_stms[stm_ind] = acknowledgement_data
 
             # Update knowledge base with obtained generic statements
-            for rule, w_pr, knowledge_source, abductive_force in generics:
+            for rule, w_pr, knowledge_source, knowledge_type in generics:
                 kb_updated |= self.lt_mem.kb.add(
-                    rule, w_pr, knowledge_source, abductive_force
+                    rule, w_pr, knowledge_source, knowledge_type
                 )
 
             # Compute scalar implicature if required by agent's strategy
@@ -435,28 +435,34 @@ class ITLAgent:
 
         # Ideally, this is to be accomplished declaratively by properly setting up formal
         # maintenance goals and then performing automated planning or something to come
-        # up with right sequence of actions to be added to agenda. However, the ad-hoc code
-        # below (+ plan library in practical_reasoning/plans/library.py) will do for our
-        # purpose right now; we will see later if we'll ever need to generalize and implement
-        # the said procedure.)
+        # up with right sequence of actions to be added to agenda. However, the ad-hoc
+        # code below (+ plan library in practical_reasoning/plans/library.py) will do
+        # for our purpose right now; we will see later if we'll ever need to generalize
+        # and implement the said procedure.)
 
-        for ti, ci in self.lang.dialogue.unanswered_Qs:
-            self.practical.agenda.append(("address_unanswered_Q", (ti, ci)))
-        for a in self.lang.dialogue.acknowledged_stms.items():
-            self.practical.agenda.append(("address_acknowledgement", a))
-        for n in self.lang.unresolved_neologisms:
-            self.practical.agenda.append(("address_neologism", n))
+        # This ordering ensures any knowledge updates (that doesn't require interaction)
+        # happen first, addressing & answering questions happen next, finally asking
+        # any questions afterwards
         for m in self.symbolic.mismatches:
             self.practical.agenda.append(("address_mismatch", m))
+        for a in self.lang.dialogue.acknowledged_stms.items():
+            self.practical.agenda.append(("address_acknowledgement", a))
+        for ti, ci in self.lang.dialogue.unanswered_Qs:
+            self.practical.agenda.append(("address_unanswered_Q", (ti, ci)))
+        for n in self.lang.unresolved_neologisms:
+            self.practical.agenda.append(("address_neologism", n))
         for c in self.vision.confusions:
             self.practical.agenda.append(("address_confusion", c))
 
         return_val = []
 
+        num_resolved_items = 0; unresolved_items = []
         while True:
-            resolved_items = []
-            for i, todo in enumerate(self.practical.agenda):
-                todo_state, todo_args = todo
+            # Loop through agenda stack items from the top; new agenda items may
+            # be pushed to the top by certain plans
+            while len(self.practical.agenda) > 0:
+                # Pop the top agenda item from the stack
+                todo_state, todo_args = self.practical.agenda.pop(0)
 
                 # Check if this item can be resolved at this stage and if so, obtain
                 # appropriate plan (sequence of actions) for resolving the item
@@ -476,20 +482,29 @@ class ITLAgent:
                         if act_out is not None:
                             return_val += act_out
 
-                    resolved_items.append(i)
+                            # Note) We don't need to consider any sort of plan failures
+                            # right now, but when that happens (should be identifiable
+                            # from act_out value), in principle, will need to break
+                            # from plan execution and add to unresolved item list
+                            if False:       # Plan failure check not implemented
+                                unresolved_items.append((todo_state, todo_args))
+                                break
+                    else:
+                        num_resolved_items += 1
+                else:
+                    # Plan not found, agenda item unresolved
+                    unresolved_items.append((todo_state, todo_args))
 
-            if len(resolved_items) == 0:
-                # No resolvable agenda item any more
-                if (len(return_val) == 0 and self.lang.new_input_provided):
-                    # Nothing to add, acknowledge any user input
+            # Any unresolved items back to agenda stack
+            self.practical.agenda = unresolved_items
+
+            if num_resolved_items == 0 or len(self.practical.agenda) == 0:
+                # No resolvable agenda item any more, or stack clear
+                if len(return_val) == 0 and self.lang.new_input_provided:
+                    # Nothing to utter, acknowledge any user input
                     self.practical.agenda.append(("acknowledge", None))
                 else:
-                    # Break with return vals
+                    # Break loop with return vals
                     break
-            else:
-                # Check off resolved agenda item
-                resolved_items.reverse()
-                for i in resolved_items:
-                    del self.practical.agenda[i]
 
         return return_val

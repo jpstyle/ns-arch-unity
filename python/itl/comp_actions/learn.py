@@ -125,8 +125,6 @@ def identify_acknowledgement(agent, rule, prev_statements, prev_context):
     rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
         (ante is None or has_pred_referent(ante))
 
-    prev_scene, _, prev_kb = prev_context
-
     if rule_is_grounded and not rule_has_pred_referent:
         # Grounded event without constant predicate referents
 
@@ -139,8 +137,8 @@ def identify_acknowledgement(agent, rule, prev_statements, prev_context):
             if speaker != "A": continue
 
             # Entailment checks; cons vs. statement, and cons vs. ~statement
-            _, pos_entail_check = Literal.entailing_mapping_btw(cons, statement)
-            _, neg_entail_check = Literal.entailing_mapping_btw(cons, (list(statement),))
+            pos_entail_check, _ = Literal.entailing_mapping_btw(cons, statement)
+            neg_entail_check, _ = Literal.entailing_mapping_btw(cons, (list(statement),))
                 # Recall that a list of literals stands for the negation of the conjunction;
                 # wrap it in a tuple again to make it an iterable
 
@@ -177,11 +175,11 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
     if rule_is_lifted:
         # Lifted generic rule statement, without any grounded term arguments
 
-        # Assume abductive forces on rules added here
-        abductive_force = True
+        # Assume default knowledge type here
+        knowledge_type = "property"
 
         # First add the face-value semantics of the explicitly stated rule
-        generics.append((rule, U_IN_PR, provenance, abductive_force))
+        generics.append((rule, U_IN_PR, provenance, knowledge_type))
 
         if agent.strat_generic == "semNeg" or agent.strat_generic == "semNegScal":
             # Current rule cons conjunction & ante conjunction as list
@@ -230,7 +228,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
                 negImpl = ((list(cons_repl),), ante_repl)
                 knowledge_source = f"{provenance} (Neg. Impl.)"
                 generics.append(
-                    (negImpl, A_IM_PR, knowledge_source, abductive_force)
+                    (negImpl, A_IM_PR, knowledge_source, knowledge_type)
                 )
 
                 # Collect explicit generics provided for the concept pair and negative
@@ -268,7 +266,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
 
                 for ql in q_cons:
                     # Constraint: P should entail conjunction {p1 and p2 and ...}
-                    if ql.name=="*_entail" and ql.args[0][0]==qv:
+                    if ql.name=="*_subtype" and ql.args[0][0]==qv:
                         entail_consts[qv] += [pl.name for pl in p_cons]
 
                     # Constraint: x should be an instance of P
@@ -295,9 +293,9 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
                 tuple(Literal(pred, [("X", True)]) for pred in entailing_preds)
             )
             knowledge_source = f"{context_Qs[pred_var]} => {provenance}"
-            abductive_force = False         # Assume no abductive forces on these rules
+            knowledge_type = "taxonomy"
             generics.append(
-                (entailment_rule, U_IN_PR, knowledge_source, abductive_force)
+                (entailment_rule, U_IN_PR, knowledge_source, knowledge_type)
             )
 
 def handle_mismatch(agent, mismatch):
@@ -506,10 +504,10 @@ def add_scalar_implicature(agent, pair_rules):
         scal_impls += _compute_scalar_implicature(c1, c2, rules, agent.kb_snap)
         scal_impls += _compute_scalar_implicature(c2, c1, rules, agent.kb_snap)
 
-        for cons, ante in scal_impls:
+        for cons, ante, knowledge_type in scal_impls:
             knowledge_source = f"[{c1} ~= {c2}] (Scal. Impl.)"
             agent.lt_mem.kb.add(
-                (cons, ante), A_IM_PR, knowledge_source, abductive_force=True
+                (cons, ante), A_IM_PR, knowledge_source, knowledge_type
             )
 
     # Regular inspection of KB by weeding out defeasible rules inferred
@@ -581,7 +579,7 @@ def _compute_scalar_implicature(c1, c2, rules, kb_snap):
     # Existing properties of c1
     for i in kb_snap.entries_by_pred[c1]:
         # Fetch KB entry
-        (cons, ante), *_ = kb_snap.entries[i]
+        (cons, ante), _, _, knowledge_type = kb_snap.entries[i]
 
         # Replace occurrences of c1 with c2
         cons = tuple(_substitute(c, { c1: c2 }) for c in cons)
@@ -609,11 +607,11 @@ def _compute_scalar_implicature(c1, c2, rules, kb_snap):
             # defeated
             r_cons, r_ante = r
 
-            mapping_b, ent_dir_b = Literal.entailing_mapping_btw(
+            ent_dir_b, mapping_b = Literal.entailing_mapping_btw(
                 r_ante, ante
             )
             if mapping_b is not None:
-                mapping_h, ent_dir_h = Literal.entailing_mapping_btw(
+                ent_dir_h, mapping_h = Literal.entailing_mapping_btw(
                     r_cons, cons_neg, mapping_b
                 )
                 if mapping_h is not None and {ent_dir_h, ent_dir_b} != {1, -1}:
@@ -625,7 +623,7 @@ def _compute_scalar_implicature(c1, c2, rules, kb_snap):
         if not defeated:
             # Add the inferred generic that successfully survived
             # the test against the higher-precedence rules
-            scal_impls.append((cons, ante))
+            scal_impls.append((cons, ante, knowledge_type))
     
     return scal_impls
 

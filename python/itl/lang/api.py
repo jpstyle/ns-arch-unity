@@ -299,8 +299,10 @@ class LanguageModule:
 
                 new_record.append((logical_forms, surface_form))
 
-                # NL utterance to log/print
-                return_val.append(("generate", (surface_form, dem_refs)))
+                # NL utterance to log/print (as long as not prefixed by a special
+                # symbol '#')
+                if not surface_form.startswith("#"):
+                    return_val.append(("generate", (surface_form, dem_refs)))
 
             self.dialogue.record.append(("A", new_record))
 
