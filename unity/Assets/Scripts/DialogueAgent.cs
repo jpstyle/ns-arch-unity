@@ -97,13 +97,29 @@ public class DialogueAgent : Agent
                 var demRefs = new Dictionary<(int, int), EntityRef>();
                 foreach (var (range, entUid) in incomingMessage.demonstrativeReferences)
                 {
-                    // Retrieve referenced EnvEntity and fetch segmentation mask in absolute scale
-                    // w.r.t. this agent's camera's target display screen
                     var refEnt = EnvEntity.FindByUid(entUid);
-                    var maskColors = refEnt.masks[_cameraSensor.Camera.targetDisplay];
-                    var segMapBuffer = EnvEntity.annotationStorage.segMap;
-                    var screenMask = ColorsToMask(segMapBuffer, maskColors);
-                    demRefs[range] = new EntityRef(MaskCoordinateSwitch(screenMask, true));
+                    float[] screenMask;
+                    if (refEnt.isBogus)
+                    {
+                        // Bogus entity, mask directly stores the bitmap
+                        screenMask = refEnt.masks[_cameraSensor.Camera.targetDisplay]
+                            .Select(c => c.a > 0f ? 1f : 0f).ToArray();
+                    }
+                    else
+                    {
+                        // Non-bogus entity, mask stores set of matching colors, which need to be
+                        // translated to bitmap
+                        
+                        // Retrieve referenced EnvEntity and fetch segmentation mask in absolute scale
+                        // w.r.t. this agent's camera's target display screen
+                        var maskColors = refEnt.masks[_cameraSensor.Camera.targetDisplay];
+                        var segMapBuffer = EnvEntity.annotationStorage.segMap;
+                        screenMask = ColorsToMask(segMapBuffer, maskColors);
+                        
+                    }
+                    demRefs[range] = new EntityRef(
+                        MaskCoordinateSwitch(screenMask, true)
+                    );
                 }
 
                 // Send message via side channel
@@ -161,6 +177,7 @@ public class DialogueAgent : Agent
                     {
                         case EntityRefType.Mask:
                             var screenMask = MaskCoordinateSwitch(demRef.maskRef, false);
+                            // ReSharper disable once Unity.PerformanceCriticalCodeInvocation
                             demRefsResolved[range] = EnvEntity.FindByMask(screenMask, targetDisplay).uid;
                             break;
                         case EntityRefType.String:
@@ -213,10 +230,7 @@ public class DialogueAgent : Agent
     private static float ContainsColor(Color32 color, Color32[] colorSet)
     {
         // Test if input color is contained in an array of colors
-        if (colorSet.Any(c => c.r == color.r && c.g == color.g && c.b == color.b))
-            return 1f;
-
-        return 0f;
+        return colorSet.Any(c => c.r == color.r && c.g == color.g && c.b == color.b) ? 1f : 0f;
     }
 
     private static float[] ColorsToMask(Color32[] segMapBuffer, Color32[] entities)

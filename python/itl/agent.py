@@ -432,7 +432,7 @@ class ITLAgent:
         #   - any unaddressed neologism which is unresolvable
         #   - any unaddressed recognition inconsistency btw. agent and user
         #   - any unanswered question that is answerable
-
+        #
         # Ideally, this is to be accomplished declaratively by properly setting up formal
         # maintenance goals and then performing automated planning or something to come
         # up with right sequence of actions to be added to agenda. However, the ad-hoc

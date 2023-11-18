@@ -27,6 +27,11 @@ public class EnvEntity : MonoBehaviour
     // Whether this EnvEntity is 'atomic', having no further EnvEntities as descendants
     public bool isAtomic;
 
+    [HideInInspector]
+    // Whether this EnvEntity is programmatically generated, representing 'bogus' entities
+    // detected by some vision module
+    public bool isBogus;
+
     // Storage endpoint registered as static field so that it can be accessed anywhere
     public static StorageEndpoint annotationStorage;
 
@@ -43,6 +48,8 @@ public class EnvEntity : MonoBehaviour
 
     private void Awake()
     {
+        if (isBogus) return;
+
         // Initialize the dictionary for storing masks & boxes
         masks = new Dictionary<int, Color32[]>();
         boxes = new Dictionary<int, Rect>();
@@ -52,6 +59,8 @@ public class EnvEntity : MonoBehaviour
 
     private void Start()
     {
+        if (isBogus) return;
+
         // Assign uid according to the Labeling component associated with the gameObject
         var labeling = GetComponent<Labeling>();
         if (labeling is null)
@@ -109,7 +118,8 @@ public class EnvEntity : MonoBehaviour
     // and only once for the frame!
     private void UpdateAnnotations()
     {
-        if (_annotationsUpdated) return;      // Already computed for this frame
+        if (isBogus) return;                   // Bogus entities have static annotations
+        if (_annotationsUpdated) return;        // Already computed for this frame
 
         if (isAtomic)
         {
@@ -205,6 +215,13 @@ public class EnvEntity : MonoBehaviour
         _annotationsUpdated = true;
     }
 
+    public void UpdateClosestChildren()
+    {
+        // Find and store closest EnvEntity children at the time invoked
+        _closestChildren = ClosestChildren(gameObject);
+        isAtomic = _closestChildren.Count == 0;
+    }
+    
     // Initialize static fields (in Unity, this is preferred rather than using the standard
     // C# static constructors)
     [RuntimeInitializeOnLoadMethod]
@@ -221,13 +238,6 @@ public class EnvEntity : MonoBehaviour
             if (perCam is not null)
                 _perCamIDToDisplay[perCam.id] = cam.targetDisplay;
         }
-    }
-
-    public void UpdateClosestChildren()
-    {
-        // Find and store closest EnvEntity children at the time invoked
-        _closestChildren = ClosestChildren(gameObject);
-        isAtomic = _closestChildren.Count == 0;
     }
 
     public static EnvEntity FindByObjectPath(string path)
@@ -324,6 +334,69 @@ public class EnvEntity : MonoBehaviour
                 maxIoU = boxIoU;
                 refEnt = ent;
             }
+        }
+
+        // If provided mask doesn't match any existing EnvEntity above threshold, the mask
+        // represents an object instance (possibly not corresponding to any existing Unity
+        // scene objects); create a new bogus EnvEntity and manually fill in the mask and
+        // box annotation info
+        if (maxIoU < 0.95f)
+        {
+            // Utilizing the max IoU as unique ID...
+            var newUid = (int)(maxIoU * 1e6);
+            
+            // Create a new GameObject and EnvEntity component 
+            var bogusObj = new GameObject("bogus", typeof(EnvEntity));
+            // ReSharper disable once Unity.PerformanceCriticalCodeInvocation (will be invoked
+            // only once for this entity)
+            var bogusEnt = bogusObj.GetComponent<EnvEntity>();
+
+            // Initialize appropriately; substituting corresponding pieces of code in Awake()
+            // Start(), and UpdateAnnotations() methods
+            bogusEnt.isBogus = true;
+            bogusEnt.uid = $"ent_{newUid}";
+            bogusEnt.masks = new Dictionary<int, Color32[]>();
+            bogusEnt.boxes = new Dictionary<int, Rect>();
+
+            // Register the bogus to existing pointer UI controllers
+            var pointerUIs = FindObjectsByType<PointerUI>(FindObjectsSortMode.None);
+            foreach (var pUI in pointerUIs)
+                pUI.AddEnvEntity(bogusEnt);
+
+            // Obtain & store mask and box
+            var hotBit = new Color32(0, 0, 0, 255);
+            var coldBit = new Color32(0, 0, 0, 0);
+            var bogusMask = new Color32[msk.Length];
+            var bogusBox = new[]
+            {
+                float.MaxValue, float.MaxValue, float.MinValue, float.MinValue
+            };          // Box extremities (x1, y1, x2, y2)
+            for (var i = 0; i < msk.Length; i++)
+            {
+                var v = msk[i];
+                var x = i % screenWidth;
+                var y = screenHeight - i / screenWidth;
+
+                if (v > 0f)
+                {
+                    bogusMask[i] = hotBit;
+                    bogusBox[0] = Math.Min(bogusBox[0], x);
+                    bogusBox[1] = Math.Min(bogusBox[1], y);
+                    bogusBox[2] = Math.Max(bogusBox[2], x);
+                    bogusBox[3] = Math.Max(bogusBox[3], y);
+                }
+                else
+                {
+                    bogusMask[i] = coldBit;
+                }
+            }
+            bogusEnt.masks[displayId] = bogusMask;
+            bogusEnt.boxes[displayId] = new Rect(
+                bogusBox[0], bogusBox[1],
+                bogusBox[2]-bogusBox[0], bogusBox[3]-bogusBox[1]
+            );
+
+            refEnt = bogusEnt;       // To return
         }
 
         return refEnt;

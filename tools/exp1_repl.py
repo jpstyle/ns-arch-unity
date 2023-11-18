@@ -213,9 +213,9 @@ def main(cfg):
                             while len(incoming_msgs) > 0:
                                 # Each message consists of two consecutive buffer items;
                                 # speaker and string content
-                                _, utterance, _ = incoming_msgs.pop(0)
-                                agent_reactions.append(utterance)
-                        
+                                _, utterance, dem_refs = incoming_msgs.pop(0)
+                                agent_reactions.append((utterance, dem_refs))
+
                         # Simulated teacher (user) response
                         user_response = teacher.react(agent_reactions)
 
