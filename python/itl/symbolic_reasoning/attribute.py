@@ -10,12 +10,10 @@ from ..lpmln import Literal, Polynomial
 
 
 # As it is simply impossible to enumerate 'every possible continuous value',
-# we consider at most two discretized likelihoods as counterfactual alternatives,
-# 0.25 and 0.75. Each value represents an alternative visual observation that
-# results in 'reasonably' weaker/stronge evidence that the corresponding literal
-# actually being true.
+# we consider a discretized likelihood threshold as counterfactual alternative.
+# The value represents an alternative visual observation that results in evidence
+# that is 'reasonably' weaker that the corresponding literal actually being true.
 LOW = 0.25
-HIGH = 0.75
 
 def attribute(bjt, target_event, evidence_atoms, threshold):
     """
@@ -40,7 +38,7 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
     of the target event.
     """
     if len(evidence_atoms) == 0:
-        # Can return empty in case of empty potential explanans atoms
+        # Can return empty in case we don't have any potential explanans atoms
         return []
 
     # 'Explanation lattice' as per Koopman and Renooij. Implemented as a dict, where
@@ -50,38 +48,32 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
     # incrementally updated BJT's obtained for each possible counterfactuals, so as
     # to minimize redundant computations
 
-    # Compute mode and label for the top element
+    # Compute probabilities and label for the top element
     _, prob_scores = query(bjt, None, (target_event, None), {})
 
-    # Sanity check;
-    #   1) Corresponding probability value should be the highest among possible
-    #      outcomes; i.e., agent itself should be believing the target event is
-    #      the most probable outcome in the marginal table)
-    #   2) Corresponding probability value should be above the threshold; i.e.,
-    #      in addition to the necessary condition 1), the target event should
-    #      be 'sufficiently likely'
+    # Sanity check: Corresponding probability value should be above the threshold;
+    # i.e., the target event should be 'sufficiently likely'
     tgt_prob = [prob for prob, is_tgt in prob_scores[()].values() if is_tgt][0]
-    mode_prob = max(prob for prob, _ in prob_scores[()].values())
-    assert tgt_prob == mode_prob and tgt_prob > threshold
-
-    # Initialize lattice with the top element, namely the full evidence. Index
-    # each lattice node by (frozen)set of indices of evidence atoms whose values
-    # differ from the original ones.
-    expl_lattice = { frozenset(): ("true", { (): bjt }) }
+    assert tgt_prob >= threshold
 
     # For each evidence, find the corresponding likelihood value from the
     # original BJT, then find possible alternative likelihood values to explore.
     # Will be used for enumerating all possible counterfactual cases below.
     #
-    # Our heuristics for choice of the likelihoods: If a virtual evidence is not
-    # 'strong enough' for either direction, i.e. the corresponding likelihood
-    # value lies in between [LOW+0.1, HIGH-0.1], we consider both extremes.
-    # Otherwise, we only consider the extreme towards the 'opposite' direction
-    # (e.g. 0.8 -> LOW), as we deem it is more certain that the 'tipping point'
-    # would be crossed by exploring the opposite extreme, but possibly not the
-    # other extreme, if at all.
-    alternative_likelihoods = {}
+    # Our heuristics for choice of the likelihoods: We consider alternatives of
+    # the likelihood values higher than 0.5 discounted down to some moderately
+    # low values (e.g. 0.8 -> LOW). In effect, this considers counterfactual cases
+    # in which some 'positive' observations were 'negative' instead, but not the
+    # other direction. This reflects the general intuition that it makes (more)
+    # sense to give occurrences of properties as sufficient explanation, whilst
+    # non-occurrences of properties are less appropriate (where non-occurrences
+    # are the 'norm', or the 'default expectation').
+    alt_likelihoods = []
     for evd_atom in evidence_atoms:
+        if evd_atom not in bjt.graph["atoms_map"]:
+            # Visual observation not registered due to very low probability score
+            continue
+
         state_atom = Literal(evd_atom.name.strip("v_"), evd_atom.args)
 
         evd_ai = bjt.graph["atoms_map"][evd_atom]
@@ -95,15 +87,22 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
         ][0]
         orig_vev_likelihood = float(np.exp(orig_vev_likelihood.primitivize()))
 
-        if orig_vev_likelihood > HIGH-0.1:
-            alternative_likelihoods[evd_atom] = [LOW]
-        elif orig_vev_likelihood < LOW+0.1:
-            alternative_likelihoods[evd_atom] = [HIGH]
-        else:
-            alternative_likelihoods[evd_atom] = [LOW, HIGH]
+        if orig_vev_likelihood > 0.5:
+            # Some ordering is automatically imposed among the atoms by list index
+            alt_likelihoods.append((evd_atom, [LOW]))
+
+    if len(alt_likelihoods) == 0:
+        # Can return empty in case we don't have any alternative likelihoods worth
+        # considering
+        return []
+
+    # Initialize lattice with the top element, namely the full evidence. Index
+    # each lattice node by (frozen)set of indices of evidence atoms whose values
+    # differ from the original ones.
+    expl_lattice = { frozenset(): ("true", { (): bjt }) }
 
     # Initialize breadth-first search queue with the children of the top element.
-    search_queue = list(_lattice_children(frozenset(), len(evidence_atoms)))
+    search_queue = list(_lattice_children(frozenset(), len(alt_likelihoods)))
 
     # Potential sufficient explanation candidates; initialize with top element
     potential_suff_expls = set()
@@ -126,10 +125,9 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
         label_true = True
 
         # Each possible combination of values correspond to one counterfactual case,
-        # compute modes and labels for each
+        # compute probabilities and labels for each
         counterfactual_cases = product(*[
-            alternative_likelihoods[evidence_atoms[ei]]
-            for ei in ev_atoms_ordered
+            alt_vals for _, alt_vals in alt_likelihoods
         ])
         for cf_case in counterfactual_cases:
             # Incremental reasoning with BJT; taking one of the parent's BJT with
@@ -160,7 +158,7 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
                 alt_val_poly = Polynomial.from_primitive(float(np.log(alt_val)))
                 alt_val_1m_poly = Polynomial.from_primitive(float(np.log(1-alt_val)))
 
-                evd_atom = evidence_atoms[ei]
+                evd_atom = alt_likelihoods[ei][0]
                 state_atom = Literal(evd_atom.name.strip("v_"), evd_atom.args)
 
                 evd_ai = bjt_new.graph["atoms_map"][evd_atom]
@@ -196,13 +194,13 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
             _, prob_scores = query(bjt_new, None, (target_event, None), {})
 
             # Record the updated BJT to lattice along with the counterfactual case
-            expl_lattice[node][1][cf_case] = bjt_new
+            cf_case_subset = tuple(cf_case[ei] for ei in ev_atoms_ordered)
+            expl_lattice[node][1][cf_case_subset] = bjt_new
 
-            # Mode & threshold check for labeling
+            # Probability query & threshold check for labeling
             tgt_prob = [prob for prob, is_tgt in prob_scores[()].values() if is_tgt][0]
-            mode_prob = max(prob for prob, _ in prob_scores[()].values())
 
-            if not (tgt_prob == mode_prob and tgt_prob > threshold):
+            if tgt_prob < threshold:
                 # No further processing necessary for our purpose, can break
                 label_true = False
                 break
@@ -212,16 +210,16 @@ def attribute(bjt, target_event, evidence_atoms, threshold):
             # and enqueue children
             expl_lattice[node] = ("true", expl_lattice[node][1])
             potential_suff_expls.add(node)
-            for child in _lattice_children(node, len(evidence_atoms)):
+            for child in _lattice_children(node, len(alt_likelihoods)):
                 search_queue.append(child)
 
     # Search terminated: find and return sufficient explanations
     suff_expls = [
-        {evidence_atoms[ei] for ei in set(range(len(evidence_atoms)))-node}
+        {alt_likelihoods[ei][0] for ei in set(range(len(alt_likelihoods)))-node}
         for node in potential_suff_expls
         if all(
             expl_lattice[chd][0] != "true"
-            for chd in _lattice_children(node, len(evidence_atoms))
+            for chd in _lattice_children(node, len(alt_likelihoods))
         )
     ]
 

@@ -18,6 +18,7 @@ import hydra
 import tqdm as tqdm
 import numpy as np
 import pandas as pd
+import pytorch_lightning as pl
 from omegaconf import OmegaConf
 # from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
@@ -38,7 +39,7 @@ def main(cfg):
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
     # Set seed
-    random.seed(cfg.seed)
+    pl.seed_everything(cfg.seed)
 
     # Set up agent
     agent = ITLAgent(cfg)
@@ -79,7 +80,7 @@ def main(cfg):
 
                 # Fit classifier and run on test set
                 # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 100), weights="distance")
-                bin_clf = SVC(C=1000, probability=True, random_state=cfg.seed)
+                bin_clf = SVC(C=1000, probability=True)
                 bin_clf.fit(X, y)
                 true_pos = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 true_neg = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5

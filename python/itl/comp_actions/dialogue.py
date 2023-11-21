@@ -379,9 +379,6 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                                 frontier.add(c_lit)
                                 evidence_atoms.add(ev_lit)
 
-            # Cast as tuple to assign (some arbitrary) ordered indexing
-            evidence_atoms = tuple(evidence_atoms)
-
             # Manually select 'competitor' atoms that could've been the answer
             # in place of the true one (not necessarily mutually exclusive);
             # this is a band-aid solution right now as we are manually providing
@@ -405,6 +402,7 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
             suff_expls = agent.symbolic.attribute(
                 bjt_v, tgt_ev, evidence_atoms, threshold=ans_threshold
             )
+            suff_expls = [expl for expl in suff_expls if len(expl) > 0]
 
             if len(suff_expls) > 0:
                 # Found some sufficient explanations; report the first one as the

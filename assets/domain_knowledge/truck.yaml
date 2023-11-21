@@ -5,8 +5,8 @@
 # {class_name}:
 #     supertype: {class_name}
 #     parts:
-#         - {class_name}
-#         - {class_name}
+#         {class_name}: {class_name}
+#         {class_name}: {class_name}
 #         ...
 #     part_attributes:
 #         {class_name}:
@@ -21,23 +21,23 @@
 
 base truck:
     supertype: truck
-    parts: []
+    parts: {}
     part_attributes: null
 
 dump truck:
     supertype: truck
     parts:
-        - dumper
+        load: dumper
     part_attributes: null
 
 missile truck:
     supertype: truck
     parts:
-        - rocket launcher
+        load: rocket launcher
     part_attributes: null
 
 fire truck:
     supertype: truck
     parts:
-        - ladder
+        load: ladder
     part_attributes: null

@@ -4,10 +4,12 @@ Simulated user which takes part in dialogue with rule-based pattern matching
 """
 import re
 import glob
+import copy
 import random
 
 import yaml
 import inflect
+import numpy as np
 
 
 class SimulatedTeacher:
@@ -31,7 +33,6 @@ class SimulatedTeacher:
                 self.domain_knowledge.update(yaml.safe_load(yml_f))
         # Convert lists to sets for order invariance
         for info in self.domain_knowledge.values():
-            info["parts"] = set(info["parts"])
             if info["part_attributes"] is None:
                 info["part_attributes"] = {}
             else:
@@ -53,7 +54,7 @@ class SimulatedTeacher:
         sampled_type = random.sample(range(len(target_concepts)), 1)[0]
 
         # Initialize target concept queue and episode record
-        self.current_queue = list(target_concepts[sampled_type].items())
+        self.current_queue = copy.deepcopy(target_concepts[sampled_type])
         self.current_episode_record = {}
 
         # Return environment parameters to pass
@@ -71,7 +72,16 @@ class SimulatedTeacher:
         """
         # Dequeue from current episode's target concept queue
         self.current_target_concept = self.current_queue.pop(0)
-        gameObject_handle = self.current_target_concept[1]
+        part_type, part_subtype = self.current_target_concept
+
+        if part_type is None:
+            gameObject_handle = "/truck"
+        else:
+            part_subtype_cc = "".join(
+                tok.capitalize() if i>0 else tok
+                for i, tok in enumerate(part_subtype.split(" "))
+            )           # camelCase
+            gameObject_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
 
         opening_outputs = {
             "prior": [{
@@ -88,7 +98,15 @@ class SimulatedTeacher:
 
     def react(self, agent_reactions):
         """ Rule-based pattern matching for handling agent responses """
-        target_concept, gameObject_handle = self.current_target_concept
+        part_type, target_concept = self.current_target_concept
+        if part_type is None:
+            gameObject_handle = "/truck"
+        else:
+            part_subtype_cc = "".join(
+                tok.capitalize() if i>0 else tok
+                for i, tok in enumerate(target_concept.split(" "))
+            )           # camelCase
+            gameObject_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
 
         response = []
         for utt, dem_refs in agent_reactions:
@@ -154,10 +172,71 @@ class SimulatedTeacher:
             elif utt == "I cannot explain.":
                 # Agent couldn't provide any verbal explanations for its previous answer;
                 # do nothing for this utterance
-                pass
+
+                if any(target_concept in conc_pair for conc_pair in self.taught_diffs):
+                    # Provide correct part labeling where applicable
+                    target_part_info = self.domain_knowledge[target_concept]["parts"]
+
+                    for part_type, part_subtype in target_part_info.items():
+                        part_subtype_cc = "".join(
+                            tok.capitalize() if i>0 else tok
+                            for i, tok in enumerate(part_subtype.split(" "))
+                        )           # camelCase
+                        part_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
+
+                        response.append({
+                            "utterance": f"This is a {part_subtype}.",
+                            "pointing": { (0, 4): part_handle }
+                        })
 
             elif utt.startswith("Because"):
-                print(0)
+                # Agent provided explanation for its previous answer; expecting the agent's
+                # recognition of truck parts, which it deemed relevant to its reasoning
+                reasons = utt.strip("Because ").strip(".").split(", and ")
+                reasons = reasons[0].split("b") + reasons[1:]
+                reasons = [re.findall(r"this is a (.*)", r)[0] for r in reasons]
+
+                dem_refs = sorted(dem_refs.items())
+
+                for part, (_, reference) in zip(reasons, dem_refs):
+                    # For each part statement given as explanation, provide feedback
+                    # on whether the agent's judgement was correct (will be most likely
+                    # wrong... I suppose for now)
+
+                    if isinstance(reference, str):
+                        # Reference by Unity GameObject string name; test by the object
+                        # name whether the agent's judgement was correct
+                        # (Will reach here if the region localized by the agent's vision
+                        # module has sufficiently high box-IoU with one of the existing
+                        # real object... Will it ever, though?)
+                        raise NotImplementedError
+
+                    else:
+                        # Reference by raw mask bitmap; the referenced entity is a 'bogus'
+                        # not corresponding to any real GameObject, always incorrect
+                        assert isinstance(reference, np.ndarray)
+
+                        # Let the agent know the part recognition is incorrect
+                        response.append({
+                            "utterance": f"This is not a {part}.",
+                            "pointing": { (0, 4): reference.reshape(-1).tolist() }
+                        })
+
+                    # Also provide correct part labeling where applicable
+                    if any(target_concept in conc_pair for conc_pair in self.taught_diffs):
+                        target_part_info = self.domain_knowledge[target_concept]["parts"]
+
+                        for part_type, part_subtype in target_part_info.items():
+                            part_subtype_cc = "".join(
+                                tok.capitalize() if i>0 else tok
+                                for i, tok in enumerate(part_subtype.split(" "))
+                            )           # camelCase
+                            part_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
+
+                            response.append({
+                                "utterance": f"This is a {part_subtype}.",
+                                "pointing": { (0, 4): part_handle }
+                            })
 
             elif utt.startswith("How are") and utt.endswith("different?"):
                 # Agent requested generic differences between two similar concepts
@@ -260,13 +339,21 @@ def _compute_concept_differences(domain_knowledge, conc1, conc2):
         conc_diffs["parts"] = []
 
         # Symmetric set difference on part sets
-        for part in conc1_props["parts"]-conc2_props["parts"]:
-            conc_diffs["parts"].append((conc1, part))
-        for part in conc2_props["parts"]-conc1_props["parts"]:
-            conc_diffs["parts"].append((conc2, part))
+        part_type_union = set(conc1_props["parts"]) | set(conc2_props["parts"])
+        for part_type in part_type_union:
+            if conc1_props["parts"].get(part_type) == conc2_props["parts"].get(part_type):
+                # No difference on part type info
+                continue
+
+            if part_type in conc1_props["parts"]:
+                conc_diffs["parts"].append((conc1, conc1_props["parts"][part_type]))
+            if part_type in conc2_props["parts"]:
+                conc_diffs["parts"].append((conc2, conc2_props["parts"][part_type]))
 
     elif conc1_props["part_attributes"] != conc2_props["part_attributes"]:
         conc_diffs["part_attributes"] = []
+
+        raise NotImplementedError
 
         # Symmetric set difference on part attributes for each corresponding part
         for part in conc1_props["parts"]:
@@ -281,7 +368,5 @@ def _compute_concept_differences(domain_knowledge, conc1, conc2):
                 conc_diffs["part_attributes"].append(
                     (conc2, part, list(conc2_attrs-conc1_attrs))
                 )
-
-        raise NotImplementedError
 
     return conc_diffs

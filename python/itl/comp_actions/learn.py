@@ -27,6 +27,9 @@ is_lifted = lambda cnjt: all(is_var for _, is_var in cnjt.args) \
 has_pred_referent = \
     lambda cnjt: any(isinstance(a,str) and a[0].lower()=="p" for a, _ in cnjt.args) \
         if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
+has_reserved_pred = \
+    lambda cnjt: cnjt.name.startswith("*_") \
+        if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
 
 def identify_mismatch(agent, rule):
     """
@@ -38,6 +41,9 @@ def identify_mismatch(agent, rule):
         (ante is None or is_grounded(ante))
     rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
         (ante is None or has_pred_referent(ante))
+
+    # Skip handling duplicate cases in the context
+    if rule in [r for r, _, _ in agent.symbolic.mismatches]: return
 
     if (rule_is_grounded and not rule_has_pred_referent and 
         agent.symbolic.concl_vis is not None):
@@ -51,13 +57,11 @@ def identify_mismatch(agent, rule):
 
         surprisal = -math.log(ev_prob + EPS)
         if surprisal >= -math.log(SR_THRES):
-            m = (rule, surprisal)
-            if m not in agent.symbolic.mismatches:
-                agent.symbolic.mismatches.append(m)
+            agent.symbolic.mismatches.append([rule, surprisal, False])
 
 def identify_confusion(agent, rule, prev_statements, novel_concepts):
     """
-    Test against vision module output to identify  any 'concept overlap' -- i.e.
+    Test against vision module output to identify any 'concept overlap' -- i.e.
     whenever the agent confuses two concepts difficult to distinguish visually
     and mistakes one for another.
     """
@@ -67,16 +71,22 @@ def identify_confusion(agent, rule, prev_statements, novel_concepts):
     rule_has_pred_referent = (cons is None or has_pred_referent(cons)) and \
         (ante is None or has_pred_referent(ante))
 
-    if (rule_is_grounded and ante is None and not rule_has_pred_referent and
-        agent.cfg.exp.strat_feedback.startswith("maxHelp")):
-        # Grounded fact without constant predicate referents, only if the user
-        # adopts maxHelp* strategy and provides generic NL feedback
+    if (
+        agent.cfg.exp.strat_feedback.startswith("maxHelp") and
+        rule_is_grounded and ante is None and not rule_has_pred_referent
+    ):
+        # Positive grounded fact with non-reserved predicates that don't have constant
+        # predicate referent args; only if the user adopts maxHelp* strategy and provides
+        # generic NL feedback
 
         # Fetch agent's last answer; this assumes the last factual statement
         # by agent is provided as answer to the last question from user. This
         # might change in the future when we adopt a more sophisticated formalism
         # for representing discourse to relax the assumption.
-        prev_statements_A = [stm for _, (spk, stm) in prev_statements if spk=="A"]
+        prev_statements_A = [
+            stm for _, (spk, stm) in prev_statements
+            if spk=="A" and not any(has_reserved_pred(cnjt) for cnjt in stm[0])
+        ]
         if len(prev_statements_A) == 0:
             # Hasn't given an answer (i.e., "I am not sure.")
             return
@@ -89,8 +99,8 @@ def identify_confusion(agent, rule, prev_statements, novel_concepts):
             # Disregard negated conjunctions
             if not isinstance(lit, Literal): continue
 
-            # (Temporary) Only consider 1-place predicates, so retrieve
-            # the single and first entity from the arg list
+            # (Temporary) Only consider 1-place predicates, so retrieve the single
+            # and first entity from the arg list
             assert len(lit.args) == 1
 
             conc_type, conc_ind = lit.name.split("_")
@@ -304,10 +314,10 @@ def handle_mismatch(agent, mismatch):
     assume the user (teacher) is an infallible oracle, and the agent doesn't
     question info provided from user.
     """
-    # This mismatch is about to be handled, remove
-    agent.symbolic.mismatches.remove(mismatch)
+    rule, _, handled = mismatch
 
-    rule, _ = mismatch
+    if handled: return 
+
     for cons, ante in flatten_cons_ante(*rule):
         is_grounded = all(not is_var for l in cons+ante for _, is_var in l.args)
 
@@ -337,6 +347,8 @@ def handle_mismatch(agent, mismatch):
                 f_vecs={ conc_type: f_vec[None,:] },
                 pointers={ conc_type: { conc_ind: exm_pointer } }
             )
+
+    mismatch[2] = True
 
 def handle_confusion(agent, confusion):
     """

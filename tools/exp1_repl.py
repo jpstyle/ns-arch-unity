@@ -12,12 +12,12 @@ import uuid
 import logging
 import warnings
 warnings.filterwarnings("ignore")
-import random
 from PIL import Image
 from collections import defaultdict
 
 import hydra
 import numpy as np
+import pytorch_lightning as pl
 from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from mlagents_envs.environment import UnityEnvironment
@@ -39,7 +39,7 @@ def main(cfg):
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
     # Set seed
-    random.seed(cfg.seed)
+    pl.seed_everything(cfg.seed)
 
     # Experiment tag
     exp_tag = "_".join([
@@ -81,16 +81,16 @@ def main(cfg):
         # with string concept names as key and Unity GameObject string name handle
         # as value
         "prior": [
-            { "truck": "/truck" },
-            { "truck": "/truck", "dumper": "/truck/load/load_dumper" },
-            { "truck": "/truck", "ladder": "/truck/load/load_ladder" },
-            { "truck": "/truck", "rocket launcher": "/truck/load/load_rocketLauncher" },
+            [(None, "truck")],
+            [(None, "truck"), ("load", "dumper")],
+            [(None, "truck"), ("load", "ladder")],
+            [(None, "truck"), ("load", "rocket launcher")]
         ],
         "main": [
-            { "base truck": "/truck" },
-            { "dump truck": "/truck" },
-            { "fire truck": "/truck" },
-            { "missile truck": "/truck" }
+            [(None, "base truck")],
+            [(None, "dump truck")],
+            [(None, "fire truck")],
+            [(None, "missile truck")]
         ]
     }
 
@@ -198,7 +198,7 @@ def main(cfg):
                             env.set_action_for_agent(b_name, dec_step.agent_id, action)
                         else:
                             terminate = True
-                        
+
                         # Disable new scene flag after any agent loop
                         new_scene = False
 
@@ -211,9 +211,12 @@ def main(cfg):
 
                         if len(incoming_msgs) > 0:
                             while len(incoming_msgs) > 0:
-                                # Each message consists of two consecutive buffer items;
-                                # speaker and string content
                                 _, utterance, dem_refs = incoming_msgs.pop(0)
+                                # 1D to 2D according to visual scene dimension
+                                dem_refs = {
+                                    crange: np.array(mask).reshape(i_h, i_w)
+                                    for crange, mask in dem_refs.items()
+                                }
                                 agent_reactions.append((utterance, dem_refs))
 
                         # Simulated teacher (user) response

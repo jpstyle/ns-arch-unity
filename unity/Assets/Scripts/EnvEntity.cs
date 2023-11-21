@@ -340,7 +340,7 @@ public class EnvEntity : MonoBehaviour
         // represents an object instance (possibly not corresponding to any existing Unity
         // scene objects); create a new bogus EnvEntity and manually fill in the mask and
         // box annotation info
-        if (maxIoU < 0.95f)
+        if (maxIoU < 0.9f)
         {
             // Utilizing the max IoU as unique ID...
             var newUid = (int)(maxIoU * 1e6);
