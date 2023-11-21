@@ -172,22 +172,7 @@ class SimulatedTeacher:
             elif utt == "I cannot explain.":
                 # Agent couldn't provide any verbal explanations for its previous answer;
                 # do nothing for this utterance
-
-                if any(target_concept in conc_pair for conc_pair in self.taught_diffs):
-                    # Provide correct part labeling where applicable
-                    target_part_info = self.domain_knowledge[target_concept]["parts"]
-
-                    for part_type, part_subtype in target_part_info.items():
-                        part_subtype_cc = "".join(
-                            tok.capitalize() if i>0 else tok
-                            for i, tok in enumerate(part_subtype.split(" "))
-                        )           # camelCase
-                        part_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
-
-                        response.append({
-                            "utterance": f"This is a {part_subtype}.",
-                            "pointing": { (0, 4): part_handle }
-                        })
+                pass
 
             elif utt.startswith("Because"):
                 # Agent provided explanation for its previous answer; expecting the agent's
@@ -221,22 +206,6 @@ class SimulatedTeacher:
                             "utterance": f"This is not a {part}.",
                             "pointing": { (0, 4): reference.reshape(-1).tolist() }
                         })
-
-                    # Also provide correct part labeling where applicable
-                    if any(target_concept in conc_pair for conc_pair in self.taught_diffs):
-                        target_part_info = self.domain_knowledge[target_concept]["parts"]
-
-                        for part_type, part_subtype in target_part_info.items():
-                            part_subtype_cc = "".join(
-                                tok.capitalize() if i>0 else tok
-                                for i, tok in enumerate(part_subtype.split(" "))
-                            )           # camelCase
-                            part_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
-
-                            response.append({
-                                "utterance": f"This is a {part_subtype}.",
-                                "pointing": { (0, 4): part_handle }
-                            })
 
             elif utt.startswith("How are") and utt.endswith("different?"):
                 # Agent requested generic differences between two similar concepts

@@ -221,7 +221,7 @@ class ITLAgent:
         prev_dialogue_state = self.lang.dialogue.export_as_dict()
         prev_translated = self.symbolic.translate_dialogue_content(prev_dialogue_state)
         prev_scene = self.vision.scene
-        prev_pr_prog = self.symbolic.concl_vis[1][0] if self.symbolic.concl_vis else None
+        prev_pr_prog = self.symbolic.concl_vis[1][1] if self.symbolic.concl_vis else None
         prev_kb = self.kb_snap
         prev_context = (prev_scene, prev_pr_prog, prev_kb)
 

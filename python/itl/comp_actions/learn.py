@@ -421,15 +421,23 @@ def handle_acknowledgement(agent, acknowledgement_info):
 
     statement, polarity, context = ack_data
     vis_scene, pr_prog, kb_snap = context
-    if polarity != True: return         # Nothing to do with negative acknowledgements
+    if polarity != True:
+        # Nothing to do with negative acknowledgements
+        agent.lang.dialogue.acknowledged_stms[ack_ind] = None
+        return
 
     # Vision-only (neural) estimations recognized
-    vis_lits = {r.head[0]: w_pr[0] for r, w_pr in pr_prog.rules}
+    lits_from_vis = {
+        r.body[0].as_atom() for r, _, _ in pr_prog.rules
+        if len(r.head)==0 and len(r.body)==2 and r.body[0].naf
+    }
 
     # Find literals to be considered as confirmed via user's assent; always include
     # each literal in `statement`, and others if relevant via some rule in KB
     literals_acknowledged = set()
     for main_lit in statement:
+        if main_lit.name.startswith("*_"): continue
+
         literals_acknowledged.add(main_lit)
 
         # Find relevant KB entries containing the main literal
@@ -448,7 +456,7 @@ def handle_acknowledgement(agent, acknowledgement_info):
             # Only consider unnegated conjuncts in consequent
             cons_pos = tuple(cnjt for cnjt in cons if isinstance(cnjt, Literal))
 
-            for conjunct in cons_pos+ante:
+            for conjunct in ante:
                 assert isinstance(conjunct, Literal)
                 if conjunct.name==main_lit.name:
                     vc_map = {v: c for v, c in zip(conjunct.args, main_lit.args)}
@@ -483,7 +491,7 @@ def handle_acknowledgement(agent, acknowledgement_info):
                 # in visual scene (no matter how high the estimation confidences are
                 # -- at least for now). The main literal is explicitly acknowledged
                 # and thus always can be considered as satisfied.
-                if all(lit in vis_lits for lit in ante_subs_full-{main_lit}):
+                if all(lit in lits_from_vis for lit in ante_subs_full-{main_lit}):
                     literals_acknowledged |= cons_subs_full
                     literals_acknowledged |= ante_subs_full
 
