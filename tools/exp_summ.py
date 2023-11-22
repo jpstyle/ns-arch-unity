@@ -1,6 +1,8 @@
 """
-Script for dry-running the ITL environment with a student and a user-controlled
-teacher (in Unity lingo, Behavior Type: Heuristics for teacher agent)
+Script for collecting and summarizing statistics recorded from the exp_run.py script.
+Any results existing in the outputs folder will be gathered and summarized, as long
+as they exist in the right arrangement (i.e., that expected after running exp_run.py
+scripts in appropriate settings).
 """
 import os
 import sys

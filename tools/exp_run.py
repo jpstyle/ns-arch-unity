@@ -1,6 +1,14 @@
 """
-Script for dry-running the ITL environment with a student and a user-controlled
-teacher (in Unity lingo, Behavior Type: Heuristics for teacher agent)
+Script for running interactive symbol grounding experiments. Each experiment run
+consists of the initial probing question from the (simulated) user and the ensuing
+series of reactions that differ based on the agent's belief states and dialogue
+participants' choice of dialogue strategies.
+
+Can be run in 'training mode' or 'test mode'. Different statistics are recorded
+for each mode. For the former, we track the cumulative regret curves across the
+series of interaction episodes. The latter mode is for evaluation; it disables
+the agent's learning capability, fixing the agent's knowledge across the evaluation
+suite, measuring the agent's answers and ground truths for the 'test problems'.
 """
 import os
 import sys
