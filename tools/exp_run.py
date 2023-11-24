@@ -158,19 +158,19 @@ def main(cfg):
         ],
         "single_fourway": [
             (
-                (("load_type", 0)),
+                (("load_type", 0),),
                 [(None, "base truck")]
             ),
             (
-                (("load_type", 1)),
+                (("load_type", 1),),
                 [(None, "dump truck")]
             ),
             (
-                (("load_type", 2)),
+                (("load_type", 2),),
                 [(None, "fire truck")]
             ),
             (
-                (("load_type", 3)),
+                (("load_type", 3),),
                 [(None, "missile truck")]
             )
         ],
