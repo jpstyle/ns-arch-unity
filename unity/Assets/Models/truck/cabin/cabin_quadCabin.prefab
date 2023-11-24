@@ -135,6 +135,11 @@ PrefabInstance:
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 6de4e86211f4b6e7d8464ffa412b3a74, type: 2}
+    - target: {fileID: -5092076718871301875, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_grill
+      objectReference: {fileID: 0}
     - target: {fileID: -4171996442107106872, guid: 28fec702ddbaaaa2ab053b176b3069a6,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -153,23 +158,68 @@ PrefabInstance:
     - target: {fileID: 919132149155446097, guid: 28fec702ddbaaaa2ab053b176b3069a6,
         type: 3}
       propertyPath: m_Name
-      value: cabin_4seats
+      value: cabin_quadCabin
+      objectReference: {fileID: 0}
+    - target: {fileID: 941198836258835762, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_flashlight_back_left
+      objectReference: {fileID: 0}
+    - target: {fileID: 1155210838658741500, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_seats_front
       objectReference: {fileID: 0}
     - target: {fileID: 1356937995918513448, guid: 28fec702ddbaaaa2ab053b176b3069a6,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 6de4e86211f4b6e7d8464ffa412b3a74, type: 2}
+    - target: {fileID: 1430589453626873149, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_frontlight_right
+      objectReference: {fileID: 0}
+    - target: {fileID: 1688425656491037233, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_flashlight_back_right
+      objectReference: {fileID: 0}
+    - target: {fileID: 2104759413135822757, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_flashlight_front_left
+      objectReference: {fileID: 0}
     - target: {fileID: 2246787155094561239, guid: 28fec702ddbaaaa2ab053b176b3069a6,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 18e2d159e14c285d689f06b8bae94137, type: 2}
+    - target: {fileID: 2457641561344477896, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_cover
+      objectReference: {fileID: 0}
+    - target: {fileID: 2684583403771560580, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_seats_back
+      objectReference: {fileID: 0}
     - target: {fileID: 4380411671540905619, guid: 28fec702ddbaaaa2ab053b176b3069a6,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: d2b63dd0f80847e77a46faeb739578ea, type: 2}
+    - target: {fileID: 5062744643503892175, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_frontlight_left
+      objectReference: {fileID: 0}
+    - target: {fileID: 5434922811199864885, guid: 28fec702ddbaaaa2ab053b176b3069a6,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_quadCabin_flashlight_front_right
+      objectReference: {fileID: 0}
     - target: {fileID: 8048427176991851849, guid: 28fec702ddbaaaa2ab053b176b3069a6,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -226,9 +276,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a611df269dde2ed0bb259fb39c2ea5a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  cameras: []
   uid: 
   isAtomic: 0
+  isBogus: 0
 --- !u!114 &8065876057423024663
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -243,7 +293,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   labels:
   - cabin
-  - cabin_4seats
+  - cabin_quadCabin
   useAutoLabeling: 0
   autoLabelingSchemeType: 
 --- !u!4 &869964042523646501 stripped

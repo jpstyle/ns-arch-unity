@@ -387,7 +387,7 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
             competing_evts = [
                 atm for atm in bjt_v.graph["atoms_map"]
                 if (
-                    atm.name in [f"cls_{ci}" for ci in [4,5,6,7]] and
+                    atm.name in [f"cls_{ci}" for ci in [8,9,10,11,12]] and
                     atm.name!=tgt_ev[0].name and atm.args==tgt_ev[0].args
                 )
             ]

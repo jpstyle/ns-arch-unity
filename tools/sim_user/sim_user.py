@@ -26,6 +26,9 @@ class SimulatedTeacher:
         # by asking further questions after correct answer feedback)
         self.strat_feedback = cfg.exp.strat_feedback
 
+        # Whether the agent is running in test mode
+        self.agent_test_mode = cfg.agent.test_mode
+
         # Load any domain knowledge stored as yamls in assets dir
         self.domain_knowledge = {}
         for yml_path in glob.glob(f"{cfg.paths.assets_dir}/domain_knowledge/*.yaml"):
@@ -41,7 +44,7 @@ class SimulatedTeacher:
                     for part, attrs in info["part_attributes"].items()
                 }
 
-    def setup_episode(self, concept_set):
+    def setup_episode(self, concept_set, shrink_domain=False):
         """
         Preparation of a new interaction episode, comprising random initialization
         of the task for the episode and queueing of target concepts to teach
@@ -51,15 +54,21 @@ class SimulatedTeacher:
 
         # Random environment initialization before reset; currently, sample fine-grained
         # type of truck as distinguished by load type
-        sampled_type = random.sample(range(len(target_concepts)), 1)[0]
+        if shrink_domain:
+            # Sample from target concept set except the last one
+            sampled_type = random.sample(range(len(target_concepts)-1), 1)[0]
+        else:
+            # Default: sample from whole target concept set
+            sampled_type = random.sample(range(len(target_concepts)), 1)[0]
 
         # Initialize target concept queue and episode record
-        self.current_queue = copy.deepcopy(target_concepts[sampled_type])
+        self.current_queue = copy.deepcopy(target_concepts[sampled_type][1])
         self.current_episode_record = {}
 
         # Return environment parameters to pass
         random_inits = {
-            "load_type": sampled_type
+            part_type: part_subtype_ind
+            for part_type, part_subtype_ind in target_concepts[sampled_type][0]
         }
         return random_inits
 
@@ -72,39 +81,47 @@ class SimulatedTeacher:
         """
         # Dequeue from current episode's target concept queue
         self.current_target_concept = self.current_queue.pop(0)
-        part_type, part_subtype = self.current_target_concept
+        gameObject_path, _ = self.current_target_concept
 
-        if part_type is None:
+        if gameObject_path is None:
             gameObject_handle = "/truck"
+            part_type = None
         else:
+            part_type, part_subtype = gameObject_path
             part_subtype_cc = "".join(
                 tok.capitalize() if i>0 else tok
                 for i, tok in enumerate(part_subtype.split(" "))
             )           # camelCase
             gameObject_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
 
-        opening_outputs = {
-            "prior": [{
+        if self.concept_set == "prior_supertypes":
+            return [{
                 "utterance": "What is this?",
                 "pointing": { (8, 12): gameObject_handle }
-            }],
-            "main": [{
+            }]
+        elif self.concept_set == "prior_parts":
+            return [{
+                "utterance": f"What kind of {part_type} is this?",
+                "pointing": { (17+len(part_type), 17+len(part_type)+4): gameObject_handle }
+            }]
+        elif self.concept_set == "single_fourway" or self.concept_set == "double_fiveway":
+            return [{
                 "utterance": "What kind of truck is this?",
                 "pointing": { (22, 26): gameObject_handle }
             }]
-        }
-
-        return opening_outputs[self.concept_set]
+        else:
+            raise ValueError
 
     def react(self, agent_reactions):
         """ Rule-based pattern matching for handling agent responses """
-        part_type, target_concept = self.current_target_concept
-        if part_type is None:
+        gameObject_path, string_name = self.current_target_concept
+        if gameObject_path is None:
             gameObject_handle = "/truck"
         else:
+            part_type, part_subtype = gameObject_path
             part_subtype_cc = "".join(
                 tok.capitalize() if i>0 else tok
-                for i, tok in enumerate(target_concept.split(" "))
+                for i, tok in enumerate(part_subtype.split(" "))
             )           # camelCase
             gameObject_handle = f"/truck/{part_type}/{part_type}_{part_subtype_cc}"
 
@@ -114,60 +131,78 @@ class SimulatedTeacher:
                 # Agent answered it doesn't have any clue what the concept instance
                 # is; provide correct label, even if taking minimalist strategy (after
                 # all, learning cannot take place if we don't provide any)
-                self.current_episode_record[target_concept] = None
+                self.current_episode_record[string_name] = None
 
-                response.append({
-                    "utterance": f"This is a {target_concept}.",
-                    "pointing": { (0, 4): gameObject_handle }
-                })
+                if self.agent_test_mode:
+                    # No feedback needed if agent running in test mode
+                    if len(self.current_queue) > 0:
+                        # Remaining target concepts to test and teach
+                        response += self.initiate_dialogue()
+                    else:
+                        # No further interaction needed
+                        pass
+                else:
+                    response.append({
+                        "utterance": f"This is a {string_name}.",
+                        "pointing": { (0, 4): gameObject_handle }
+                    })
 
             elif utt.startswith("This is"):
                 # Agent provided an answer what the instance is
                 answer_content = re.findall(r"This is a (.*)\.$", utt)[0]
-                self.current_episode_record[target_concept] = answer_content
+                self.current_episode_record[string_name] = answer_content
 
-                if target_concept == answer_content:
-                    # Correct answer
-
-                    # # Teacher would acknowledge by saying "Correct" in the previous
-                    # # project. but I think we can skip that for simplicity
-                    # responses.append({
-                    #     "utterances": ["Correct."],
-                    #     "pointing": [{}]
-                    # })
-
+                if self.agent_test_mode:
+                    # No feedback needed if agent running in test mode
                     if len(self.current_queue) > 0:
                         # Remaining target concepts to test and teach
                         response += self.initiate_dialogue()
+                    else:
+                        # No further interaction needed
+                        pass
                 else:
-                    # Incorrect answer; reaction branches here depending on teacher's
-                    # strategy
+                    if string_name == answer_content:
+                        # Correct answer
 
-                    # At all feedback level, let the agent know the answer is incorrect
-                    response.append({
-                        "utterance": f"This is not a {answer_content}.",
-                        "pointing": { (0, 4): gameObject_handle }
-                    })
+                        # # Teacher would acknowledge by saying "Correct" in the previous
+                        # # project. but I think we can skip that for simplicity
+                        # responses.append({
+                        #     "utterances": ["Correct."],
+                        #     "pointing": [{}]
+                        # })
 
-                    # Correct label additionally provided if teacher strategy is 'greater'
-                    # than [minimal feedback] or the concept hasn't ever been taught
-                    taught_concepts = set(
-                        conc for epi in self.episode_records for conc in epi
-                    )
-                    is_novel_concept = target_concept not in taught_concepts
-                    if self.strat_feedback != "minHelp" or is_novel_concept:
+                        if len(self.current_queue) > 0:
+                            # Remaining target concepts to test and teach
+                            response += self.initiate_dialogue()
+                    else:
+                        # Incorrect answer; reaction branches here depending on teacher's
+                        # strategy
+
+                        # At all feedback level, let the agent know the answer is incorrect
                         response.append({
-                            "utterance": f"This is a {target_concept}.",
+                            "utterance": f"This is not a {answer_content}.",
                             "pointing": { (0, 4): gameObject_handle }
                         })
 
-                    # Ask for an explanation why the agent have the incorrect answer,
-                    # if the strategy is to take interest
-                    if self.strat_feedback == "maxHelpExpl":
-                        response.append({
-                            "utterance": f"Why did you think this is a {answer_content}?",
-                            "pointing": { (18, 22): gameObject_handle }
-                        })
+                        # Correct label additionally provided if teacher strategy is 'greater'
+                        # than [minimal feedback] or the concept hasn't ever been taught
+                        taught_concepts = set(
+                            conc for epi in self.episode_records for conc in epi
+                        )
+                        is_novel_concept = string_name not in taught_concepts
+                        if self.strat_feedback != "minHelp" or is_novel_concept:
+                            response.append({
+                                "utterance": f"This is a {string_name}.",
+                                "pointing": { (0, 4): gameObject_handle }
+                            })
+
+                        # Ask for an explanation why the agent have the incorrect answer,
+                        # if the strategy is to take interest
+                        if self.strat_feedback == "maxHelpExpl":
+                            response.append({
+                                "utterance": f"Why did you think this is a {answer_content}?",
+                                "pointing": { (18, 22): gameObject_handle }
+                            })
 
             elif utt == "I cannot explain.":
                 # Agent couldn't provide any verbal explanations for its previous answer;
@@ -239,7 +274,7 @@ class SimulatedTeacher:
                             "pointing": {}
                         })
                     raise NotImplementedError       # Remove after sanity check
-                
+
                 if "parts" in conc_diffs:
                     # "Xs have Ys"
                     for conc, part in conc_diffs["parts"]:

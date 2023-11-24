@@ -1,3 +1,4 @@
-concept_set: main
+concept_set: "single_fourway"
 num_episodes: 3000
-strat_feedback: "minHelp"             # Options: "minHelp", "medHelp", "maxHelpNoexpl", "maxHelpExpl"
+strat_feedback: "minHelp"     # Options: "minHelp", "medHelp", "maxHelpNoexpl", "maxHelpExpl"
+domain_shift: false           # If true, introduce the last target concept midway

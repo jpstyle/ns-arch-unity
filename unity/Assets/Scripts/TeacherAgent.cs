@@ -51,8 +51,12 @@ public class TeacherAgent : DialogueAgent
 
         // Sample truck configs
         var truckType = truckTypes[Random.Range(0, truckTypes.Count)];
-        var cabinType = cabinTypes[Random.Range(0, cabinTypes.Count)];
-        var loadType = loadTypes[(int) envParams.GetWithDefault("load_type", 0f)];
+        var cabinType = cabinTypes[
+            (int) envParams.GetWithDefault("cabin_type", Random.Range(0, cabinTypes.Count))
+        ];
+        var loadType = loadTypes[
+            (int) envParams.GetWithDefault("load_type", Random.Range(0, loadTypes.Count))
+        ];
         var centerChassisType = centerChassisTypes[Random.Range(0, centerChassisTypes.Count)];
 
         // Sample part colorings; parts are logically grouped for coloring, indicated

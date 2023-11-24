@@ -82,23 +82,119 @@ def main(cfg):
     #       injected by "prior" repertoire)
     repertoire = cfg.exp.concept_set
 
-    # Set up target concepts to teach in each episode as a list of dicts, where
-    # each index corresponds to a truck type
+    # Set up target concepts to teach in each episode as a list of tuples
     teacher.target_concept_sets = {
-        # Each dict contains concepts to be tested and taught in a single episode,
-        # with string concept names as key and Unity GameObject string name handle
-        # as value
-        "prior": [
-            [(None, "truck")],
-            [(None, "truck"), ("load", "dumper")],
-            [(None, "truck"), ("load", "ladder")],
-            [(None, "truck"), ("load", "rocket launcher")]
+        # Each tuple contains concepts to be tested and taught in a single episode.
+        # The first tuple entry instructs the Unity simulation environment the
+        # initialization parameters for the episode. The second entry provides a list
+        # of paths to the Unity gameObjects and string concept names.
+        "prior_supertypes": [
+            (
+                (("cabin_type", 0), ("load_type", 0)),
+                [(None, "truck"), (("cabin", "hemtt cabin"), "cabin")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 0)),
+                [(None, "truck"), (("cabin", "quad cabin"), "cabin")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 1)),
+                [(None, "truck"), (("cabin", "hemtt cabin"), "cabin"), (("load", "dumper"), "load")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 1)),
+                [(None, "truck"), (("cabin", "quad cabin"), "cabin"), (("load", "dumper"), "load")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 2)),
+                [(None, "truck"), (("cabin", "hemtt cabin"), "cabin"), (("load", "ladder"), "load")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 2)),
+                [(None, "truck"), (("cabin", "quad cabin"), "cabin"), (("load", "ladder"), "load")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 3)),
+                [(None, "truck"), (("cabin", "hemtt cabin"), "cabin"), (("load", "rocket launcher"), "load")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 3)),
+                [(None, "truck"), (("cabin", "quad cabin"), "cabin"), (("load", "rocket launcher"), "load")]
+            )
         ],
-        "main": [
-            [(None, "base truck")],
-            [(None, "dump truck")],
-            [(None, "fire truck")],
-            [(None, "missile truck")]
+        "prior_parts": [
+            (
+                (("cabin_type", 0), ("load_type", 0)),
+                [(("cabin", "hemtt cabin"), "hemtt cabin")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 0)),
+                [(("cabin", "quad cabin"), "quad cabin")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 1)),
+                [(("cabin", "hemtt cabin"), "hemtt cabin"), (("load", "dumper"), "dumper")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 1)),
+                [(("cabin", "quad cabin"), "quad cabin"), (("load", "dumper"), "dumper")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 2)),
+                [(("cabin", "hemtt cabin"), "hemtt cabin"), (("load", "ladder"), "ladder")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 2)),
+                [(("cabin", "quad cabin"), "quad cabin"), (("load", "ladder"), "ladder")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 3)),
+                [(("cabin", "hemtt cabin"), "hemtt cabin"), (("load", "rocket launcher"), "rocket launcher")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 3)),
+                [(("cabin", "quad cabin"), "quad cabin"), (("load", "rocket launcher"), "rocket launcher")]
+            )
+        ],
+        "single_fourway": [
+            (
+                (("load_type", 0)),
+                [(None, "base truck")]
+            ),
+            (
+                (("load_type", 1)),
+                [(None, "dump truck")]
+            ),
+            (
+                (("load_type", 2)),
+                [(None, "fire truck")]
+            ),
+            (
+                (("load_type", 3)),
+                [(None, "missile truck")]
+            )
+        ],
+        "double_fiveway": [
+            (
+                (("cabin_type", 1), ("load_type", 0)),
+                [(None, "base truck")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 1)),
+                [(None, "dump truck")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 2)),
+                [(None, "fire truck")]
+            ),
+            (
+                (("cabin_type", 1), ("load_type", 3)),
+                [(None, "missile truck")]
+            ),
+            (
+                (("cabin_type", 0), ("load_type", 1)),
+                [(None, "container truck")]
+            )
         ]
     }
 
@@ -122,7 +218,8 @@ def main(cfg):
         logger.info(f"Sys> Episode {i+1})")
 
         # Obtain random initialization of each episode
-        random_inits = teacher.setup_episode(repertoire)
+        shrink_domain = cfg.exp.domain_shift and i < cfg.exp.num_episodes / 2
+        random_inits = teacher.setup_episode(repertoire, shrink_domain=shrink_domain)
 
         # Send randomly initialized parameters to Unity
         for field, value in random_inits.items():
@@ -271,12 +368,10 @@ def main(cfg):
             mistakes[gt_conc].append((new_regrets_conc, new_total_conc))
             mistakes["__all__"].append((new_regrets_all, new_total_all))
 
-            # If not test mode (i.e., training mode), save current agent model checkpoint
-            # to output dir after every 5 mistakes (across all concepts)
-            if not cfg.agent.test_mode:
-                # Avoid redundant saving by checking gt_conc != ans_conc
-                if gt_conc != ans_conc and regrets_all % 5 == 0 and regrets_all > 0:
-                    student.save_model(f"{ckpt_path}/{exp_tag}_{regrets_all}.ckpt")
+        # If not test mode (i.e., training mode), save current agent model checkpoint
+        # to output dir every 20 episodes
+        if not cfg.agent.test_mode and (i+1) % 20 == 0:
+            student.save_model(f"{ckpt_path}/{exp_tag}_{i+1}.ckpt")
 
     # Close Unity environment & tensorboard writer
     env.close()
@@ -295,7 +390,7 @@ def main(cfg):
                     out_csv.write(f"{i+1},{gt_conc},{ans_conc}\n")
 
     else:
-        # Otherwise (i.e., training mode), save cumulative regret curves to output dir
+        # Otherwise (i.e., learning enabled), save cumulative regret curves to output dir
         out_csv_fname = f"cumulReg_{exp_tag}.csv"
 
         with open(os.path.join(results_path, out_csv_fname), "w") as out_csv:
@@ -303,9 +398,6 @@ def main(cfg):
 
             for regrets, total in mistakes["__all__"]:
                 out_csv.write(f"{total},{regrets}\n")
-
-        # Then save final agent model checkpoint to output dir
-        student.save_model(f"{ckpt_path}/{exp_tag}_final-{regrets_all}.ckpt")
 
 
 if __name__ == "__main__":

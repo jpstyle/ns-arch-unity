@@ -49,9 +49,9 @@ def main(cfg):
     conc_types = ["cls"] #, "att", "rel"]
     for conc_type in conc_types:
         if conc_type == "cls" or conc_type == "att":
-            vectors = exemplars.storage_vec[conc_type]
             pos_exs_inds = exemplars.exemplars_pos[conc_type]
             neg_exs_inds = exemplars.exemplars_neg[conc_type]
+            vectors = exemplars.storage_vec[conc_type]
 
             # Dimensionality reduction down to 2D by UMAP, for visual inspection
             mapper = umap.UMAP().fit(vectors)

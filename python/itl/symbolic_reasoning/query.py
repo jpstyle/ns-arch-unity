@@ -81,6 +81,10 @@ def query(bjt, q_vars, event, restrictors):
                     # allowed by restrictors; if qv is not in restrictors, no constaints
                     # placed for qv
                 }
+                preds_filtered = {
+                    p for p in preds_filtered
+                    if p!="unsat" and not p.startswith("v_")
+                }   # These predicates shouldn't be used in query answers
                 subs_options.append(preds_filtered)
             else:
                 subs_options.append(ents)

@@ -140,11 +140,36 @@ PrefabInstance:
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 6de4e86211f4b6e7d8464ffa412b3a74, type: 2}
+    - target: {fileID: -5965371364989495160, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_flashlight_left
+      objectReference: {fileID: 0}
+    - target: {fileID: -5561830173159245337, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_dashboard
+      objectReference: {fileID: 0}
+    - target: {fileID: -4555460130258570440, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_motor_compartment
+      objectReference: {fileID: 0}
+    - target: {fileID: -3153338508318110895, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_engine
+      objectReference: {fileID: 0}
     - target: {fileID: -3051228704143681308, guid: d6c8772a1774f0fdd9922e857c3732fb,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 3593a436d52f8f77cab2e092a5d02e58, type: 2}
+    - target: {fileID: -2934747416080721417, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_frontlight_left2
+      objectReference: {fileID: 0}
     - target: {fileID: -2872675750078934320, guid: d6c8772a1774f0fdd9922e857c3732fb,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -160,6 +185,16 @@ PrefabInstance:
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: 18e2d159e14c285d689f06b8bae94137, type: 2}
+    - target: {fileID: -18771524404205682, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_cover
+      objectReference: {fileID: 0}
+    - target: {fileID: 488942303925752977, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_frontlight_left1
+      objectReference: {fileID: 0}
     - target: {fileID: 860025568833084795, guid: d6c8772a1774f0fdd9922e857c3732fb,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -168,7 +203,17 @@ PrefabInstance:
     - target: {fileID: 919132149155446097, guid: d6c8772a1774f0fdd9922e857c3732fb,
         type: 3}
       propertyPath: m_Name
-      value: cabin_oshkosh
+      value: cabin_hemttCabin
+      objectReference: {fileID: 0}
+    - target: {fileID: 988588798965025851, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_seats
+      objectReference: {fileID: 0}
+    - target: {fileID: 3232528337900591780, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_flashlight_right
       objectReference: {fileID: 0}
     - target: {fileID: 3708327728136809888, guid: d6c8772a1774f0fdd9922e857c3732fb,
         type: 3}
@@ -180,6 +225,16 @@ PrefabInstance:
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
       objectReference: {fileID: 2100000, guid: d2b63dd0f80847e77a46faeb739578ea, type: 2}
+    - target: {fileID: 7367510253180749075, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_frontlight_right1
+      objectReference: {fileID: 0}
+    - target: {fileID: 9035062507458594535, guid: d6c8772a1774f0fdd9922e857c3732fb,
+        type: 3}
+      propertyPath: m_Name
+      value: cabin_hemttCabin_frontlight_right2
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects:
@@ -233,9 +288,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a611df269dde2ed0bb259fb39c2ea5a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  cameras: []
   uid: 
   isAtomic: 0
+  isBogus: 0
 --- !u!114 &8552772015837510958
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -250,7 +305,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   labels:
   - cabin
-  - cabin_oshkosh
+  - cabin_hemttCabin
   useAutoLabeling: 0
   autoLabelingSchemeType: 
 --- !u!1 &6598065390909420569 stripped

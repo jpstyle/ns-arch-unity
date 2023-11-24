@@ -227,15 +227,15 @@ class ITLAgent:
 
         # Some cleaning steps needed whenever visual context changes
         if self.vision.new_input_provided:
-            # Prior to resetting visual context, store current one into the episodic
-            # memory (visual perceptions & user language inputs), in the form of
-            # LP^MLN program fragments
-            if (self.vision.scene is not None and
-                len(self.vision.scene) > 1 and
-                self.symbolic.concl_vis_lang is not None):
+            # # Prior to resetting visual context, store current one into the episodic
+            # # memory (visual perceptions & user language inputs), in the form of
+            # # LP^MLN program fragments
+            # if (self.vision.scene is not None and
+            #     len(self.vision.scene) > 1 and
+            #     self.symbolic.concl_vis_lang is not None):
 
-                pr_prog, _, dl_prog = self.symbolic.concl_vis_lang[1]
-                self.episodic_memory.append((pr_prog, dl_prog))
+            #     pr_prog, _, dl_prog = self.symbolic.concl_vis_lang[1]
+            #     self.episodic_memory.append((pr_prog, dl_prog))
             
             # Refresh dialogue manager & symbolic reasoning module states
             self.lang.dialogue.refresh()
@@ -317,11 +317,11 @@ class ITLAgent:
                     updated_dialogue_state, self.lt_mem.lexicon
                 )
 
-                if self.vision.scene is not None:
-                    # Sensemaking from vision & language input
-                    self.symbolic.sensemake_vis_lang(updated_dialogue_state)
-                    self.lang.dialogue.sensemaking_vl_snaps[ti_last] = \
-                        self.symbolic.concl_vis_lang
+                # if self.vision.scene is not None:
+                #     # Sensemaking from vision & language input
+                #     self.symbolic.sensemake_vis_lang(updated_dialogue_state)
+                #     self.lang.dialogue.sensemaking_vl_snaps[ti_last] = \
+                #         self.symbolic.concl_vis_lang
 
             ###################################################################
             ##           Identify & exploit learning opportunities           ##

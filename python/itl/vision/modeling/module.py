@@ -23,7 +23,7 @@ from ..utils import flatten_cfg
 
 
 BLUR_RADIUS = 5                 # Gaussian blur kernel radius for background image
-INTENSITY_RATIO = 0.2           # Brightness multiplier for background image
+INTENSITY_RATIO = 0.3           # Brightness multiplier for background image
 MASK_THRES = 0.6                # Segmentation mask binarization threshold
 
 class VisualSceneAnalyzer(pl.LightningModule):
