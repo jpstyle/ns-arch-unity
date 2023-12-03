@@ -4,8 +4,10 @@ Implements dialogue-related composite actions
 import re
 import random
 from functools import reduce
-from itertools import permutations
+from itertools import permutations, combinations
 from collections import defaultdict
+
+import networkx as nx
 
 from ..lpmln import Literal
 from ..lpmln.utils import flatten_cons_ante
@@ -114,7 +116,7 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
     # critical influence on the symbolic sensemaking process. Make sure such entities, if
     # actually present, are captured in scene graphs by performing visual search as needed.
     if len(agent.lt_mem.kb.entries) > 0:
-        search_specs = _search_specs_from_kb(agent, question, bjt_v, restrictors)
+        search_specs = _search_specs_from_kb(agent, question, restrictors, bjt_v)
         if len(search_specs) > 0:
             agent.vision.predict(
                 None, agent.lt_mem.exemplars,
@@ -489,13 +491,20 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
         # Don't know how to handle other non-domain questions
         raise NotImplementedError
 
-def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
+def _search_specs_from_kb(agent, question, restrictors, ref_bjt):
     """
     Helper method factored out for extracting specifications for visual search,
     based on the agent's current knowledge-base entries and some sensemaking
     result provided as a compiled binary join tree (BJT)
     """
     q_vars, (cons, _) = question
+
+    # Prepare taxonomy graph extracted from KB taxonomy entries; used later for
+    # checking any concepts groupable by closest common supertypes
+    taxonomy_graph = nx.DiGraph()
+    for (r_cons, r_ante), _, _, knowledge_type in agent.lt_mem.kb.entries:
+        if knowledge_type == "taxonomy":
+            taxonomy_graph.add_edge(r_cons[0].name, r_ante[0].name)
 
     # Return value: Queries to feed into KB for fetching search specs. Represent
     # each query as a pair of predicates of interest & arg entities of interest
@@ -540,6 +549,8 @@ def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
             relevant_entries = [
                 agent.lt_mem.kb.entries[entry_id]
                 for entry_id in relevant_entries
+                if agent.lt_mem.kb.entries[entry_id][3] != "taxonomy"
+                    # Not using taxonomy knowledge as leverage for visual reasoning
             ]
 
             # Set of literals for each relevant KB entry
@@ -625,14 +636,171 @@ def _search_specs_from_kb(agent, question, ref_bjt, restrictors):
             if has_isomorphic_spec:
                 continue
 
-            # Check if the agent is already (visually) aware of the potential search
-            # targets; if so, disregard this one
-            check_result, _ = agent.symbolic.query(
-                ref_bjt, tuple((v, False) for v in search_vars), (lits, None)
-            )
-            if len(check_result) > 0:
-                continue
+            final_specs.append((search_vars, lits, {}))
 
-            final_specs.append((search_vars, lits))
+    # See if any of the search specs can be grouped and combined by closest common
+    # supertypes; continue grouping pairs of specs with matching signatures and
+    # shared supertypes as much as possible
+    grouping_finished = False; disj_index = 0
+    while not grouping_finished:
+        for si, sj in combinations(range(len(final_specs)), 2):
+            # If not isomorphic after replacing all cls predicates with the same
+            # dummy predicate, the pair is not groupable
+            is_cls_si = [
+                lit.name.startswith("cls_") or lit.name.startswith("disj_")
+                for lit in final_specs[si][1]
+            ]
+            is_cls_sj = [
+                lit.name.startswith("cls_")  or lit.name.startswith("disj_")
+                for lit in final_specs[sj][1]
+            ]
+            spec_subs_si = [
+                lit.substitute(preds={ lit.name: "cls_dummy" }) if is_cls else lit
+                for lit, is_cls in zip(final_specs[si][1], is_cls_si)
+            ]
+            spec_subs_sj = [
+                lit.substitute(preds={ lit.name: "cls_dummy" }) if is_cls else lit
+                for lit, is_cls in zip(final_specs[sj][1], is_cls_sj)
+            ]
+            entail_dir, mapping = Literal.entailing_mapping_btw(spec_subs_si, spec_subs_sj)
+            if entail_dir != 0: continue
+
+            # If there is no one-to-one correspondence between the cls predicates
+            # such that the predicates in each pair belong to the same taxonomy
+            # tree, the pair is not groupable
+            assert sum(is_cls_si) == sum(is_cls_sj)
+            cls_inds_si = [i for i, is_cls in enumerate(is_cls_si) if is_cls]
+            cls_inds_sj = [i for i, is_cls in enumerate(is_cls_sj) if is_cls]
+
+            valid_bijections = []
+            for prm in permutations(cls_inds_sj):
+                # Obtain bijection between cls literals in the first spec and the second
+                bijection = [(cls_inds_si[i], i_sj) for i, i_sj in enumerate(prm)]
+                matched_lits = [
+                    (final_specs[si][1][i_si], final_specs[sj][1][i_sj])
+                    for i_si, i_sj in bijection
+                ]
+                matched_lits = [
+                    (lit_si, lit_sj.substitute(**mapping))
+                    for lit_si, lit_sj in matched_lits
+                ]
+
+                # Reject bijection if any of the pairs do not have matching args
+                if any(lit_si.args!=lit_sj.args for lit_si, lit_sj in matched_lits):
+                    continue
+
+                # Find closest common supertypes for each matched pair in bijection
+                grouping_supertypes = []
+                for lit_si, lit_sj in matched_lits:
+                    # Predicate names won't be same; duplicate isomorphic specs are
+                    # filtered out above
+                    assert lit_si.name != lit_sj.name
+
+                    cls_conc_si = lit_si.name if lit_si.name.startswith("cls_") \
+                        else final_specs[si][2][lit_si.name][0]
+                    cls_conc_sj = lit_sj.name if lit_sj.name.startswith("cls_") \
+                        else final_specs[sj][2][lit_sj.name][0]
+                    closest_common_supertype = nx.lowest_common_ancestor(
+                        taxonomy_graph, cls_conc_si, cls_conc_sj
+                    )
+
+                    if closest_common_supertype is None:
+                        # Not in the same taxonomy tree, cannot group
+                        break
+                    else:
+                        # Common supertype identified, record relevant info
+                        elem_concs_si = {lit_si.name} if lit_si.name.startswith("cls_") \
+                            else final_specs[si][2][lit_si.name][1]
+                        elem_concs_sj = {lit_sj.name} if lit_sj.name.startswith("cls_") \
+                            else final_specs[sj][2][lit_sj.name][1]
+                        grouping_supertypes.append(
+                            (closest_common_supertype, elem_concs_si | elem_concs_sj)
+                        )
+
+                # Add to list of valid bijections if supertypes successfully identified
+                # for all matched pairs
+                if len(grouping_supertypes) == len(bijection):
+                    valid_bijections.append((bijection, grouping_supertypes))
+
+            if len(valid_bijections) == 0: continue
+
+            # If reached here, update the spec list accordingly by replacing the two
+            # specs being processed with new grouped specs (possibly multiple, in
+            # principle -- though we won't see such cases in our scope)
+            grouped_specs = []
+            for bijection, grouping_supertypes in valid_bijections:
+                # (Arbitrarily) Select the first spec to be the 'base' of the new grouped
+                # spec to be appended
+                search_vars, lits, _ = final_specs[si]
+
+                # Dict describing which set of elementary concepts is referred to by
+                # each disjunction predicate
+                pred_glossary = {}
+
+                # Bijection info reshaped for easier processing
+                bijection = {
+                    i_si: (i_sj, gr_info)
+                    for (i_si, i_sj), gr_info in zip(bijection, grouping_supertypes)
+                }
+
+                # Prepare new literal set for search spec description, starting from
+                # the base and appropriately replacing the predicate names
+                lits_new = []
+                for i_si, lit in enumerate(lits):
+                    if i_si in bijection:
+                        # Need to be processed before being added to the literal set
+                        i_sj, grouping_info = bijection[i_si]
+
+                        lit_si = final_specs[si][1][i_si]
+                        lit_sj = final_specs[sj][1][i_sj]
+                        is_elem_si = lit_si.name.startswith("cls_")
+                        is_elem_sj = lit_sj.name.startswith("cls_")
+
+                        if is_elem_si and is_elem_sj:
+                            # Case 1: Both predicates elementary concepts, need to
+                            # introduce a fresh disjunction predicate
+                            disj_name = f"disj_{disj_index}"
+                            disj_index += 1
+                        elif is_elem_si and not is_elem_sj:
+                            # Case 2: First predicate refers to elementary concept, while
+                            # second refers to a disjunction; 'absorb' former to latter
+                            disj_name = lit_sj.name
+                        elif not is_elem_si and is_elem_sj:
+                            # Symmetric case of the above Case 2, treat similarly
+                            disj_name = lit_si.name
+                        else:
+                            # Case 3: Both predicates refer to disjunctions; (arbitrarily)
+                            # select the first to absorb the second
+                            disj_name = lit_si.name
+
+                        pred_glossary[disj_name] = grouping_info
+                        lits_new.append(Literal(disj_name, lit.args))
+
+                    else:
+                        # Nothing to do, add as-is
+                        lits_new.append(lit)
+
+                grouped_specs.append((search_vars, lits_new, pred_glossary))
+
+            # Don't forget to take the remaining specs not being processed
+            final_specs = [
+                spc for i, spc in enumerate(final_specs) if i not in (si, sj)
+            ]
+            final_specs += grouped_specs
+
+            # Then break to find any possible grouping, from the top with the updated list
+            break
+
+        else:
+            # No more groupable spec pairs; terminate while loop
+            grouping_finished = True
+
+    # # Check if the agent is already (visually) aware of the potential search
+    # # targets; if so, disregard this one
+    # check_result, _ = agent.symbolic.query(
+    #     ref_bjt, tuple((v, False) for v in search_vars), (lits, None)
+    # )
+    # if len(check_result) > 0:
+    #     continue
 
     return final_specs

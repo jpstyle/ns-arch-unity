@@ -139,44 +139,17 @@ class VisionModule:
             else:
                 assert isinstance(image, Image.Image)
 
-        # Helper methods factored out for few-shot concept probability estimation
-        def fs_conc_pred(emb, conc_type):
-            conc_inventory_count = getattr(self.inventories, conc_type)
-            if conc_inventory_count > 0:
-                # Non-empty concept inventory, most cases
-                predictions = []
-                for ci in range(conc_inventory_count):
-                    if exemplars.binary_classifiers[conc_type][ci] is not None:
-                        # Binary classifier induced from pos/neg exemplars exists
-                        clf = exemplars.binary_classifiers[conc_type][ci]
-                        pred = clf.predict_proba(emb[None])[0]
-                        predictions.append(pred)
-                    else:
-                        # No binary classifier exists due to lack of either positive
-                        # or negative exemplars, fall back to some default estimation
-                        conc_pos_exs = exemplars.exemplars_pos[conc_type][ci]
-                        if len(conc_pos_exs) > 0:
-                            fallback_pred = np.array([1.0-DEF_CON, DEF_CON])
-                        else:
-                            fallback_pred = np.array([DEF_CON, 1.0-DEF_CON])
-                        predictions.append(fallback_pred)
-                return np.stack(predictions)[:,1]
-            else:
-                # Empty concept inventory, likely at the very beginning of training
-                # an agent from scratch,
-                return np.empty(0, dtype=np.float32)
-
         self.model.eval()
         with torch.no_grad():
             # Prediction modes
             if not (masks_provided or specs_provided):
                 # Full (ensemble) prediction
-                vis_embs, masks_out, objectness_scores = self.model(image)
+                vis_embs, masks_out, scores = self.model(image)
 
                 self.last_input = image
 
                 # Run NMS and leave top k predictions
-                kept_indices = mask_nms(masks_out, objectness_scores, self.NMS_THRES)
+                kept_indices = mask_nms(masks_out, scores, self.NMS_THRES)
                 topk_inds = kept_indices[:self.K]
 
                 # Newly compose a scene graph with the output; filter patches to leave top-k
@@ -185,9 +158,9 @@ class VisionModule:
                     f"o{i}": {
                         "vis_emb": vis_embs[det_ind],
                         "pred_mask": masks_out[det_ind],
-                        "pred_objectness": objectness_scores[det_ind],
-                        "pred_classes": fs_conc_pred(vis_embs[det_ind], "cls"),
-                        "pred_attributes": fs_conc_pred(vis_embs[det_ind], "att"),
+                        "pred_objectness": scores[det_ind],
+                        "pred_classes": self._fs_conc_pred(exemplars, vis_embs[det_ind], "cls"),
+                        "pred_attributes": self._fs_conc_pred(exemplars, vis_embs[det_ind], "att"),
                         "pred_relations": {
                             f"o{j}": np.zeros(self.inventories.rel)
                             for j in range(len(topk_inds)) if i != j
@@ -217,204 +190,31 @@ class VisionModule:
                 if masks_provided:
                     # Instance classification mode
                     incr_preds = self.model(image, masks=list(masks.values()))
-                    incr_vis_embs = incr_preds[0]
-                    incr_masks_out = incr_preds[1]
-                    incr_objectness_scores = incr_preds[2]
-
+                    
                 else:
-                    assert specs_provided
                     # Instance search mode
+                    assert specs_provided
+                    incr_preds = self._instance_search(image, exemplars, specs)
 
-                    # Mapping between existing entity IDs and their numeric indexing
-                    exs_idx_map = { i: ent for i, ent in enumerate(self.scene) }
-                    exs_idx_map_inv = { ent: i for i, ent in enumerate(self.scene) }
-
-                    incr_vis_embs = []
-                    incr_masks_out = []
-                    incr_objectness_scores = []
-
-                    # Prepare search conditions to feed into model.forward()
-                    for s_vars, dscr in specs:
-                        search_conds = []
-                        for d_lit in dscr:
-                            conc_type, conc_ind = d_lit.name.split("_")
-                            conc_ind = int(conc_ind)
-
-                            if conc_type == "cls" or conc_type == "att":
-                                # Fetch set of positive exemplars
-                                pos_exs_inds = exemplars.exemplars_pos[conc_type][conc_ind]
-                                pos_exs_vecs = exemplars.storage_vec[conc_type][list(pos_exs_inds)]
-                                search_conds.append((conc_type, pos_exs_vecs))
-                            else:
-                                assert conc_type == "rel"
-
-                                # Relations are not neurally predicted, nor used for search
-                                # (for now, at least...)
-                                continue
-
-                        # Run search conditioned on the exemplars
-                        vis_embs, masks_out, objectness_scores = self.model(
-                            image, exemplars=search_conds
-                        )
-
-                        if len(masks_out) > 0:
-                            # Search returned some matches
-
-                            # Test each candidate to select the one that's most compatible
-                            # to the search spec
-                            agg_compatibility_scores = torch.ones(
-                                len(masks_out), device=self.model.device
-                            )
-                            for d_lit in dscr:
-                                conc_type, conc_ind = d_lit.name.split("_")
-                                conc_ind = int(conc_ind)
-
-                                if conc_type == "cls" or conc_type == "att":
-                                    # Fetch set of positive exemplars
-                                    clf = exemplars.binary_classifiers[conc_type][conc_ind]
-                                    if clf is not None:
-                                        comp_scores = clf.predict_proba(vis_embs)[:,1]
-                                        comp_scores = torch.tensor(
-                                            comp_scores, device=self.model.device
-                                        )
-                                    else:
-                                        if len(exemplars.exemplars_pos[conc_type][conc_ind]) > 0:
-                                            comp_scores = torch.full((vis_embs.shape[0],), DEF_CON)
-                                        else:
-                                            comp_scores = torch.full((vis_embs.shape[0],), 1-DEF_CON)
-                                else:
-                                    assert conc_type == "rel"
-
-                                    # Cannot process relations other than "have" for now...
-                                    assert conc_ind == 0
-
-                                    # Cannot process search specs with more than one variables for
-                                    # now (not planning to address that for a good while!)
-                                    assert len(s_vars) == 1
-
-                                    # Handles to literal args; either search target variable or
-                                    # previously identified entity
-                                    arg_handles = [
-                                        ("v", s_vars.index(arg[0]))
-                                            if arg[0] in s_vars
-                                            else ("e", exs_idx_map_inv[arg[0]])
-                                        for arg in d_lit.args
-                                    ]
-
-                                    # Mask areas for all candidates
-                                    masks_out_A = masks_out.sum(axis=(-2,-1))
-
-                                    # Fetch bbox of reference entity, against which bbox area
-                                    # ratios will be calculated among candidates
-                                    reference_ent = [
-                                        arg_ind for arg_type, arg_ind in arg_handles
-                                        if arg_type=="e"
-                                    ][0]
-                                    reference_ent = exs_idx_map[reference_ent]
-                                    reference_mask = self.scene[reference_ent]["pred_mask"]
-
-                                    # Compute area ratio between the reference mask and all proposals
-                                    intersections = masks_out * reference_mask[None]
-                                    intersections_A = intersections.sum(axis=(-2,-1))
-
-                                    comp_scores = torch.tensor(
-                                        intersections_A / masks_out_A, device=self.model.device
-                                    )
-
-                                # Update aggregate compatibility score; using min function
-                                # as the t-norm (other options: product, ...)
-                                agg_compatibility_scores = torch.minimum(
-                                    agg_compatibility_scores, comp_scores
-                                )
-
-                            # Finally choose and keep the best search output
-                            best_match_ind = agg_compatibility_scores.max(dim=0).indices
-                            incr_vis_embs.append(vis_embs[best_match_ind])
-                            incr_masks_out.append(masks_out[best_match_ind])
-                            incr_objectness_scores.append(objectness_scores[best_match_ind])
-
-                        else:
-                            # Search didn't return any match
-                            incr_vis_embs.append(None)
-                            incr_masks_out.append(None)
-                            incr_objectness_scores.append(None)
-
-                # Incrementally update the existing scene graph with the output with the
-                # detections best complying with the conditions provided
-                existing_objs = list(self.scene)
+                # Selecting names of new objects to be added to the scene
                 if masks_provided:
                     # Already provided with appropriate object identifier
                     new_objs = list(masks.keys())
                 else:
                     # Come up with new object identifiers for valid search matches
+                    incr_masks_out = incr_preds[1]
+
                     new_objs = []; ind_offset = 0
                     for msk in incr_masks_out:
                         if msk is None:
                             # Null match
                             new_objs.append(None)
                         else:
-                            new_objs.append(f"o{len(existing_objs)+ind_offset}")
+                            new_objs.append(f"o{len(self.scene)+ind_offset}")
                             ind_offset += 1
 
-                for oi, oj in product(existing_objs, new_objs):
-                    # Add new relation score slots for existing objects
-                    self.scene[oi]["pred_relations"][oj] = np.zeros(self.inventories.rel)
-
-                update_data = list(zip(
-                    new_objs, incr_vis_embs, incr_masks_out, incr_objectness_scores
-                ))
-                for oi, vis_emb, msk, score in update_data:
-                    # Pass null entry
-                    if oi is None: continue
-
-                    # Register new objects into the existing scene
-                    self.scene[oi] = {
-                        "vis_emb": vis_emb,
-                        "pred_mask": msk,
-                        "pred_objectness": score,
-                        "pred_classes": fs_conc_pred(vis_emb, "cls"),
-                        "pred_attributes": fs_conc_pred(vis_emb, "att"),
-                        "pred_relations": {
-                            **{
-                                oj: np.zeros(self.inventories.rel)
-                                for oj in existing_objs
-                            },
-                            **{
-                                oj: np.zeros(self.inventories.rel)
-                                for oj in new_objs if oi != oj
-                            }
-                        }
-                    }
-
-                for oi in new_objs:
-                    # Pass null entry
-                    if oi is None: continue
-
-                    oi_msk = self.scene[oi]["pred_mask"]
-
-                    # Relation concepts (Within new detections)
-                    for oj in new_objs:
-                        # Pass null entry
-                        if oj is None: continue
-
-                        if oi==oj: continue     # Dismiss self-self object pairs
-                        oj_msk = self.scene[oj]["pred_mask"]
-
-                        intersection_A = np.minimum(oi_msk, oj_msk).sum()
-                        mask2_A = oj_msk.sum()
-
-                        self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
-
-                    # Relation concepts (Between existing detections)
-                    for oj in existing_objs:
-                        oj_msk = self.scene[oj]["pred_mask"]
-
-                        intersection_A = np.minimum(oi_msk, oj_msk).sum()
-                        mask1_A = oi_msk.sum()
-                        mask2_A = oj_msk.sum()
-
-                        self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
-                        self.scene[oj]["pred_relations"][oi][0] = intersection_A / mask1_A
+                # Update visual scene
+                self._incremental_scene_update(incr_preds, new_objs, exemplars)
 
         if visualize:
             if lexicon is not None:
@@ -426,6 +226,253 @@ class VisionModule:
                     for conc_type in ["cls", "att"]
                 }
             self.summ = visualize_sg_predictions(self.last_input, self.scene, lexicon)
+
+    def _fs_conc_pred(self, exemplars, emb, conc_type):
+        """
+        Helper method factored out for few-shot concept probability estimation
+        """
+        conc_inventory_count = getattr(self.inventories, conc_type)
+        if conc_inventory_count > 0:
+            # Non-empty concept inventory, most cases
+            predictions = []
+            for ci in range(conc_inventory_count):
+                if exemplars.binary_classifiers[conc_type][ci] is not None:
+                    # Binary classifier induced from pos/neg exemplars exists
+                    clf = exemplars.binary_classifiers[conc_type][ci]
+                    pred = clf.predict_proba(emb[None])[0]
+                    predictions.append(pred)
+                else:
+                    # No binary classifier exists due to lack of either positive
+                    # or negative exemplars, fall back to some default estimation
+                    conc_pos_exs = exemplars.exemplars_pos[conc_type][ci]
+                    if len(conc_pos_exs) > 0:
+                        fallback_pred = np.array([1.0-DEF_CON, DEF_CON])
+                    else:
+                        fallback_pred = np.array([DEF_CON, 1.0-DEF_CON])
+                    predictions.append(fallback_pred)
+            return np.stack(predictions)[:,1]
+        else:
+            # Empty concept inventory, likely at the very beginning of training
+            # an agent from scratch,
+            return np.empty(0, dtype=np.float32)
+
+    def _instance_search(self, image, exemplars, search_specs):
+        """
+        Helper method factored out for running model in incremental search mode
+        """
+        # Mapping between existing entity IDs and their numeric indexing
+        exs_idx_map = { i: ent for i, ent in enumerate(self.scene) }
+        exs_idx_map_inv = { ent: i for i, ent in enumerate(self.scene) }
+
+        # Return values
+        incr_vis_embs = []
+        incr_masks_out = []
+        incr_scores = []
+
+        for s_vars, description, pred_glossary in search_specs:
+            # Prepare search conditions to feed into model.forward()
+            search_conds = []
+            for d_lit in description:
+                if d_lit.name.startswith("disj"):
+                    # A predicate standing for a disjunction of elementary concepts
+                    # (as listed in `pred_glossary`), fetch all positive exemplar sets
+                    # and binary classifiers for each disjunct concept
+                    disj_cond = []
+                    for conc in pred_glossary[d_lit.name][1]:
+                        conc_type, conc_ind = conc.split("_")
+                        conc_ind = int(conc_ind)
+
+                        if conc_type == "cls" or conc_type == "att":
+                            # Fetch set of positive exemplars
+                            pos_exs_inds = exemplars.exemplars_pos[conc_type][conc_ind]
+                            pos_exs_vecs = exemplars.storage_vec[conc_type][list(pos_exs_inds)]
+                            bin_clf = exemplars.binary_classifiers[conc_type][conc_ind]
+                            disj_cond.append((pos_exs_vecs, bin_clf))
+                        else:
+                            assert conc_type == "rel"
+
+                            # Relations are not neurally predicted, nor used for search
+                            # (for now, at least...)
+                            continue
+
+                    search_conds.append(disj_cond)
+
+                else:
+                    # Single elementary predicate, fetch positive exemplars for the
+                    # corresponding concept
+                    conc_type, conc_ind = d_lit.name.split("_")
+                    conc_ind = int(conc_ind)
+
+                    if conc_type == "cls" or conc_type == "att":
+                        # Fetch set of positive exemplars
+                        pos_exs_inds = exemplars.exemplars_pos[conc_type][conc_ind]
+                        pos_exs_vecs = exemplars.storage_vec[conc_type][list(pos_exs_inds)]
+                        bin_clf = exemplars.binary_classifiers[conc_type][conc_ind]
+                        search_conds.append([(pos_exs_vecs, bin_clf)])
+                    else:
+                        assert conc_type == "rel"
+
+                        # Relations are not neurally predicted, nor used for search
+                        # (for now, at least...)
+                        continue
+
+            # Run search conditioned on the exemplars
+            vis_embs, masks_out, scores = self.model(image, search_conds=search_conds)
+
+            if len(masks_out) == 0:
+                # Search didn't return any match
+                incr_vis_embs.append(None)
+                incr_masks_out.append(None)
+                incr_scores.append(None)
+                continue
+
+            # If len(masks_out) > 0, search returned some matches
+
+            # Test each candidate to select the one that's most compatible
+            # to the search spec
+            agg_compatibility_scores = torch.ones(
+                len(masks_out), device=self.model.device
+            )
+            for d_lit in description:
+                if d_lit.name.startswith("disj_"):
+                    # Use the returned scores as compatibility scores
+                    comp_scores = torch.tensor(scores, device=self.model.device)
+
+                else:
+                    conc_type, conc_ind = d_lit.name.split("_")
+                    conc_ind = int(conc_ind)
+
+                    if conc_type == "cls" or conc_type == "att":
+                        # Use the returned scores as compatibility scores
+                        comp_scores = torch.tensor(scores, device=self.model.device)
+
+                    else:
+                        # Compatibility scores geometric relations, which are not neurally
+                        # predicted int the current module implementation
+                        assert conc_type == "rel"
+
+                        # Cannot process relations other than "have" for now...
+                        assert conc_ind == 0
+
+                        # Cannot process search specs with more than one variables for
+                        # now (not planning to address that for a good while!)
+                        assert len(s_vars) == 1
+
+                        # Handles to literal args; either search target variable or
+                        # previously identified entity
+                        arg_handles = [
+                            ("v", s_vars.index(arg[0]))
+                                if arg[0] in s_vars
+                                else ("e", exs_idx_map_inv[arg[0]])
+                            for arg in d_lit.args
+                        ]
+
+                        # Mask areas for all candidates
+                        masks_out_A = masks_out.sum(axis=(-2,-1))
+
+                        # Fetch bbox of reference entity, against which bbox area
+                        # ratios will be calculated among candidates
+                        reference_ent = [
+                            arg_ind for arg_type, arg_ind in arg_handles
+                            if arg_type=="e"
+                        ][0]
+                        reference_ent = exs_idx_map[reference_ent]
+                        reference_mask = self.scene[reference_ent]["pred_mask"]
+
+                        # Compute area ratio between the reference mask and all proposals
+                        intersections = masks_out * reference_mask[None]
+                        intersections_A = intersections.sum(axis=(-2,-1))
+
+                        comp_scores = torch.tensor(
+                            intersections_A / masks_out_A, device=self.model.device
+                        )
+
+                # Update aggregate compatibility score; using min function
+                # as the t-norm (other options: product, ...)
+                agg_compatibility_scores = torch.minimum(
+                    agg_compatibility_scores, comp_scores
+                )
+
+            # Finally choose and keep the best search output
+            best_match_ind = agg_compatibility_scores.max(dim=0).indices
+            incr_vis_embs.append(vis_embs[best_match_ind])
+            incr_masks_out.append(masks_out[best_match_ind])
+            incr_scores.append(scores[best_match_ind])
+
+        return incr_vis_embs, incr_masks_out, incr_scores
+
+    def _incremental_scene_update(self, incr_preds, new_objs, exemplars):
+        """
+        Helper method factored out updating current scene with new incrementally
+        predicted instances (by masks or search specs)
+        """
+        incr_vis_embs = incr_preds[0]
+        incr_masks_out = incr_preds[1]
+        incr_scores = incr_preds[2]
+
+        # Incrementally update the existing scene graph with the output with the
+        # detections best complying with the conditions provided
+        existing_objs = list(self.scene)
+
+        for oi, oj in product(existing_objs, new_objs):
+            # Add new relation score slots for existing objects
+            self.scene[oi]["pred_relations"][oj] = np.zeros(self.inventories.rel)
+
+        update_data = list(zip(
+            new_objs, incr_vis_embs, incr_masks_out, incr_scores
+        ))
+        for oi, vis_emb, msk, score in update_data:
+            # Pass null entry
+            if oi is None: continue
+
+            # Register new objects into the existing scene
+            self.scene[oi] = {
+                "vis_emb": vis_emb,
+                "pred_mask": msk,
+                "pred_objectness": score,
+                "pred_classes": self._fs_conc_pred(exemplars, vis_emb, "cls"),
+                "pred_attributes": self._fs_conc_pred(exemplars, vis_emb, "att"),
+                "pred_relations": {
+                    **{
+                        oj: np.zeros(self.inventories.rel)
+                        for oj in existing_objs
+                    },
+                    **{
+                        oj: np.zeros(self.inventories.rel)
+                        for oj in new_objs if oi != oj
+                    }
+                }
+            }
+
+        for oi in new_objs:
+            # Pass null entry
+            if oi is None: continue
+
+            oi_msk = self.scene[oi]["pred_mask"]
+
+            # Relation concepts (Within new detections)
+            for oj in new_objs:
+                # Pass null entry
+                if oj is None: continue
+
+                if oi==oj: continue     # Dismiss self-self object pairs
+                oj_msk = self.scene[oj]["pred_mask"]
+
+                intersection_A = np.minimum(oi_msk, oj_msk).sum()
+                mask2_A = oj_msk.sum()
+
+                self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
+
+            # Relation concepts (Between existing detections)
+            for oj in existing_objs:
+                oj_msk = self.scene[oj]["pred_mask"]
+
+                intersection_A = np.minimum(oi_msk, oj_msk).sum()
+                mask1_A = oi_msk.sum()
+                mask2_A = oj_msk.sum()
+
+                self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
+                self.scene[oj]["pred_relations"][oi][0] = intersection_A / mask1_A
 
     def train(self):
         """

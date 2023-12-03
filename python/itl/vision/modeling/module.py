@@ -15,6 +15,7 @@ from omegaconf import OmegaConf
 from PIL import ImageFilter, ImageEnhance
 from skimage.morphology import opening, closing
 from skimage.measure import label
+from sklearn.cluster import HDBSCAN
 from torch.optim import AdamW
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 
@@ -247,24 +248,29 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # checkpoint["state_dict"] = state_dict_filtered
         pass
 
-    def forward(self, image, masks=None, exemplars=None):
+    def forward(self, image, masks=None, search_conds=None):
         """
         Purposed as the most general endpoint of the vision module for inference,
         which takes an image as input and returns 'raw output' consisting of the
         following types of data for each recognized instance:
             1) a visual feature embedding
             2) an instance segmentation mask
-            3) an objectness score (estimated IoU)
+            3) a 'confidence' score, as to how certain the module is about the
+               quality of the mask returned 
         for each object (candidate) detected.
 
         Can be optionally provided with a list of additional segmentation masks
         as references to objects, in which case visual embeddings corresponding to
         each mask will be returned without segmentation prediction.
 
-        Can be optionally provided with a list of (concept type, exemplar vector set)
-        pairs, in which case conditioned segmentation prediction will be performed
-        first and object instances are recognized as connected components. Then
-        visual embeddings are extracted.
+        Can be optionally provided with a list of (exemplar vector set, binary
+        concept classifier) pair set, where each set represents a disjunction of
+        concepts, and each concept is represented by its positive exemplar vectors
+        and a binary classifier. (In that regard, `search_conds` can be seen to be in
+        'conjunctive normal form'.) In this case, conditioned segmentation prediction
+        will be performed first and object instances are recognized as connected
+        components. Then visual embeddings are extracted, and the confidence scores
+        are computed with the provided binary classifiers.
 
         If neither are provided, run ensemble prediction instead; i.e., first run
         segmentation prediction conditioned with the general description of "an
@@ -274,9 +280,9 @@ class VisualSceneAnalyzer(pl.LightningModule):
         # Preprocessing input image & prompts
         img_provided = image is not None
         masks_provided = masks is not None
-        exemplars_provided = exemplars is not None
+        search_conds_provided = search_conds is not None
 
-        assert not (masks_provided and exemplars_provided), \
+        assert not (masks_provided and search_conds_provided), \
             "Cannot provide both masks and search conditions"
 
         # Obtain image embedding computed by CLIP visual transformer; compute from scratch
@@ -308,43 +314,51 @@ class VisualSceneAnalyzer(pl.LightningModule):
             image = self.processed_img_cached[0]
             bg_image = self.processed_img_cached[1]
 
+        # Obtain masks in different manners according to the provided info
         if masks_provided:
-            # Simply use the provided masks. Treat the provided masks as golden, i.e.
-            # having scores of 1.0 and prepending to the mask/score lists.
+            # Simply use the provided masks
             masks_all = masks
-            scores_all = [1.0] * len(masks)
 
-        elif exemplars_provided:
-            # Condition with the provided concept exemplars; run mask decoder per concept
+        elif search_conds_provided:
+            # Condition with the provided search condition; run mask decoder per 'conjunct'
             # and then find intersection to obtain masks
-            masks_all = [np.ones((image.height, image.width))]; scores_all = [1.0]
-            for _, pos_exs_vecs in exemplars:
-                prototype = torch.tensor(pos_exs_vecs, device=self.device)
-                prototype = prototype.mean(dim=0, keepdims=True)
-                masks_conc, scores_conc = self._conditioned_segment(exemplar_prompt=prototype)
+            masks_all = [np.ones((image.height, image.width))]
+            for conjunct in search_conds:
+                masks_cnjt = []
+                for pos_exs_vecs, _ in conjunct:
+                    # Run HDBSCAN clustering to obtain a set of prototypes, to be used
+                    # as exemplar prompts to CLIPSeg. Taking the global mean as a single
+                    # prototype is highly likely to misrepresent the concept since we
+                    # don't have any guarantee that the distribution of embeddings is
+                    # unimodal. Note that we would rather 'over-cluster' than 'under-
+                    # cluster' by the same logic.
+                    hdb = HDBSCAN(min_cluster_size=2, store_centers="centroid")
+                    clusters = hdb.fit_predict(pos_exs_vecs)
+
+                    # Cluster centroids + 'noise' points as prototypes
+                    prototypes = np.concatenate([hdb.centroids_, pos_exs_vecs[clusters==-1]])
+                    prototypes = torch.tensor(prototypes, dtype=torch.float, device=self.device)
+                    masks_cnjt += self._conditioned_segment(exemplar_prompts=prototypes)
 
                 # Find every possible intersection between the returned instances vs. the
                 # intersection outputs accumulated so far, obtained from each binary cross
                 # product; take logical_and for masks and minimums for scores
-                masks_int = [msk_a * msk_c for msk_a, msk_c in product(masks_all, masks_conc)]
-                scores_int = [min(sc_a, sc_c) for sc_a, sc_c in product(scores_all, scores_conc)]
+                masks_int = [msk_a * msk_c for msk_a, msk_c in product(masks_all, masks_cnjt)]
 
-                # Filter out invalid (empty or extremely small) masks & scores
-                valid_inds = [i for i, msk in enumerate(masks_int) if msk.sum() > 30]
+                # Filter out invalid (empty or extremely small) masks
+                valid_inds = [i for i, msk in enumerate(masks_int) if msk.sum() > 200]
                 masks_all = [masks_int[i] for i in valid_inds]
-                scores_all = [scores_int[i] for i in valid_inds]
 
         else:
             # Condition with a general text prompt ("an object") and recognize instances
             # by connected component analysis to obtain masks
-            masks_all, scores_all = self._conditioned_segment(text_prompt="an object")
+            masks_all = self._conditioned_segment(text_prompts=["an object"])
 
+        # If we have valid masks, obtain visual feature embeddings corresponding to each
+        # mask instance by applying a series of 'visual prompt engineering' process, and 
+        # assing through CLIP visual transformer; if none found, can return early
         if len(masks_all) > 0:
             # Non-empty list of segmentation masks
-
-            # Obtain visual feature embeddings corresponding to each mask instance by applying
-            # a series of 'visual prompt engineering' process, and passing through CLIP visual
-            # transformer
             visual_prompts = self._visual_prompt_by_mask(image, bg_image, masks_all)
 
             # Pass through vision encoder to obtain visual embeddings corresponding to each mask
@@ -353,25 +367,58 @@ class VisualSceneAnalyzer(pl.LightningModule):
             )
             visual_prompts_processed = visual_prompts_processed["pixel_values"].to(self.device)
             vis_embs = self.clipseg.clip.get_image_features(visual_prompts_processed)
-
-            # Output tensors to numpy arrays
-            vis_embs = vis_embs.cpu().numpy()
-            masks_all = np.stack(masks_all)
         else:
             # Empty list of segmentation masks; occurs when search returned zero matches
             vis_embs = np.zeros((0, self.clipseg.config.projection_dim), dtype="float32")
             masks_all = np.zeros((0, image.height, image.width), dtype="float32")
+            scores_all = np.zeros((0,), dtype="float32")
+
+            return vis_embs, masks_all, scores_all
+
+        # Output tensors to numpy arrays
+        vis_embs = vis_embs.cpu().numpy()
+        masks_all = np.stack(masks_all)
+
+        # Obtain the confidence scores, again in different manners according to the info
+        # provided
+        if masks_provided:
+            # Ground truths provided by external source (i.e., user), treat the provided
+            # masks as golden, i.e. having scores of 1.0
+            scores_all = [1.0] * len(masks)
+
+        elif search_conds_provided:
+            # Assess the quality of the masks found using the provided binary concept
+            # classifiers
+            scores_all = []
+            for emb in vis_embs:
+                agg_score = 1.0     # Start from 1.0 and keep taking t-norms (min here)
+                for conjunct in search_conds:
+                    # Obtain t-conorms (max here) across disjunct concepts in the conjunct
+                    conjunct_score = max(
+                        bin_clf.predict_proba(emb[None])[0][1].item()
+                        for _, bin_clf in conjunct
+                    )
+                    # Obtain t-norm between the conjunct score and aggregate score
+                    agg_score = min(conjunct_score, agg_score)
+
+                # Append final score for the embedding
+                scores_all.append(agg_score)
+
+        else:
+            # For ensemble prediction with the general text prompt, use the maximum float
+            # values in each mask as confidence score
+            scores_all = [msk.max().item() for msk in masks_all]
 
         return vis_embs, masks_all, scores_all
 
-    def _conditioned_segment(self, text_prompt=None, exemplar_prompt=None):
+    def _conditioned_segment(self, text_prompts=None, exemplar_prompts=None):
         """
         Conditional image segmentation factored out for readability and reusability;
         condition with either a text prompt or exemplar feature set prompt to obtain
         segmentation. Return found masks along with scores.
         """
-        condition_on_text = text_prompt is not None
-        condition_on_exemplar = exemplar_prompt is not None
+        condition_on_text = text_prompts is not None
+        condition_on_exemplar = exemplar_prompts is not None
 
         assert self.processed_img_cached is not None
         activations = self.processed_img_cached[2]
@@ -379,44 +426,56 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
         if condition_on_text:
             # Process the conditioning text prompt
-            text_processed = self.clipseg_processor(text=text_prompt, return_tensors="pt")
-            text_processed = text_processed["input_ids"].to(self.device)
-            cond_embs = self.clipseg.clip.get_text_features(text_processed)
+            text_processed = [
+                self.clipseg_processor(text=txt_prt, return_tensors="pt")
+                for txt_prt in text_prompts
+            ]
+            text_processed = [
+                txt_prt_processed["input_ids"].to(self.device)
+                for txt_prt_processed in text_processed
+            ]
+            cond_embs = torch.cat([
+                self.clipseg.clip.get_text_features(txt_prt_processed)
+                for txt_prt_processed in text_processed
+            ])
         else:
             assert condition_on_exemplar
-            cond_embs = exemplar_prompt
+            cond_embs = exemplar_prompts
+
+        # Expand activations according to the number of prompts provided
+        activations = [actv.expand(cond_embs.shape[0], -1, -1) for actv in activations]
 
         # Call mask decoder with the prompt encoding
         decoder_outputs = self.clipseg.decoder(activations, cond_embs, return_dict=True)
         decoder_outputs = torch.sigmoid(decoder_outputs.logits)
+        if len(decoder_outputs.shape) == 2:
+            decoder_outputs = decoder_outputs[None]
 
         # Binarize, and some morphological processing to clean noises
         low_res_masks = decoder_outputs.cpu().numpy() > MASK_THRES
-        low_res_masks = opening(closing(low_res_masks))
+        low_res_masks = [opening(closing(lr_msk)) for lr_msk in low_res_masks]
 
         # Split the processed decoder output into a collection of masks for individual
         # instances by connected component analysis
-        low_res_masks, num_insts = label(low_res_masks, return_num=True)
-        low_res_masks = [low_res_masks==i+1 for i in range(num_insts)]
+        low_res_masks = [label(lr_msk, return_num=True) for lr_msk in low_res_masks]
+        low_res_masks = [
+            lr_msk==i+1 for lr_msk, num_insts in low_res_masks for i in range(num_insts)
+        ]           # Split by connected components and flatten, ignoring empty masks
 
         # Obtain masks resized to original image size, and 'objectness scores' for each
         # instance by its max score per mask in original decoder output
         masks = [
             cv2.resize(
-                msk.astype("float32"), orig_size, interpolation=cv2.INTER_NEAREST_EXACT
+                lr_msk.astype("float32"), orig_size, interpolation=cv2.INTER_NEAREST_EXACT
             )
-            for msk in low_res_masks
-        ]
-        scores = [
-            decoder_outputs[msk].max().item()
-            for msk in low_res_masks
+            for lr_msk in low_res_masks
         ]
 
-        return masks, scores
+        return masks
 
     def _visual_prompt_by_mask(self, image, bg_image, masks):
         """
-        'Visual prompt engineering' (cf. CLIPSeg paper) factored out for readability;
+        'Visual prompt engineering' (cf. CLIPSeg paper) factored out for readability
         """
         # Obtain visual prompts to process by mixing image & bg_image per each mask...
         images_mixed = [

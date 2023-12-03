@@ -186,13 +186,13 @@ def main(cfg):
         # "semOnly_minHelp_doNotLearn": "--",
         # "semOnly_minHelp_alwaysLearn": "-",
 
-        "semOnly_medHelp_doNotLearn": "--",
+        "semOnly_medHelp_doNotLearn": "-",
         "semOnly_medHelp_alwaysLearn": "-",
 
-        "semOnly_maxHelpNoexpl_doNotLearn": "--",
+        "semOnly_maxHelpNoexpl_doNotLearn": "-",
         "semOnly_maxHelpNoexpl_alwaysLearn": "-",
 
-        "semOnly_maxHelpExpl_doNotLearn": "--",
+        "semOnly_maxHelpExpl_doNotLearn": "-",
         "semOnly_maxHelpExpl_alwaysLearn": "-",
 
         # "semNeg_maxHelp_doNotLearn": "--",
