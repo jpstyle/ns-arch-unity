@@ -258,10 +258,16 @@ class KnowledgeBase:
 
         # For caching intermediate outputs assembled during the first (deductive) part
         # and reusing in the second (abductive) part
-        intermediate_outputs = []
+        intermediate_outputs = {}
 
         # Process each entry
         for i, (rule, weight, _, knowledge_type) in enumerate(self.entries):
+            # Let's not use taxonomy knowledge for reasoning, at least for now...
+            # This is primarily for scaling concern, may need more sophisticated
+            # treatment when property knowledge rules begin to involve supertype
+            # and subtype reasoning
+            if knowledge_type=="taxonomy": continue
+
             for j, (cons, ante) in enumerate(flatten_cons_ante(*rule)):
                 # Keep track of variable names used to avoid accidentally using
                 # overlapping names for 'lifting' variables (see below)
@@ -349,16 +355,15 @@ class KnowledgeBase:
                 )
 
                 # Indexing & storing the entry by cons for later abductive rule
-                # translation. No need to consider cons-less constraints, or rules
-                # without abductive force like taxonomy statements.
-                if len(cons) > 0 and knowledge_type=="property":
+                # translation. No need to consider cons-less constraints.
+                if len(cons) > 0:
                     for c_lits in entries_by_cons:
                         ent_dir, ism = Literal.entailing_mapping_btw(cons, c_lits)
                         if ent_dir == 0:
-                            entries_by_cons[c_lits].append((i, ism))
+                            entries_by_cons[c_lits].append(((i, j), ism))
                             break
                     else:
-                        entries_by_cons[frozenset(cons)].append((i, None))
+                        entries_by_cons[frozenset(cons)].append(((i, j), None))
 
                 # Choice rule for function value assignments
                 def add_assignment_choices(fn_terms, sat_conds):
@@ -391,9 +396,9 @@ class KnowledgeBase:
                 kb_prog.add_rule(Rule(body=r_unsat_lit), weight)
 
                 # Store intermediate outputs for later reuse
-                intermediate_outputs.append((
+                intermediate_outputs[(i, j)] = (
                     c_sat_lit, a_sat_lit, c_var_signature, a_var_signature
-                ))
+                )
 
         return entries_by_cons, intermediate_outputs
 
@@ -477,6 +482,7 @@ class KnowledgeBase:
                     for cnjt in self.entries[ei][0][0]
                 )
                 for ei in eis
+                if self.entries[ei][2] != "taxonomy"
             )
             # I.e., those derivable as being a positive literal in a rule consequent
         }
