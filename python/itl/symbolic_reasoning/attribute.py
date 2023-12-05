@@ -13,7 +13,7 @@ from ..lpmln import Literal, Polynomial
 # we consider a discretized likelihood threshold as counterfactual alternative.
 # The value represents an alternative visual observation that results in evidence
 # that is 'reasonably' weaker that the corresponding literal actually being true.
-LOW = 0.1
+LOW = 0.15
 
 def attribute(bjt, target_event, evidence_atoms, threshold):
     """

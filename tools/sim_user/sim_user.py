@@ -213,7 +213,7 @@ class SimulatedTeacher:
                 # Agent provided explanation for its previous answer; expecting the agent's
                 # recognition of truck parts, which it deemed relevant to its reasoning
                 reasons = utt.strip("Because ").strip(".").split(", and ")
-                reasons = reasons[0].split("b") + reasons[1:]
+                reasons = reasons[0].split(",") + reasons[1:]
                 reasons = [re.findall(r"this is a (.*)", r)[0] for r in reasons]
 
                 dem_refs = sorted(dem_refs.items())
