@@ -414,7 +414,7 @@ def handle_acknowledgement(agent, acknowledgement_info):
     estimation on some state of affairs. The learning process differs based on the
     agent's strategy regarding how to extract learning signals from user's assents.
     """
-    if agent.strat_assent == "doNotLearn": return       # Nothing to do here
+    if agent.strat_assent == "doNotLearn": return       # Nothing further to do here
 
     ack_ind, ack_data = acknowledgement_info
     if ack_data is None: return         # Marked 'already processed'

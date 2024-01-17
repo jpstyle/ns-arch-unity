@@ -20,8 +20,8 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 from omegaconf import OmegaConf
-# from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+# from sklearn.svm import SVC
 from bokeh.io import save
 from bokeh.models import Title
 from bokeh.layouts import column
@@ -79,8 +79,8 @@ def main(cfg):
                 y = ([1] * len(pos_train)) + ([0] * len(neg_train))
 
                 # Fit classifier and run on test set
-                # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 100), weights="distance")
-                bin_clf = SVC(C=1000, probability=True)
+                bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 10), weights="distance")
+                # bin_clf = SVC(C=1000, probability=True)
                 bin_clf.fit(X, y)
                 true_pos = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 true_neg = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5

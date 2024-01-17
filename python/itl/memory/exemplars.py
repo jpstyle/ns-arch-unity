@@ -1,8 +1,8 @@
 from collections import defaultdict
 
 import numpy as np
-# from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+# from sklearn.svm import SVC
 
 
 class Exemplars:
@@ -23,7 +23,7 @@ class Exemplars:
             "rel": np.array([], dtype=np.float32)
         }
 
-        # Labelling as dict from visual concept to list of pointers to vectors
+        # Labeling as dict from visual concept to list of pointers to vectors
         self.exemplars_pos = {
             "cls": defaultdict(set), "att": defaultdict(set), "rel": defaultdict(set)
         }
@@ -31,9 +31,14 @@ class Exemplars:
             "cls": defaultdict(set), "att": defaultdict(set), "rel": defaultdict(set)
         }
 
-        # Also keep SVM classifiers (w/ Platt scaling for enabling probability
-        # estimation), trained from current storage of positive/negative exemplars
+        # Also keep classifiers trained from current storage of positive/negative exemplars
         self.binary_classifiers = { "cls": {}, "att": {}, "rel": {} }
+
+        # Track numbers of successful concept membership predictions; used for modulating
+        # (epistemic) uncertainty estimated by feature vector density
+        self.success_counts = {
+            "cls": defaultdict(int), "att": defaultdict(int), "rel": defaultdict(int)
+        }
 
     def __repr__(self):
         conc_desc = f"concepts={len(self.exemplars_pos['cls'])}" \
@@ -94,8 +99,8 @@ class Exemplars:
                         y = ([1] * len(pos_inds)) + ([0] * len(neg_inds))
 
                         # Fit classifier and update
-                        bin_clf = SVC(C=1000, probability=True)
-                        # bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 50), weights="distance")
+                        # bin_clf = SVC(C=1000, probability=True)
+                        bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 10), weights="distance")
                         bin_clf.fit(X, y)
                         self.binary_classifiers[conc_type][conc_ind] = bin_clf
                     else:

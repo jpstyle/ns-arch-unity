@@ -302,8 +302,9 @@ class VisualSceneAnalyzer(pl.LightningModule):
             activations = [hidden_states[i + 1] for i in self.clipseg.config.extract_layers]
             orig_size = (image.width, image.height)
 
-            # Background image prepared via gaussian blur + decreased intensity
-            bg_image = image.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+            # Background image prepared via greyscale + gaussian blur + decreased intensity
+            bg_image = image.convert("L").convert("RGB")
+            bg_image = bg_image.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
             bg_image = ImageEnhance.Brightness(bg_image).enhance(INTENSITY_RATIO)
 
             # Cache image and processing results

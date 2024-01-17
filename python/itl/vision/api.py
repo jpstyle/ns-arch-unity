@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 WB_PREFIX = "wandb://"
-DEF_CON = 0.6       # Default confidence value in absence of binary concept classifier
+DEF_CON = 0.2       # Default confidence value in absence of binary concept classifier
 
 class VisionModule:
 
@@ -239,16 +239,31 @@ class VisionModule:
                 if exemplars.binary_classifiers[conc_type][ci] is not None:
                     # Binary classifier induced from pos/neg exemplars exists
                     clf = exemplars.binary_classifiers[conc_type][ci]
+                    # The probability value obtained from classifier represents
+                    # the 'aleatoric' uncertainty as to the binary membership
+                    # prediction task
                     pred = clf.predict_proba(emb[None])[0]
+
+                    # Obtain 'epistemic' uncertainty, a value between (0,1], which
+                    # reflects how 'confident' the agent's vision module should be
+                    # about the estimated probability itself. Conforming to the
+                    # view that the density in latent space induced by a neural
+                    # model aligns with epistemic uncertainty (Postels et al., 2020)
+
+                    # Modulate the epistemic uncertainty by the number of correct
+                    # predictions made by the classifier so far; more correct
+                    # answers reduce epistemic uncertainty (Makes the overall
+                    # feature vector space denser in effect, since correct answers
+                    # are not added to the exemplar stash)
+
+                    # Interpolate between the (aleatoric) probability value and the
+                    # default fallback value (DEF_CON), based on the epistemic
+                    # uncertainty
                     predictions.append(pred)
                 else:
                     # No binary classifier exists due to lack of either positive
-                    # or negative exemplars, fall back to some default estimation
-                    conc_pos_exs = exemplars.exemplars_pos[conc_type][ci]
-                    if len(conc_pos_exs) > 0:
-                        fallback_pred = np.array([1.0-DEF_CON, DEF_CON])
-                    else:
-                        fallback_pred = np.array([DEF_CON, 1.0-DEF_CON])
+                    # or negative exemplars, fall back to default estimation
+                    fallback_pred = np.array([1.0-DEF_CON, DEF_CON])
                     predictions.append(fallback_pred)
             return np.stack(predictions)[:,1]
         else:
