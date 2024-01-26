@@ -260,7 +260,7 @@ class ITLAgent:
             ##                  Processing perceived inputs                  ##
             ###################################################################
 
-            if self.vision.new_input_provided or xb_updated:
+            if self.vision.new_input_provided:
                 # Ground raw visual perception with scene graph generation module
                 self.vision.predict(
                     self.vision.last_input, self.lt_mem.exemplars,
@@ -268,9 +268,15 @@ class ITLAgent:
                 )
                 vis_ui_on = False
 
-            if self.vision.new_input_provided:
                 # Inform the language module of the new visual context
                 self.lang.situate(self.vision.scene)
+
+            elif xb_updated:
+                # Concept exemplar base updated, need reclassification while keeping
+                # the discovered objects and embeddings intact
+                self.vision.predict(
+                    None, self.lt_mem.exemplars, reclassify=True, visualize=False
+                )
 
             if self.lang.new_input_provided:
                 # Revert to pre-update dialogue state at the start of each loop iteration
@@ -340,10 +346,8 @@ class ITLAgent:
             # Info needed (along with generics) for computing scalar implicatures
             pair_rules = defaultdict(list)
 
-            # Collect previous factual statements and questions made during this dialogue,
-            # respectively
-            prev_statements = []
-            prev_Qs = []
+            # Collect previous factual statements and questions made during this dialogue
+            prev_statements = []; prev_Qs = []
             for ti, (spk, turn_clauses) in enumerate(prev_translated):
                 for ci, ((rule, ques), raw) in enumerate(turn_clauses):
                     # Factual statement

@@ -142,7 +142,7 @@ public class DialogueUI : MonoBehaviour
         foreach (var agt in dialogueParticipants)
         {
             if (agt.dialogueParticipantID == currentSpeaker)
-                agt.outgoingMsgBuffer.Enqueue((currentInput, null));
+                agt.outgoingMsgBuffer.Enqueue((agt.dialogueParticipantID, currentInput, null));
         }
         
         // Clear input field and demRefs view
@@ -160,7 +160,7 @@ public class DialogueUI : MonoBehaviour
         foreach (var agt in dialogueParticipants)
         {
             if (agt.dialogueParticipantID == currentSpeaker)
-                agt.outgoingMsgBuffer.Enqueue((currentInput, null));
+                agt.outgoingMsgBuffer.Enqueue((agt.dialogueParticipantID, currentInput, null));
         }
         
         // Clear input field and demRefs view

@@ -225,11 +225,14 @@ def main(cfg):
         for field, value in random_inits.items():
             env_par_channel.set_float_parameter(field, value)
 
+        # Request sending ground-truth mask info to teacher at the beginning
+        teacher_channel.send_string("System", "GT mask request: cabin, load", {})
+
         # Send teacher's episode-initial output---thus user's episode-initial input
         # (Comment out when testing in Heuristics mode)
         opening_output = teacher.initiate_dialogue()
         teacher_channel.send_string(
-            opening_output[0]["utterance"], opening_output[0]["pointing"]
+            "Teacher", opening_output[0]["utterance"], opening_output[0]["pointing"]
         )
         logger.info(f"L> {TAB}{opening_output[0]['utterance']}")
 
@@ -285,8 +288,8 @@ def main(cfg):
                         act_out = student.loop(**agent_loop_input, new_scene=new_scene)
 
                         if len(act_out) > 0:
-                            # Process action output accordingly by setting Unity MLAgent actions
-                            # and sending string messages via side channel
+                            # Process action output accordingly by setting Unity MLAgent
+                            # actions and sending string messages via side channel
                             action = b_spec.action_spec.empty_action(1)
                             for act_type, act_data in act_out:
                                 if act_type == "generate":
@@ -296,7 +299,9 @@ def main(cfg):
                                         crange: mask.reshape(-1).tolist()
                                         for crange, mask in act_data[1].items()
                                     }
-                                    student_channel.send_string(utterance, dem_refs)
+                                    student_channel.send_string(
+                                        "Student", utterance, dem_refs
+                                    )
                                     logger.info(f"L> {TAB}{utterance}")
 
                             # Finally apply actions
@@ -316,13 +321,20 @@ def main(cfg):
 
                         if len(incoming_msgs) > 0:
                             while len(incoming_msgs) > 0:
-                                _, utterance, dem_refs = incoming_msgs.pop(0)
+                                spk, utterance, dem_refs = incoming_msgs.pop(0)
                                 # 1D to 2D according to visual scene dimension
                                 dem_refs = {
                                     crange: np.array(mask).reshape(i_h, i_w)
                                     for crange, mask in dem_refs.items()
                                 }
-                                agent_reactions.append((utterance, dem_refs))
+                                if spk == "System" and utterance.startswith("GT mask response:"):
+                                    # Retrieve and store requested GT mask info in teacher
+                                    teacher.current_gt_masks = {
+                                        utterance[crange[0]:crange[1]]: msk
+                                        for crange, msk in dem_refs.items()
+                                    }
+                                else:
+                                    agent_reactions.append((utterance, dem_refs))
 
                         # Simulated teacher (user) response
                         user_response = teacher.react(agent_reactions)
@@ -333,7 +345,9 @@ def main(cfg):
                                 action.discrete[0][0] = 1       # 'Utter' action
                                 utterance = act_data["utterance"]
                                 dem_refs = act_data["pointing"]
-                                teacher_channel.send_string(utterance, dem_refs)
+                                teacher_channel.send_string(
+                                    "Teacher", utterance, dem_refs
+                                )
                                 logger.info(f"T> {TAB}{utterance}")
 
                             # Finally apply actions
@@ -369,8 +383,8 @@ def main(cfg):
             mistakes["__all__"].append((new_regrets_all, new_total_all))
 
         # If not test mode (i.e., training mode), save current agent model checkpoint
-        # to output dir every 20 episodes
-        if not cfg.agent.test_mode and (i+1) % 20 == 0:
+        # to output dir every 25 episodes
+        if not cfg.agent.test_mode and (i+1) % 25 == 0:
             student.save_model(f"{ckpt_path}/{exp_tag}_{i+1}.ckpt")
 
     # Close Unity environment & tensorboard writer

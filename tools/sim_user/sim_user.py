@@ -11,6 +11,11 @@ import yaml
 import inflect
 import numpy as np
 
+from python.itl.vision.utils import mask_iou
+
+
+singularize = inflect.engine().singular_noun
+pluralize = inflect.engine().plural
 
 class SimulatedTeacher:
     
@@ -43,6 +48,13 @@ class SimulatedTeacher:
                     part: set(attrs)
                     for part, attrs in info["part_attributes"].items()
                 }
+
+        # Extract taxonomy knowledge implied by the domain knowledge, as a map from
+        # part subtype to its supertype
+        self.taxonomy_knowledge = {}
+        for info in self.domain_knowledge.values():
+            for part_type, part_subtype in info["parts"].items():
+                self.taxonomy_knowledge[part_subtype] = part_type
 
     def setup_episode(self, concept_set, shrink_domain=False):
         """
@@ -198,7 +210,7 @@ class SimulatedTeacher:
 
                         # Ask for an explanation why the agent have the incorrect answer,
                         # if the strategy is to take interest
-                        if self.strat_feedback == "maxHelpExpl":
+                        if self.strat_feedback.startswith("maxHelpExpl"):
                             response.append({
                                 "utterance": f"Why did you think this is a {answer_content}?",
                                 "pointing": { (18, 22): gameObject_handle }
@@ -206,22 +218,50 @@ class SimulatedTeacher:
 
             elif utt == "I cannot explain.":
                 # Agent couldn't provide any verbal explanations for its previous answer;
-                # do nothing for this utterance
-                pass
+                # always provide generic rules about concept differences between agent
+                # answer vs. ground truth
+                assert self.strat_feedback.startswith("maxHelpExpl")
+
+                conc1 = string_name
+                conc2 = self.current_episode_record[string_name]
+                conc_diffs = _compute_concept_differences(
+                    self.domain_knowledge, conc1, conc2
+                )
+                response += _properties_to_nl(conc_diffs)
 
             elif utt.startswith("Because"):
                 # Agent provided explanation for its previous answer; expecting the agent's
-                # recognition of truck parts, which it deemed relevant to its reasoning
+                # recognition of truck parts (or failure thereof), which it deemed relevant
+                # to its reasoning
                 reasons = utt.strip("Because ").strip(".").split(", and ")
                 reasons = reasons[0].split(",") + reasons[1:]
-                reasons = [re.findall(r"this is a (.*)", r)[0] for r in reasons]
+                reasons = [_parse_nl_reason(r) for r in reasons]
 
                 dem_refs = sorted(dem_refs.items())
 
-                for part, (_, reference) in zip(reasons, dem_refs):
+                # Prepare concept differences, needed for checking whether the agent's
+                # knowledge (indirectly revealed through its explanations) about the
+                # concepts is incomplete
+                conc1 = string_name
+                conc2 = self.current_episode_record[string_name]
+                conc_diffs = _compute_concept_differences(
+                    self.domain_knowledge, conc1, conc2
+                )
+
+                # Part types that actually play role for distinguishing conc1 vs. conc2
+                relevant_part_types = {p for _, p in conc_diffs["parts"]}
+
+                knowledge_incomplete = False
+                for (part, reason_type), (_, reference) in zip(reasons, dem_refs):
                     # For each part statement given as explanation, provide feedback
                     # on whether the agent's judgement was correct (will be most likely
                     # wrong... I suppose for now)
+
+                    if part not in relevant_part_types:
+                        # The part type cited in the reason does not actually bear any
+                        # relevance as to distinguishing the agent answer vs. ground
+                        # truth concepts. 
+                        knowledge_incomplete = True
 
                     if isinstance(reference, str):
                         # Reference by Unity GameObject string name; test by the object
@@ -232,15 +272,63 @@ class SimulatedTeacher:
                         raise NotImplementedError
 
                     else:
-                        # Reference by raw mask bitmap; the referenced entity is a 'bogus'
-                        # not corresponding to any real GameObject, always incorrect
+                        # Reference by raw mask bitmap
                         assert isinstance(reference, np.ndarray)
 
-                        # Let the agent know the part recognition is incorrect
-                        response.append({
-                            "utterance": f"This is not a {part}.",
-                            "pointing": { (0, 4): reference.reshape(-1).tolist() }
-                        })
+                        if reason_type == "positive":
+                            # The referenced entity is a 'bogus' that doesn't correspond
+                            # to any real GameObject, always incorrect
+                            response.append({
+                                "utterance": f"This is not a {part}.",
+                                "pointing": { (0, 4): reference.reshape(-1).tolist() }
+                            })
+
+                        elif reason_type == "uncertain":
+                            # The referenced entity may or may not be an instance of the
+                            # part type currently suspected by the agent, compute the
+                            # mask IoU against the ground truth to check
+                            part_type = self.taxonomy_knowledge[part]
+                            gt_mask = self.current_gt_masks[part_type]
+
+                            match_score = mask_iou([gt_mask], [reference])[0][0]
+                            if match_score > 0.8:
+                                # Sufficient overlap, match good enough; endorse the
+                                # proposed mask reference as correct
+                                response.append({
+                                    "utterance": f"This is a {part}.",
+                                    "pointing": { (0, 4): reference.reshape(-1).tolist() }
+                                })
+                            else:
+                                # Not enough overlap, bad match; reject the suspected
+                                # part reference and provide correct mask
+                                response.append({
+                                    "utterance": f"This is not a {part}.",
+                                    "pointing": { (0, 4): reference.reshape(-1).tolist() }
+                                })
+                                response.append({
+                                    "utterance": f"This is a {part}.",
+                                    "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
+                                })
+
+                        elif reason_type == "nonexistent":
+                            # Agent revealed it wasn't able to find any existence of
+                            # the said part type, point to the ground-truth
+                            part_type = self.taxonomy_knowledge[part]
+                            gt_mask = self.current_gt_masks[part_type]
+
+                            response.append({
+                                "utterance": f"This is a {part}.",
+                                "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
+                            })
+
+                        else:
+                            # Don't know how to handle other reason types
+                            raise NotImplementedError
+
+                # If imperfect agent knowledge is revealed, provide appropriate
+                # feedback regarding generic differences between conc1 vs. conc2
+                if knowledge_incomplete:
+                    response += _properties_to_nl(conc_diffs)
 
             elif utt.startswith("How are") and utt.endswith("different?"):
                 # Agent requested generic differences between two similar concepts
@@ -251,52 +339,14 @@ class SimulatedTeacher:
                 #     # the user if keeps happening
                 #     ...
 
-                singularize = inflect.engine().singular_noun
-                pluralize = inflect.engine().plural
-
                 # Extract two concepts being confused, then compute & select generic
                 # characterizations that best describe how the two are different
                 ques_content = re.findall(r"How are (.*) and (.*) different\?$", utt)[0]
                 conc1, conc2 = singularize(ques_content[0]), singularize(ques_content[1])
-
                 conc_diffs = _compute_concept_differences(
                     self.domain_knowledge, conc1, conc2
                 )
-
-                # Prepare user feedback based on the selected concept difference
-                if "supertype" in conc_diffs:
-                    # "Xs are Ys"
-                    for conc, super_conc in conc_diffs["supertype"]:
-                        conc_str = pluralize(conc).capitalize()
-                        super_conc_str = pluralize(super_conc)
-                        response.append({
-                            "utterance": f"{conc_str} are {super_conc_str}.",
-                            "pointing": {}
-                        })
-                    raise NotImplementedError       # Remove after sanity check
-
-                if "parts" in conc_diffs:
-                    # "Xs have Ys"
-                    for conc, part in conc_diffs["parts"]:
-                        conc_str = pluralize(conc).capitalize()
-                        part_str = pluralize(part)
-                        response.append({
-                            "utterance": f"{conc_str} have {part_str}.",
-                            "pointing": {}
-                        })
-
-                if "part_attributes" in conc_diffs:
-                    # "Xs have Z1, Z2, ... and Zn Ys"
-                    for conc, part, attrs in conc_diffs["part_attributes"]:
-                        conc_str = pluralize(conc).capitalize()
-                        part_str = pluralize(part)
-                        attrs_str = " and ".join([", ".join(attrs[:-1])] + attrs[-1:]) \
-                            if len(attrs) > 1 else attrs[0]
-                        response.append({
-                            "utterance": f"{conc_str} have {attrs_str} {part_str}.",
-                            "pointing": {}
-                        })
-                    raise NotImplementedError       # Remove after sanity check
+                response += _properties_to_nl(conc_diffs)
 
                 self.taught_diffs.add(frozenset([conc1, conc2]))
 
@@ -374,3 +424,70 @@ def _compute_concept_differences(domain_knowledge, conc1, conc2):
                 )
 
     return conc_diffs
+
+
+def _parse_nl_reason(nl_string):
+    """
+    Recognize which claim was made by the agent by means of the NL string. Return
+    a tuple ()
+    """
+    # Case 1: Agent made 'positive statement' that the mask refers to a part type
+    re_test = re.findall(r"^this is a (.*)$", nl_string)
+    if len(re_test) > 0:
+        return (re_test[0], "positive")
+
+    # Case 2: Agent is not sure if the provided mask refers to a part type
+    re_test = re.findall(r"^I wasn't sure if this is a (.*)$", nl_string)
+    if len(re_test) > 0:
+        return (re_test[0], "uncertain")
+
+    # Case 3: Agent made 'negative statement' that it failed to find any occurrence
+    # of a part type
+    re_test = re.findall(r"^this doesn't have a (.*)$", nl_string)
+    if len(re_test) > 0:
+        return (re_test[0], "nonexistent")
+
+
+def _properties_to_nl(conc_props):
+    """
+    Helper method factored out for realizing some collection of concept properties
+    to natural language feedback to agent
+    """
+    # Prepare user feedback based on the selected concept difference
+    feedback = []
+
+    if "supertype" in conc_props:
+        # "Xs are Ys"
+        for conc, super_conc in conc_props["supertype"]:
+            conc_str = pluralize(conc).capitalize()
+            super_conc_str = pluralize(super_conc)
+            feedback.append({
+                "utterance": f"{conc_str} are {super_conc_str}.",
+                "pointing": {}
+            })
+        raise NotImplementedError       # Remove after sanity check
+
+    if "parts" in conc_props:
+        # "Xs have Ys"
+        for conc, part in conc_props["parts"]:
+            conc_str = pluralize(conc).capitalize()
+            part_str = pluralize(part)
+            feedback.append({
+                "utterance": f"{conc_str} have {part_str}.",
+                "pointing": {}
+            })
+
+    if "part_attributes" in conc_props:
+        # "Xs have Z1, Z2, ... and Zn Ys"
+        for conc, part, attrs in conc_props["part_attributes"]:
+            conc_str = pluralize(conc).capitalize()
+            part_str = pluralize(part)
+            attrs_str = " and ".join([", ".join(attrs[:-1])] + attrs[-1:]) \
+                if len(attrs) > 1 else attrs[0]
+            feedback.append({
+                "utterance": f"{conc_str} have {attrs_str} {part_str}.",
+                "pointing": {}
+            })
+        raise NotImplementedError       # Remove after sanity check
+
+    return feedback

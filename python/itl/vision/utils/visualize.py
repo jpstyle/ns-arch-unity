@@ -33,26 +33,26 @@ def visualize_sg_predictions(img, scene, lexicon=None):
 
     # Prepare labels for class/attribute/relation predictions; show only the categories
     # with the highest scores
-    # cls_argmaxs = [obj["pred_classes"].argmax(axis=-1) for obj in scene.values()]
-    # cls_maxs = [obj["pred_classes"].max(axis=-1) for obj in scene.values()]
+    # cls_argmaxs = [obj["pred_cls"].argmax(axis=-1) for obj in scene.values()]
+    # cls_maxs = [obj["pred_cls"].max(axis=-1) for obj in scene.values()]
     # cls_labels = {
     #     oi: (lexicon["cls"].get(i, f"cls_{i}"), v)
     #     for oi, i, v in zip(scene, cls_argmaxs, cls_maxs)
     # }
 
-    # att_argmaxs = [obj["pred_attributes"].argmax(axis=-1) for obj in scene.values()]
-    # att_maxs = [obj["pred_attributes"].max(axis=-1) for obj in scene.values()]
+    # att_argmaxs = [obj["pred_att"].argmax(axis=-1) for obj in scene.values()]
+    # att_maxs = [obj["pred_att"].max(axis=-1) for obj in scene.values()]
     # att_labels = {
     #     oi: (lexicon["att"].get(i, f"att_{i}"), v)
     #     for oi, i, v in zip(scene, att_argmaxs, att_maxs)
     # }
 
     # rel_argmaxs = [
-    #     { obj2: rels.argmax(axis=-1) for obj2, rels in obj["pred_relations"].items() }
+    #     { obj2: rels.argmax(axis=-1) for obj2, rels in obj["pred_rel"].items() }
     #     for obj in scene.values()
     # ]
     # rel_maxs = [
-    #     { obj2: rels.max(axis=-1) for obj2, rels in obj["pred_relations"].items() }
+    #     { obj2: rels.max(axis=-1) for obj2, rels in obj["pred_rel"].items() }
     #     for obj in scene.values()
     # ]
     # rel_labels = {

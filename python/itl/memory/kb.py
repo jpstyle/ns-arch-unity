@@ -523,36 +523,36 @@ class KnowledgeBase:
         # body-less choice rules for enabling possibilities
         for oi, obj in scene.items():
             # Object classes
-            if "pred_classes" in obj:
-                classes = set(np.where(obj["pred_classes"] > SCORE_THRES)[0])
+            if "pred_cls" in obj:
+                classes = set(np.where(obj["pred_cls"] > SCORE_THRES)[0])
                 classes |= preds_in_kb["cls"] & \
-                    set(np.where(obj["pred_classes"] > LOWER_THRES)[0])
+                    set(np.where(obj["pred_cls"] > LOWER_THRES)[0])
                 for c in classes:
                     pred = f"cls_{c}"; args = [(oi, False)]
-                    likelihood = float(obj["pred_classes"][c])
+                    likelihood = float(obj["pred_cls"][c])
                     add_evidence(pred, args, likelihood)
 
             # Object attributes
-            if "pred_attributes" in obj:
-                attributes = set(np.where(obj["pred_attributes"] > SCORE_THRES)[0])
+            if "pred_att" in obj:
+                attributes = set(np.where(obj["pred_att"] > SCORE_THRES)[0])
                 attributes |= preds_in_kb["att"] & \
-                    set(np.where(obj["pred_attributes"] > LOWER_THRES)[0])
+                    set(np.where(obj["pred_att"] > LOWER_THRES)[0])
                 for a in attributes:
                     pred = f"att_{a}"; args = [(oi, False)]
-                    likelihood = float(obj["pred_attributes"][a])
+                    likelihood = float(obj["pred_att"][a])
                     add_evidence(pred, args, likelihood)
 
             # Object relations
-            if "pred_relations" in obj:
+            if "pred_rel" in obj:
                 relations = {
                     oj: set(np.where(per_obj > SCORE_THRES)[0]) | \
                         (preds_in_kb["rel"] & set(np.where(per_obj > LOWER_THRES)[0]))
-                    for oj, per_obj in obj["pred_relations"].items()
+                    for oj, per_obj in obj["pred_rel"].items()
                 }
                 for oj, per_obj in relations.items():
                     for r in per_obj:
                         pred = f"rel_{r}"; args = [(oi, False), (oj, False)]
-                        likelihood = float(obj["pred_relations"][oj][r])
+                        likelihood = float(obj["pred_rel"][oj][r])
                         add_evidence(pred, args, likelihood)
 
         return ev_prog

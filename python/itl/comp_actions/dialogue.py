@@ -3,15 +3,33 @@ Implements dialogue-related composite actions
 """
 import re
 import random
+from copy import deepcopy
 from functools import reduce
 from itertools import permutations, combinations
 from collections import defaultdict
 
+import numpy as np
 import networkx as nx
 
 from ..lpmln import Literal
 from ..lpmln.utils import flatten_cons_ante
 from ..memory.kb import KnowledgeBase
+from ..symbolic_reasoning.query import query
+from ..symbolic_reasoning.utils import bjt_extract_likelihood, bjt_replace_likelihood
+
+
+# As it is simply impossible to enumerate 'every possible continuous value',
+# we consider a discretized likelihood threshold as counterfactual alternative.
+# The value represents an alternative visual observation that results in evidence
+# that is 'reasonably' stronger that the corresponding literal actually being true.
+# (cf. ..symbolic_reasoning.attribute)
+HIGH = 0.85
+
+# Recursive helper method for checking whether rule cons/ante uses a reserved (pred
+# type *) predicate 
+has_reserved_pred = \
+    lambda cnjt: cnjt.name.startswith("*_") \
+        if isinstance(cnjt, Literal) else any(has_reserved_pred(nc) for nc in cnjt)
 
 def attempt_answer_Q(agent, utt_pointer):
     """
@@ -94,12 +112,6 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
         conc_conjs = defaultdict(set)
         for lit in presup[0]:
             conc_conjs[lit.args[0][0]].add(lit.name)
-        # for lit in presup[0]:
-        #     conc_conjs[lit.args[0][0]].add(tuple(lit.name.split("_")))
-        # conc_conjs = {
-        #     pred_ref: {(int(conc_ind), conc_type) for (conc_type, conc_ind) in concepts}
-        #     for pred_ref, concepts in conc_conjs.items()
-        # }
 
         # Extract any '*_subtype' statements and cast into appropriate query restrictors
         restrictors = {
@@ -119,8 +131,8 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
         search_specs = _search_specs_from_kb(agent, question, restrictors, bjt_v)
         if len(search_specs) > 0:
             agent.vision.predict(
-                None, agent.lt_mem.exemplars,
-                specs=search_specs, visualize=False, lexicon=agent.lt_mem.lexicon
+                None, agent.lt_mem.exemplars, specs=search_specs,
+                visualize=False, lexicon=agent.lt_mem.lexicon
             )
 
             # If new entities is registered as a result of visual search, update env
@@ -307,10 +319,50 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
             if snap_ti < ti
         )
         bjt_v, (kb_prog, _) = dialogue_state["sensemaking_v_snaps"][latest_reasoning_ind]
-        analyzed_kb_prog = KnowledgeBase.analyze_exported_reasoning_program(kb_prog)
+        kb_prog_analyzed = KnowledgeBase.analyze_exported_reasoning_program(kb_prog)
         scene_ents = {
             a[0] for atm in bjt_v.graph["atoms_map"]
             for a in atm.args if isinstance(a[0], str)
+        }
+
+        # Collect previous factual statements and questions made during this dialogue
+        prev_statements = []; prev_Qs = []
+        for ti, (spk, turn_clauses) in enumerate(translated):
+            for ci, ((rule, ques), _) in enumerate(turn_clauses):
+                # Factual statement
+                if rule is not None and len(rule[0])==1 and rule[1] is None:
+                    prev_statements.append(((ti, ci), (spk, rule)))
+                
+                # Question
+                if ques is not None:
+                    # Here, `rule` represents presuppositions included in `ques`
+                    prev_Qs.append(((ti, ci), (spk, ques, rule)))
+
+        # Fetch teacher's last correction, which is the expected ground truth
+        prev_statements_U = [
+            stm for (ti, ci), (spk, stm) in prev_statements
+            if spk=="U" and \
+                dialogue_state["clause_info"][f"t{ti}c{ci}"]["domain_describing"] and \
+                not dialogue_state["clause_info"][f"t{ti}c{ci}"]["irrealis"]
+        ]
+        expected_gt = prev_statements_U[-1][0][0]
+
+        # Fetch teacher's last probing question, which restricts the type of the answer
+        # predicate anticipated by taxonomy entailment
+        prev_Qs_U = [
+            (ques, presup) for _, (spk, ques, presup) in prev_Qs
+            if spk=="U" and "*_isinstance" in {ql.name for ql in ques[1][0]}
+        ]
+        probing_Q, probing_presup = prev_Qs_U[-1]
+        # Process any 'concept conjunctions' provided in the presupposition into a more
+        # legible format, for easier processing right after
+        conc_conjs = defaultdict(set)
+        for lit in probing_presup[0]:
+            conc_conjs[lit.args[0][0]].add(lit.name)
+        # Extract any '*_subtype' statements and cast into appropriate query restrictors
+        restrictors = {
+            lit.args[0][0]: agent.lt_mem.kb.find_entailer_concepts(conc_conjs[lit.args[1][0]])
+            for lit in probing_Q[1][0] if lit.name=="*_subtype"
         }
 
         for tgt_ev in target_events:
@@ -318,92 +370,42 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
 
             # Only considers singleton events right now
             assert len(tgt_ev) == 1
+            tgt_lit = tgt_ev[0]
+            v_tgt_lit = Literal(f"v_{tgt_lit.name}", tgt_lit.args)
 
-            # Select candidate explanans from the inference program used for answering
-            # the question; start from rules containing the target event predicate and
-            # continue spanning along (against?) the abductive direction until all
-            # potential evidence atoms are identified
-            evidence_atoms = set(); frontier = {tgt_ev[0]}
-            while len(frontier) > 0:
-                expd_atm = frontier.pop()       # Atom representing explanandum event
+            # Find valid templates of potential explanantia for the target based on the
+            # inference program
+            exps_templates = _find_explanans_templates(tgt_lit, kb_prog_analyzed)
+            # Obtain every possible instantiations of the discovered templates, then
+            # flatten to a set of (grounded) potential evidence atoms
+            exps_instances = _instantiate_templates(exps_templates, scene_ents)
+            evidence_atoms = {
+                Literal(f"v_{c_lit.name}", c_lit.args)
+                for conjunction in exps_instances for c_lit in conjunction
+                if c_lit.name.startswith("cls") or c_lit.name.startswith("att")
+            }       # Considering visual evidence for class & attributes concepts only
 
-                for rule_info in analyzed_kb_prog.values():
-                    # Disregard rules without abductive force
-                    if not rule_info.get("abductive"): continue
-
-                    # Check if rule is relevant; i.e. whether the popped explanandum
-                    # event is included in rule antecedent
-                    entail_dir, mapping = Literal.entailing_mapping_btw(
-                        rule_info["ante"], [expd_atm]
-                    )
-
-                    if entail_dir is not None and entail_dir == 1:
-                        # Rule relevant, target event may be abduced from (grounded)
-                        # consequent literals
-                        r_cons_subs = [
-                            c_lit.substitute(**mapping) for c_lit in rule_info["cons"]
-                        ]
-                        
-                        # All possible substitutions for the remaining variables; will
-                        # automatically give empty singleton list if len(remaining_vars)
-                        # is larger than len(remaining_ents)
-                        remaining_vars = {
-                            arg for c_lit in r_cons_subs for arg, is_var in c_lit.args
-                            if is_var
-                        }
-                        remaining_vars = tuple(remaining_vars)      # Int indexing
-                        remaining_ents = scene_ents - set(
-                            e for e, _ in mapping["terms"].values()
-                        )
-
-                        possible_remaining_subs = permutations(
-                            remaining_ents, len(remaining_vars)
-                        )
-                        for r_subs in possible_remaining_subs:
-                            r_subs = {
-                                (remaining_vars[i], True): (e, False)
-                                for i, e in enumerate(r_subs)
-                            }
-                            for c_lit in r_cons_subs:
-                                # Considering visual evidence for class & attributes
-                                # concepts only, which are neurally predicted
-                                if not (
-                                    c_lit.name.startswith("cls") or
-                                    c_lit.name.startswith("att")
-                                ):
-                                    continue
-
-                                # Substitute, add event atom to frontier, evidence atom
-                                # to the evidence atom set
-                                c_lit = c_lit.substitute(terms=r_subs)
-                                ev_lit = Literal(f"v_{c_lit.name}", c_lit.args)
-
-                                frontier.add(c_lit)
-                                evidence_atoms.add(ev_lit)
-
-            # Manually select 'competitor' atoms that could've been the answer
-            # in place of the true one (not necessarily mutually exclusive);
-            # this is a band-aid solution right now as we are manually providing
-            # the truck subtype predicates, may need a more principled selection
-            # logic (by referring to the question that invoked the answer, etc.)
-            competing_evts = [
+            # Manually select 'competitor' events that could've been the answer
+            # in place of the true one (not necessarily mutually exclusive)
+            possible_answers = [
                 atm for atm in bjt_v.graph["atoms_map"]
                 if (
-                    atm.name in [f"cls_{ci}" for ci in [8,9,10,11,12]] and
-                    atm.name!=tgt_ev[0].name and atm.args==tgt_ev[0].args
+                    atm.name in restrictors[probing_Q[0][0][0]] and
+                    atm.args==tgt_lit.args
                 )
             ]
-            # Determine the probability threshold to be provided into the causal
-            # attribution procedure method
-            ans_threshold = 0.0
-            for ev_atm in competing_evts:
-                ans, _ = agent.symbolic.query(bjt_v, None, ((ev_atm,), None), {})
-                ans_threshold = max(ans_threshold, ans[()])
+            competing_evts = [
+                (atm,) for atm in possible_answers if atm.name!=tgt_lit.name
+            ]
 
             # Obtain all sufficient explanations by causal attribution
             suff_expls = agent.symbolic.attribute(
-                bjt_v, tgt_ev, evidence_atoms, threshold=ans_threshold
+                bjt_v, tgt_ev, evidence_atoms, competing_evts
             )
+            suff_expls = [
+                {x_lit for x_lit in expl if x_lit != v_tgt_lit}
+                for expl in suff_expls
+            ]           # Remove dud explanation ('Because it looked liked one')
             suff_expls = [expl for expl in suff_expls if len(expl) > 0]
 
             if len(suff_expls) > 0:
@@ -418,6 +420,12 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                     conc_pred = exps_lit.name.strip("v_")
                     conc_type, conc_ind = conc_pred.split("_")
                     pred_name = agent.lt_mem.lexicon.d2s[(int(conc_ind), conc_type)][0][0]
+                    # Split camelCased predicate name
+                    splits = re.findall(
+                        r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", pred_name
+                    )
+                    splits = [w[0].lower()+w[1:] for w in splits]
+                    conc_nl = ' '.join(splits)
 
                     # Update cognitive state w.r.t. value assignment and word sense
                     ri = f"x{i}t{ti_new}c{ci_new}"
@@ -430,24 +438,21 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                         (pred_name, conc_type_to_pos[conc_type], (ri,), False)
                     )
 
-                    # Split camelCased predicate name
-                    splits = re.findall(
-                        r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", pred_name
-                    )
-                    splits = [w[0].lower()+w[1:] for w in splits]
-                    reason_nl = f"this is a {' '.join(splits)}"
-                
+                    # Realize the reason as natural language utterance
+                    reason_prefix = f"this is a "
+
                     # Append a suffix appropriate for the number of reasons
                     if i == len(suff_expls[0])-1:
                         # Last entry, period
-                        reason_nl += "."
+                        reason_suffix = "."
                     elif i == len(suff_expls[0])-2:
                         # Next to last entry, comma+and
-                        reason_nl += ", and "
+                        reason_suffix = ", and "
                     else:
                         # Otherwise, comma
-                        reason_nl += ", "
+                        reason_suffix = ", "
 
+                    reason_nl = f"{reason_prefix}{conc_nl}{reason_suffix}"
                     answer_nl += reason_nl
 
                     # Fetch mask for demonstrative reference and shift offset
@@ -480,12 +485,272 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                 )
 
             else:
-                # Couldn't find any sufficient explanations that could be provided
-                # verbally; answer "I cannot explain."
-                agent.lang.dialogue.to_generate.append(
-                    # Will just pass None as "logical form" for this...
-                    (None, "I cannot explain.", {})
-                )
+                # No 'meaningful' (i.e., 'Because it looked like one') sufficient
+                # explanations found, try finding a good counterfactual explanation
+                # that would've led to the expected ground truth answer
+                selected_cf_expl = None
+
+                if agent.cfg.exp.strat_feedback != "maxHelpExpl2":
+                    # Short circuit, just give a dud explanation
+                    agent.lang.dialogue.to_generate.append(
+                        # Will just pass None as "logical form" for this...
+                        (None, "I cannot explain.", {})
+                    )
+                    continue
+
+                # Find valid templates of potential explanantia for the expected
+                # ground-truth answer based on the inference program
+                exps_templates = _find_explanans_templates(expected_gt, kb_prog_analyzed)
+                exps_templates = exps_templates[1:]
+                    # Exclude the dud explanation ('I would've said that if it looked like one)
+
+                # len(exps_templates) > 0 iff there's any KB rule that can be leveraged
+                # to abduce the expected ground-truth answer
+                gt_inferrable_from_kb = len(exps_templates) > 0
+
+                if gt_inferrable_from_kb:
+                    # Try to find some meaningful counterfactual explanation that would
+                    # increase the likelihood of the expected answer to a sufficiently
+                    # high value. Basically an existence test; try every instantiation
+                    # of every template discovered until some valid counterfactual is
+                    # found. If found one, answer with that; otherwise, fall back to
+                    # dud explanation.
+
+                    # Test each template one-by-one
+                    for template in exps_templates:
+                        # Find every possible instantiation of the template
+                        exps_instances = _instantiate_templates([template], scene_ents)
+
+                        # Considering visual evidence for class & attributes concepts,
+                        # as above
+                        evidence_atoms = {
+                            Literal(f"v_{c_lit.name}", c_lit.args)
+                            for conjunction in exps_instances for c_lit in conjunction
+                            if c_lit.name.startswith("cls") or c_lit.name.startswith("att")
+                        }
+                        evidence_atoms = {
+                            evd_atm for evd_atm in evidence_atoms
+                            if evd_atm in bjt_v.graph["atoms_map"]
+                        }       # Can try replacement only if `evd_atm` is registered in BJT
+
+                        if len(evidence_atoms) > 0:
+                            # Potential explanation exists in scene, albeit with a
+                            # probability value not high enough. Try raising likelihood
+                            # of relevant evidence atoms and querying the updated BJT
+                            # for ground truth event probability.
+
+                            # Obtain a modified BJT where the likelihoods are raised to
+                            # 'sufficiently high' values. (Note we are assuming evidence
+                            # literals occur in rules with positive polarity only, which
+                            # will suffice within our current scope.)
+                            bjt_new = deepcopy(bjt_v)
+                            replacements = { evd_atm: HIGH for evd_atm in evidence_atoms }
+                            bjt_replace_likelihood(bjt_new, replacements)
+
+                            # Query the updated BJT for the event probabilities
+                            max_prob_evt = (None, float("-inf"))
+                            for atm in possible_answers:
+                                evt = (atm,)
+                                _, prob_scores = query(bjt_new, None, (evt, None), {})
+
+                                # Update max probability event if applicable
+                                evt_prob = [
+                                    prob for prob, is_evt in prob_scores[()].values() if is_evt
+                                ][0]
+                                if evt_prob > max_prob_evt[1]:
+                                    max_prob_evt = (evt, evt_prob)
+
+                            assert max_prob_evt[0] is not None
+                            if max_prob_evt[0] == (expected_gt,):
+                                # The counterfactual case successfully subverts the ranking
+                                # of answers, making the expected ground truth as the most
+                                # likely event
+
+                                # Provide the evidence atoms with current likelihood values
+                                # as data needed for generating the counterfactual explanation.
+                                evidence_likelihoods = {
+                                    evd_atm: bjt_extract_likelihood(bjt_v, evd_atm)
+                                    for evd_atm in evidence_atoms
+                                }
+                                selected_cf_expl = (evidence_likelihoods, template)
+                                break
+
+                        else:
+                            # Potential explanation doesn't exist in scene. Try adding
+                            # hypothetical entities into the scene with appropriate
+                            # likelihood values based on the info contained in template.
+                            # Compile a new BJT then query for ground truth probability.
+                            occurring_vars = {
+                                arg for t_lit in template for arg, is_var in t_lit.args
+                                if is_var
+                            }
+                            hyp_ents = [f"h{i}" for i in range(len(occurring_vars))]
+                            hyp_subs = {
+                                (v, True): (e, False)
+                                for v, e in zip(occurring_vars, hyp_ents)
+                            }
+
+                            # Template instance grounded with the hypothetical entities
+                            hyp_instance = [
+                                t_lit.substitute(terms=hyp_subs) for t_lit in template
+                            ]
+
+                            # Deepcopy vision.scene for counterfactual manipulation
+                            scene_new = deepcopy(agent.vision.scene)
+                            scene_new = {
+                                **scene_new,
+                                **{h: {} for h in hyp_ents}
+                            }
+
+                            # Add hypothetical likelihood values as designated by the
+                            # template instance
+                            for h_lit in hyp_instance:
+                                conc_type, conc_ind = h_lit.name.split("_")
+                                conc_ind = int(conc_ind)
+                                field = f"pred_{conc_type}"
+                                C = getattr(agent.vision.inventories, conc_type)
+
+                                if conc_type == "cls" or conc_type == "att":
+                                    arg1 = h_lit.args[0][0]
+                                    if field not in scene_new[arg1]:
+                                        scene_new[arg1][field] = np.zeros(C)
+                                    scene_new[arg1][field][conc_ind] = HIGH
+
+                                else:
+                                    assert conc_type == "rel"
+                                    assert len(h_lit.args) == 2
+
+                                    arg1 = h_lit.args[0][0]; arg2 = h_lit.args[1][0]
+                                    if field not in scene_new[arg1]:
+                                        scene_new[arg1][field] = {}
+                                    if arg2 not in scene_new[arg1][field]:
+                                        scene_new[arg1][field][arg2] = np.zeros(C)
+                                    scene_new[arg1][field][arg2][conc_ind] = HIGH
+
+                            hyp_evidence = agent.lt_mem.kb.visual_evidence_from_scene(scene_new)
+                            bjt_hyp = (kb_prog + hyp_evidence).compile()
+
+                            # Query the updated BJT for the event probabilities
+                            max_prob_evt = (None, float("-inf"))
+                            for atm in possible_answers:
+                                evt = (atm,)
+                                _, prob_scores = query(bjt_hyp, None, (evt, None), {})
+
+                                # Update max probability event if applicable
+                                evt_prob = [
+                                    prob for prob, is_evt in prob_scores[()].values() if is_evt
+                                ][0]
+                                if evt_prob > max_prob_evt[1]:
+                                    max_prob_evt = (evt, evt_prob)
+
+                            assert max_prob_evt[0] is not None
+                            if max_prob_evt[0] == (expected_gt,):
+                                # The counterfactual case successfully subverts the ranking
+                                # of answers, making the expected ground truth as the most
+                                # likely event
+
+                                # Provide the hypothetical evidence atoms (denoted with None
+                                # as 'current' likelihood) as data needed for generating the
+                                # counterfactual explanation.
+                                evidence_likelihoods = {
+                                    Literal(f"v_{h_lit.name}", h_lit.args): None
+                                    for h_lit in hyp_instance
+                                    if h_lit.name.startswith("cls") or h_lit.name.startswith("att")
+                                }
+                                selected_cf_expl = (evidence_likelihoods, template)
+                                break
+
+                # Generate appropriate agent response
+                if selected_cf_expl is None:
+                    # Agent couldn't find any meaningful explanations that could be
+                    # provided verbally; answer "I cannot explain."
+                    agent.lang.dialogue.to_generate.append(
+                        # Will just pass None as "logical form" for this...
+                        (None, "I cannot explain.", {})
+                    )
+
+                else:
+                    # Found data needed for generating some counterfactual explanation,
+                    # in the form of dict { [potential_evidence]: [current_likelihood] },
+                    # and the template that yielded the explanans instance
+                    evidence_likelihoods, template = selected_cf_expl
+
+                    answer_nl = "Because "
+                    dem_refs = {}; dem_offset = len(answer_nl)
+
+                    for i, (evd_atom, pr_val) in enumerate(evidence_likelihoods.items()):
+                        # For each counterfactual explanation, add appropriate string
+                        conc_pred = evd_atom.name.strip("v_")
+                        conc_type, conc_ind = conc_pred.split("_")
+                        pred_name = agent.lt_mem.lexicon.d2s[(int(conc_ind), conc_type)][0][0]
+                        # Split camelCased predicate name
+                        splits = re.findall(
+                            r"(?:^|[A-Z])(?:[a-z]+|[A-Z]*(?=[A-Z]|$))", pred_name
+                        )
+                        splits = [w[0].lower()+w[1:] for w in splits]
+                        conc_nl = ' '.join(splits)
+
+                        if pr_val is not None and pr_val >= 0.5:
+                            # Had right reason, but wasn't confident enough
+                            reason_prefix = "I wasn't sure if this is a "
+                            prefix_offset = len("I wasn't sure if ")
+
+                            # Demonstrative "this" refers to the (potential) part
+                            offset = dem_offset + prefix_offset
+                            dem_refs[(offset, offset+4)] = \
+                                dialogue_state["referents"]["env"][evd_atom.args[0][0]]["mask"]
+                        else:
+                            # Wasn't aware of any instance of the potential explanans
+                            # template in the scene
+
+                            # This will need a more principled treatment if we ever get
+                            # to handle relations other than "have"
+                            reason_prefix = "this doesn't have a "
+                            prefix_offset = 0
+
+                            # Demonstrative "this" refers to the whole object
+                            offset = dem_offset + prefix_offset
+                            dem_refs[(offset, offset+4)] = \
+                                dialogue_state["referents"]["env"][tgt_lit.args[0][0]]["mask"]
+
+                        # Append a suffix appropriate for the number of reasons
+                        if i == len(evidence_likelihoods)-1:
+                            # Last entry, period
+                            reason_suffix = "."
+                        elif i == len(evidence_likelihoods)-2:
+                            # Next to last entry, comma+and
+                            reason_suffix = ", and "
+                        else:
+                            # Otherwise, comma
+                            reason_suffix = ", "
+
+                        reason_nl = f"{reason_prefix}{conc_nl}{reason_suffix}"
+                        answer_nl += reason_nl
+
+                        # Shift offset
+                        dem_offset += len(reason_nl)
+
+                    # Push the translated answer to buffer of utterances to generate; won't
+                    # care for logical form, doesn't matter much now
+                    agent.lang.dialogue.to_generate.append(
+                        (None, answer_nl, dem_refs)
+                    )
+
+                    # Push another record for the rhetorical relation as well, namely the
+                    # fact that the provided answer clause explains the agent's previous
+                    # question. Not to be uttered explicitly (already uttered, as a matter
+                    # of fact), but for bookkeeping purpose.
+                    rrel_logical_form = (
+                        "expl", "*", (f"t{ti_new}c{ci_new}", q_cons[0].args[1][0]), False
+                    )
+                    rrel_logical_form = ((rrel_logical_form,), ())
+                    agent.lang.dialogue.to_generate.append(
+                        (
+                            (rrel_logical_form, None),
+                            "# rhetorical relation due to 'because'",
+                            {}
+                        )
+                    )
 
     else:
         # Don't know how to handle other non-domain questions
@@ -804,3 +1069,75 @@ def _search_specs_from_kb(agent, question, restrictors, ref_bjt):
     #     continue
 
     return final_specs
+
+
+def _find_explanans_templates(tgt_lit, kb_prog_analyzed):
+    """
+    Helper method factored out for finding templates of potential explanantia
+    (causal chains possibly not fully grounded, which could raise the possibility
+    of the target explanandum when appropriately grounded), based on the inference
+    program exported from some specific version of (exported) KB.
+
+    Start from rules containing the target event predicate and continue spanning
+    along (against?) the abductive direction until all potential evidence atoms
+    are identified.
+    """
+    exps_templates = [[tgt_lit]]; frontier = {tgt_lit}
+    while len(frontier) > 0:
+        expd_atm = frontier.pop()       # Atom representing explanandum event
+
+        for rule_info in kb_prog_analyzed.values():
+            # Disregard rules without abductive force
+            if not rule_info.get("abductive"): continue
+
+            # Check if rule is relevant; i.e. whether the popped explanandum
+            # event is included in rule antecedent
+            entail_dir, mapping = Literal.entailing_mapping_btw(
+                rule_info["ante"], [expd_atm]
+            )
+
+            if entail_dir is not None and entail_dir >= 0:
+                # Rule relevant, target event may be abduced from consequent
+                r_cons_subs = [
+                    c_lit.substitute(**mapping) for c_lit in rule_info["cons"]
+                ]
+
+                # Add the whole substituted consequent to the list of valid
+                # explanans templates
+                exps_templates.append(r_cons_subs)
+
+                # Add each literal in the substituted consequent to the search
+                # frontier
+                frontier |= set(r_cons_subs)
+
+    return exps_templates
+
+def _instantiate_templates(exps_templates, scene_ents):
+    """
+    Helper method factored out for enumerating every possible instantiations of
+    the provided explanans templates with scene entities
+    """
+    exps_instances = []
+
+    for conjunction in exps_templates:
+        # Variables and constants occurring in the template conjunction
+        occurring_consts = {
+            arg for c_lit in conjunction for arg, is_var in c_lit.args
+            if not is_var
+        }
+        occurring_vars = {
+            arg for c_lit in conjunction for arg, is_var in c_lit.args
+            if is_var
+        }
+        occurring_vars = tuple(occurring_vars)      # Int indexing
+        remaining_ents = scene_ents - occurring_consts
+
+        # All possible substitutions for the remaining variables; permutations()
+        # will give empty list if len(occurring_vars) is larger than len(remaining_ents)
+        possible_remaining_subs = permutations(remaining_ents, len(occurring_vars))
+        for subs in possible_remaining_subs:
+            subs = { (occurring_vars[i], True): (e, False) for i, e in enumerate(subs) }
+            instance = [c_lit.substitute(terms=subs) for c_lit in conjunction]
+            exps_instances.append(instance)
+
+    return exps_instances

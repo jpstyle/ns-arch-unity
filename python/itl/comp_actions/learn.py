@@ -10,7 +10,7 @@ from collections import defaultdict
 import inflect
 
 from ..lpmln import Literal, Polynomial
-from ..lpmln.utils import flatten_cons_ante
+from ..lpmln.utils import flatten_cons_ante, wrap_args
 
 
 EPS = 1e-10                  # Value used for numerical stabilization
@@ -19,7 +19,8 @@ U_IN_PR = 1.00               # How much the agent values information provided by
 A_IM_PR = 1.00               # How much the agent values inferred implicature
 
 # Recursive helper methods for checking whether rule cons/ante is grounded (variable-
-# free), lifted (all variables), or contains any predicate referent as argument
+# free), lifted (all variables), contains any predicate referent as argument, or uses
+# a reserved (pred type *) predicate 
 is_grounded = lambda cnjt: all(not is_var for _, is_var in cnjt.args) \
     if isinstance(cnjt, Literal) else all(is_grounded(nc) for nc in cnjt)
 is_lifted = lambda cnjt: all(is_var for _, is_var in cnjt.args) \
@@ -29,7 +30,7 @@ has_pred_referent = \
         if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
 has_reserved_pred = \
     lambda cnjt: cnjt.name.startswith("*_") \
-        if isinstance(cnjt, Literal) else any(has_pred_referent(nc) for nc in cnjt)
+        if isinstance(cnjt, Literal) else any(has_reserved_pred(nc) for nc in cnjt)
 
 def identify_mismatch(agent, rule):
     """
@@ -197,7 +198,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
 
             # Collect concept_diff questions made by the agent during this dialogue
             diff_Qs_args = []
-            for _, (spk, (q_vars, (q_cons, _)), _, raw) in prev_Qs:
+            for _, (spk, (q_vars, (q_cons, _)), _, _) in prev_Qs:
                 if spk!="A": continue
                 diff_Qs_args += [
                     l.args for l in q_cons
@@ -335,18 +336,26 @@ def handle_mismatch(agent, mismatch):
             conc_ind = int(conc_ind)
             args = [a for a, _ in atom.args]
 
-            # Fetch current score for the asserted fact
             if conc_type == "cls" or conc_type == "att":
-                f_vec = agent.vision.scene[args[0]]["vis_emb"]
+                if agent.vision.scene[args[0]]["exemplar_ind"] is None:
+                    # Vector not stored in exemplar storage, provide vector
+                    f_vec = agent.vision.scene[args[0]]["vis_emb"][None,:]
+                else:
+                    # Vector stored in exemplar storage, provide pointer
+                    f_vec = [agent.vision.scene[args[0]]["exemplar_ind"]]
             else:
                 assert conc_type == "rel"
                 raise NotImplementedError   # Step back for relation prediction...
 
             # Add new concept exemplars to memory
-            agent.lt_mem.exemplars.add_exs(
-                f_vecs={ conc_type: f_vec[None,:] },
+            added_inds = agent.lt_mem.exemplars.add_exs(
+                f_vecs={ conc_type: f_vec },
                 pointers={ conc_type: { conc_ind: exm_pointer } }
             )
+
+            if agent.vision.scene[args[0]]["exemplar_ind"] is None:
+                # Record vector storage index for corresponding object in visual scene
+                agent.vision.scene[args[0]]["exemplar_ind"] = added_inds[conc_type][0]
 
     mismatch[2] = True
 
@@ -358,6 +367,11 @@ def handle_confusion(agent, confusion):
     """
     # This confusion is about to be handled
     agent.vision.confusions.remove(confusion)
+
+    if agent.cfg.exp.strat_feedback.startswith("maxHelpExpl"):
+        # When interacting with teachers with this strategy, generic KB rules are
+        # elicited not by the difference questions
+        return
 
     # New dialogue turn & clause index for the question to be asked
     ti_new = len(agent.lang.dialogue.record)
@@ -698,16 +712,30 @@ def handle_neologism(agent, novel_concepts, dialogue_state):
                 ]
 
                 if conc_type == "cls" or conc_type == "att":
-                    f_vec = agent.vision.scene[args[0]]["vis_emb"]
+                    if agent.vision.scene[args[0]]["exemplar_ind"] is None:
+                        # Vector not stored in exemplar storage, provide vector
+                        f_vec = agent.vision.scene[args[0]]["vis_emb"][None,:]
+                    else:
+                        # Vector stored in exemplar storage, provide pointer
+                        f_vec = [agent.vision.scene[args[0]]["exemplar_ind"]]
                 else:
                     assert conc_type == "rel"
                     raise NotImplementedError   # Step back for relation prediction...
 
                 # Add new concept exemplars to memory
-                agent.lt_mem.exemplars.add_exs(
-                    f_vecs={ conc_type: f_vec[None,:] },
+                added_inds = agent.lt_mem.exemplars.add_exs(
+                    f_vecs={ conc_type: f_vec },
                     pointers={ conc_type: { conc_ind: ({0}, set()) } }
                 )
+
+                if agent.vision.scene[args[0]]["exemplar_ind"] is None:
+                    # Record vector storage index for corresponding object in visual scene
+                    agent.vision.scene[args[0]]["exemplar_ind"] = added_inds[conc_type][0]
+
+                # Register this instance as a handled mismatch, so that add_exs() won't
+                # be called upon this one during this loop again by handle_mismatch()
+                stm = ((Literal(f"{conc_type}_{conc_ind}", wrap_args(*args)),), None)
+                agent.symbolic.mismatches.append([stm, None, True])
 
                 # Set flag that XB is updated
                 xb_updated = True

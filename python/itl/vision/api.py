@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 WB_PREFIX = "wandb://"
-DEF_CON = 0.2       # Default confidence value in absence of binary concept classifier
+DEF_CON = 0.4       # Default confidence value in absence of binary concept classifier
 
 class VisionModule:
 
@@ -110,28 +110,38 @@ class VisionModule:
 
 
     def predict(
-        self, image, exemplars, masks=None, specs=None, visualize=True, lexicon=None
+        self, image, exemplars, reclassify=False, masks=None, specs=None,
+        visualize=True, lexicon=None
     ):
         """
         Model inference in either one of three modes:
             1) full scene graph generation mode, where the module is only given
                 an image and needs to return its estimation of the full scene
                 graph for the input
-            2) instance classification mode, where a number of masks are given
+            2) concept reclassification mode, where the scene objects and their
+                visual embeddings are preserved intact and only the concept tests
+                are run again (most likely called when agent exemplar base is updated)
+            3) instance classification mode, where a number of masks are given
                 along with the image and category predictions are made for only
                 those instances
-            3) instance search mode, where a specification is provided in the
+            4) instance search mode, where a specification is provided in the
                 form of FOL formula with a variable and best fitting instance(s)
                 should be searched
 
-        2) and 3) are 'incremental' in the sense that they should add to an existing
+        3) and 4) are 'incremental' in the sense that they should add to an existing
         scene graph which is already generated with some previous execution of this
-        method. Provide masks arg to run in 2) mode, or spec arg to run in 3) mode.
+        method.
+        
+        Provide reclassify=True to run in 2) mode. Provide masks arg to run in 3) mode,
+        or spec arg to run in 4) mode. All prediction modes are mutually exclusive in
+        the sense that only one of their corresponding 'flags' should be active.
         """
         masks_provided = masks is not None
         specs_provided = specs is not None
-        if not (masks_provided or specs_provided):
-            assert image is not None    # Image must be provided for ensemble prediction
+        ensemble = not (reclassify or masks_provided or specs_provided)
+
+        # Image must be provided for ensemble prediction
+        if ensemble: assert image is not None
 
         if image is not None:
             if isinstance(image, str):
@@ -142,7 +152,7 @@ class VisionModule:
         self.model.eval()
         with torch.no_grad():
             # Prediction modes
-            if not (masks_provided or specs_provided):
+            if ensemble:
                 # Full (ensemble) prediction
                 vis_embs, masks_out, scores = self.model(image)
 
@@ -159,12 +169,13 @@ class VisionModule:
                         "vis_emb": vis_embs[det_ind],
                         "pred_mask": masks_out[det_ind],
                         "pred_objectness": scores[det_ind],
-                        "pred_classes": self._fs_conc_pred(exemplars, vis_embs[det_ind], "cls"),
-                        "pred_attributes": self._fs_conc_pred(exemplars, vis_embs[det_ind], "att"),
-                        "pred_relations": {
+                        "pred_cls": self._fs_conc_pred(exemplars, vis_embs[det_ind], "cls"),
+                        "pred_att": self._fs_conc_pred(exemplars, vis_embs[det_ind], "att"),
+                        "pred_rel": {
                             f"o{j}": np.zeros(self.inventories.rel)
                             for j in range(len(topk_inds)) if i != j
-                        }
+                        },
+                        "exemplar_ind": None       # Store exemplar storage index, if applicable
                     }
                     for i, det_ind in enumerate(topk_inds)
                 }
@@ -183,7 +194,14 @@ class VisionModule:
                         intersection_A = np.minimum(oi_msk, oj_msk).sum()
                         mask2_A = oj_msk.sum()
 
-                        obj_i["pred_relations"][oj][0] = intersection_A / mask2_A
+                        obj_i["pred_rel"][oj][0] = intersection_A / mask2_A
+
+            elif reclassify:
+                # Concept reclassification with the same set of objects
+                for obj_i in self.scene.values():
+                    vis_emb = obj_i["vis_emb"]
+                    obj_i["pred_cls"] = self._fs_conc_pred(exemplars, vis_emb, "cls")
+                    obj_i["pred_att"] = self._fs_conc_pred(exemplars, vis_emb, "att")
 
             else:
                 # Incremental scene graph expansion
@@ -239,26 +257,7 @@ class VisionModule:
                 if exemplars.binary_classifiers[conc_type][ci] is not None:
                     # Binary classifier induced from pos/neg exemplars exists
                     clf = exemplars.binary_classifiers[conc_type][ci]
-                    # The probability value obtained from classifier represents
-                    # the 'aleatoric' uncertainty as to the binary membership
-                    # prediction task
                     pred = clf.predict_proba(emb[None])[0]
-
-                    # Obtain 'epistemic' uncertainty, a value between (0,1], which
-                    # reflects how 'confident' the agent's vision module should be
-                    # about the estimated probability itself. Conforming to the
-                    # view that the density in latent space induced by a neural
-                    # model aligns with epistemic uncertainty (Postels et al., 2020)
-
-                    # Modulate the epistemic uncertainty by the number of correct
-                    # predictions made by the classifier so far; more correct
-                    # answers reduce epistemic uncertainty (Makes the overall
-                    # feature vector space denser in effect, since correct answers
-                    # are not added to the exemplar stash)
-
-                    # Interpolate between the (aleatoric) probability value and the
-                    # default fallback value (DEF_CON), based on the epistemic
-                    # uncertainty
                     predictions.append(pred)
                 else:
                     # No binary classifier exists due to lack of either positive
@@ -431,7 +430,7 @@ class VisionModule:
 
         for oi, oj in product(existing_objs, new_objs):
             # Add new relation score slots for existing objects
-            self.scene[oi]["pred_relations"][oj] = np.zeros(self.inventories.rel)
+            self.scene[oi]["pred_rel"][oj] = np.zeros(self.inventories.rel)
 
         update_data = list(zip(
             new_objs, incr_vis_embs, incr_masks_out, incr_scores
@@ -445,9 +444,9 @@ class VisionModule:
                 "vis_emb": vis_emb,
                 "pred_mask": msk,
                 "pred_objectness": score,
-                "pred_classes": self._fs_conc_pred(exemplars, vis_emb, "cls"),
-                "pred_attributes": self._fs_conc_pred(exemplars, vis_emb, "att"),
-                "pred_relations": {
+                "pred_cls": self._fs_conc_pred(exemplars, vis_emb, "cls"),
+                "pred_att": self._fs_conc_pred(exemplars, vis_emb, "att"),
+                "pred_rel": {
                     **{
                         oj: np.zeros(self.inventories.rel)
                         for oj in existing_objs
@@ -456,7 +455,8 @@ class VisionModule:
                         oj: np.zeros(self.inventories.rel)
                         for oj in new_objs if oi != oj
                     }
-                }
+                },
+                "exemplar_ind": None
             }
 
         for oi in new_objs:
@@ -476,7 +476,7 @@ class VisionModule:
                 intersection_A = np.minimum(oi_msk, oj_msk).sum()
                 mask2_A = oj_msk.sum()
 
-                self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
+                self.scene[oi]["pred_rel"][oj][0] = intersection_A / mask2_A
 
             # Relation concepts (Between existing detections)
             for oj in existing_objs:
@@ -486,8 +486,8 @@ class VisionModule:
                 mask1_A = oi_msk.sum()
                 mask2_A = oj_msk.sum()
 
-                self.scene[oi]["pred_relations"][oj][0] = intersection_A / mask2_A
-                self.scene[oj]["pred_relations"][oi][0] = intersection_A / mask1_A
+                self.scene[oi]["pred_rel"][oj][0] = intersection_A / mask2_A
+                self.scene[oj]["pred_rel"][oi][0] = intersection_A / mask1_A
 
     def train(self):
         """

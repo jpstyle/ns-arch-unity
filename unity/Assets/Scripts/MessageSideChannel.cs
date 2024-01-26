@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using UnityEngine;
 using Unity.MLAgents.SideChannels;
 
 public class MessageSideChannel : SideChannel
@@ -18,6 +17,7 @@ public class MessageSideChannel : SideChannel
     protected override void OnMessageReceived(IncomingMessage msg)
     {
         // Read until end of message
+        var speaker = msg.ReadString();
         var utterance = msg.ReadString();
 
         // Retrieve any demonstrative references (map from substring indices to
@@ -42,8 +42,18 @@ public class MessageSideChannel : SideChannel
                 demRefs[(start, end)] = new EntityRef(msg.ReadString());
         }
 
+        // Handle system requests from backend (only concerns ground-truth masks info
+        // requests currently)
+        if (speaker == "System" && utterance.StartsWith("GT mask request: "))
+        {
+            var requests = utterance.Replace("GT mask request: ", "");
+            foreach (var req in requests.Split(", "))
+                _listeningAgent.gtMaskRequests.Enqueue(req);
+        }
+
         // Put processed message data into incoming buffer
-        _listeningAgent.outgoingMsgBuffer.Enqueue((utterance, demRefs));
+        if (speaker == _listeningAgent.dialogueParticipantID)
+            _listeningAgent.outgoingMsgBuffer.Enqueue((speaker, utterance, demRefs));
     }
 
     public void SendMessageToBackend(

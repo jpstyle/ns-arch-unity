@@ -52,7 +52,7 @@ class SymbolicReasonerModule:
             exported_kb: Output from KnowledgeBase().export_reasoning_program()
             visual_evidence: Output from KnowledgeBase().visual_evidence_from_scene()
         """
-        # Solve with clingo to find the best models of the program
+        # Solve to find the best models of the program
         prog = exported_kb + visual_evidence
         bjt_v = prog.compile()
 

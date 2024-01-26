@@ -21,7 +21,10 @@ public class DialogueAgent : Agent
 
     // Message communication buffer queues
     public readonly Queue<RecordData> incomingMsgBuffer = new();
-    public readonly Queue<(string, Dictionary<(int, int), EntityRef>)> outgoingMsgBuffer = new();
+    public readonly Queue<(string, string, Dictionary<(int, int), EntityRef>)> outgoingMsgBuffer = new();
+
+    // Stores queue of ground-truth mask info requests received from the backend
+    public readonly Queue<string> gtMaskRequests = new();
 
     // Communication side channel to Python backend for requesting decisions
     protected string channelUuid;
@@ -34,15 +37,10 @@ public class DialogueAgent : Agent
     // Behavior type as MLAgent
     private BehaviorType _behaviorType;
 
-    // // Only for use by non-Heuristics agents (i.e. connected to Python backend);
-    // // boolean flag for checking whether the agent has some unresolved goal to
-    // // achieve and thus needs RequestDecision() call
-    // protected bool HasGoalToResolve = false;
-
     // Boolean flag indicating an Utter action is invoked as coroutine and currently
     // running; for preventing multiple invocation of Utter coroutine 
     private bool _uttering;
-    
+
     // Analogous flag for CaptureMask method
     private bool _maskCapturing;
 
@@ -141,7 +139,7 @@ public class DialogueAgent : Agent
         _uttering = true;
 
         // Dequeue all messages to utter
-        var messagesToUtter = new List<(string, Dictionary<(int, int), EntityRef>)>();
+        var messagesToUtter = new List<(string, string, Dictionary<(int, int), EntityRef>)>();
         while (outgoingMsgBuffer.Count > 0)
             messagesToUtter.Add(outgoingMsgBuffer.Dequeue());
         
@@ -155,15 +153,63 @@ public class DialogueAgent : Agent
         // Check if any of the messages has non-empty demonstrative references and
         // thus segmentation masks need to be captured
         var masksNeeded = messagesToUtter
-            .Select(m => m.Item2)
+            .Select(m => m.Item3)
             .Any(rfs => rfs is not null && rfs.Count > 0);
 
         // If needed, synchronously wait until masks are updated and captured
         if (masksNeeded)
+        {
             yield return StartCoroutine(CaptureAnnotations());
+            
+            // If any ground-truth mask requests are pending, handle them here by
+            // sending info to backend
+            if (gtMaskRequests.Count > 0)
+            {
+                var responseString = "GT mask response: ";
+                var responseMasks = new Dictionary<(int, int), EntityRef>();
+                var stringPointer = responseString.Length;
+
+                var partStrings = new List<string>();
+                while (gtMaskRequests.Count > 0)
+                {
+                    var req = gtMaskRequests.Dequeue();
+                    partStrings.Add(req);
+
+                    var range = (stringPointer, stringPointer+req.Length);
+                    
+                    // Find relevant EnvEntity and fetch mask
+                    var foundEnt = FindObjectsByType<EnvEntity>(FindObjectsSortMode.None)
+                        .FirstOrDefault(
+                            ent =>
+                            {
+                                var parent = ent.gameObject.transform.parent;
+                                var hasParent = parent is not null;
+                                return hasParent && req == parent.gameObject.name;
+                            }
+                        );
+
+                    if (foundEnt is null) throw new Exception("Invalid part type");
+
+                    var maskColors = foundEnt.masks[_cameraSensor.Camera.targetDisplay];
+                    var segMapBuffer = EnvEntity.annotationStorage.segMap;
+                    var screenMask = ColorsToMask(segMapBuffer, maskColors);
+                    responseMasks[range] = new EntityRef(
+                        MaskCoordinateSwitch(screenMask, true)
+                    );
+
+                    stringPointer += req.Length;
+                    if (gtMaskRequests.Count > 0) stringPointer += 2;   // Account for ", " delimiter
+                }
+                responseString += string.Join(", ", partStrings.ToArray());
+
+                backendMsgChannel.SendMessageToBackend(
+                    "System", responseString, responseMasks
+                );
+            }
+        }
 
         // Now utter individual messages
-        foreach (var (utterance, demRefs) in messagesToUtter)
+        foreach (var (speaker, utterance, demRefs) in messagesToUtter)
         {
             if (demRefs is not null && demRefs.Count > 0)
             {

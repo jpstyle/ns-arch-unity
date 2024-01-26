@@ -31,8 +31,8 @@ class TestCausalAttribution(unittest.TestCase):
         cls0_score = 0.65; att0_score = 0.9
         scene = {
             "o0": {
-                "pred_classes": np.array([cls0_score]),
-                "pred_attributes": np.array([att0_score])
+                "pred_cls": np.array([cls0_score]),
+                "pred_att": np.array([att0_score])
             }
         }
         ev_prog = kb.visual_evidence_from_scene(scene)
@@ -69,8 +69,8 @@ class TestCausalAttribution(unittest.TestCase):
         cls0_score = 0.9; att0_score = 0.65
         scene = {
             "o0": {
-                "pred_classes": np.array([cls0_score]),
-                "pred_attributes": np.array([att0_score])
+                "pred_cls": np.array([cls0_score]),
+                "pred_att": np.array([att0_score])
             }
         }
         ev_prog = kb.visual_evidence_from_scene(scene)
@@ -107,8 +107,8 @@ class TestCausalAttribution(unittest.TestCase):
         cls0_score = 0.65; att0_score = 0.65
         scene = {
             "o0": {
-                "pred_classes": np.array([cls0_score]),
-                "pred_attributes": np.array([att0_score])
+                "pred_cls": np.array([cls0_score]),
+                "pred_att": np.array([att0_score])
             }
         }
         ev_prog = kb.visual_evidence_from_scene(scene)
@@ -145,8 +145,8 @@ class TestCausalAttribution(unittest.TestCase):
         cls0_score = 0.9; att0_score = 0.9
         scene = {
             "o0": {
-                "pred_classes": np.array([cls0_score]),
-                "pred_attributes": np.array([att0_score])
+                "pred_cls": np.array([cls0_score]),
+                "pred_att": np.array([att0_score])
             }
         }
         ev_prog = kb.visual_evidence_from_scene(scene)

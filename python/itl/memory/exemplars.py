@@ -31,14 +31,8 @@ class Exemplars:
             "cls": defaultdict(set), "att": defaultdict(set), "rel": defaultdict(set)
         }
 
-        # Also keep classifiers trained from current storage of positive/negative exemplars
+        # Keep classifiers trained from current storage of positive/negative exemplars
         self.binary_classifiers = { "cls": {}, "att": {}, "rel": {} }
-
-        # Track numbers of successful concept membership predictions; used for modulating
-        # (epistemic) uncertainty estimated by feature vector density
-        self.success_counts = {
-            "cls": defaultdict(int), "att": defaultdict(int), "rel": defaultdict(int)
-        }
 
     def __repr__(self):
         conc_desc = f"concepts={len(self.exemplars_pos['cls'])}" \
@@ -70,38 +64,62 @@ class Exemplars:
 
     def add_exs(self, f_vecs, pointers):
 
+        # Return value; storage indices of the added feature vectors per concept type
+        added_inds = {}
+
         for conc_type in ["cls", "att", "rel"]:
             if conc_type in pointers:
                 assert conc_type in f_vecs
-                N_C = len(self.storage_vec[conc_type])
+                new_vecs = isinstance(f_vecs[conc_type], np.ndarray)
 
-                # Add to feature vector matrix
-                self.storage_vec[conc_type] = np.concatenate([
-                    self.storage_vec[conc_type].reshape(-1, f_vecs[conc_type].shape[-1]),
-                    f_vecs[conc_type]
-                ])
+                if new_vecs:
+                    # Given raw vectors, most likely not witnessed by the exemplar
+                    # base yet; add to feature vector matrix
+                    N_C = len(self.storage_vec[conc_type])
+                    D = f_vecs[conc_type].shape[-1]
+
+                    self.storage_vec[conc_type] = np.concatenate([
+                        self.storage_vec[conc_type].reshape(-1, D),
+                        f_vecs[conc_type]
+                    ])
+                    added_inds[conc_type] = (N_C, N_C+f_vecs[conc_type].shape[0])
+                else:
+                    # Given pointers to existing vectors in storage; don't add redundant
+                    # entries
+                    pass
 
                 # Positive/negative exemplar tagging by vector row index
                 for conc_ind, (exs_pos, exs_neg) in pointers[conc_type].items():
-                    exs_pos = {fv_id+N_C for fv_id in exs_pos}
-                    exs_neg = {fv_id+N_C for fv_id in exs_neg}
+                    if new_vecs:
+                        exs_pos = {fv_id+N_C for fv_id in exs_pos}
+                        exs_neg = {fv_id+N_C for fv_id in exs_neg}
+                    else:
+                        exs_pos = {f_vecs[conc_type][fv_id] for fv_id in exs_pos}
+                        exs_neg = {f_vecs[conc_type][fv_id] for fv_id in exs_neg}
                     self.exemplars_pos[conc_type][conc_ind] |= exs_pos
                     self.exemplars_neg[conc_type][conc_ind] |= exs_neg
 
-                    # If we have at least one positive & negative exemplars each,
-                    # (re-)train a binary classifier and store it
                     if len(self.exemplars_pos[conc_type][conc_ind]) > 0 and \
                         len(self.exemplars_neg[conc_type][conc_ind]) > 0:
+                        # If we have at least one positive & negative exemplars each,
+                        # (re-)train a binary classifier and store it
+
                         # Prepare training data (X, y) from exemplar storage
                         pos_inds = list(self.exemplars_pos[conc_type][conc_ind])
                         neg_inds = list(self.exemplars_neg[conc_type][conc_ind])
                         X = self.storage_vec[conc_type][pos_inds + neg_inds]
                         y = ([1] * len(pos_inds)) + ([0] * len(neg_inds))
 
-                        # Fit classifier and update
+                        # Induce binary decision boundary by fitting a classifier and
+                        # update
                         # bin_clf = SVC(C=1000, probability=True)
                         bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 10), weights="distance")
                         bin_clf.fit(X, y)
                         self.binary_classifiers[conc_type][conc_ind] = bin_clf
+
                     else:
+                        # Cannot induce any decision boundary with either positive or
+                        # negative examples only
                         self.binary_classifiers[conc_type][conc_ind] = None
+
+        return added_inds

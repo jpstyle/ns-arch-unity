@@ -46,12 +46,13 @@ class StringMsgChannel(SideChannel):
         # Put processed message data into incoming buffer
         self.incoming_message_buffer.append((speaker, utterance, dem_refs))
 
-    def send_string(self, utterance, dem_refs):
+    def send_string(self, speaker, utterance, dem_refs):
         assert isinstance(utterance, str) and isinstance(dem_refs, dict)
 
         msg = OutgoingMessage()
 
         # Utterance content as string
+        msg.write_string(speaker)
         msg.write_string(utterance)
 
         # Write any demonstrative references

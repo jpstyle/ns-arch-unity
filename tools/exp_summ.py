@@ -141,6 +141,7 @@ def main(cfg):
         "semOnly_medHelp_doNotLearn", "semOnly_medHelp_alwaysLearn",
         "semOnly_maxHelpNoexpl_doNotLearn", "semOnly_maxHelpNoexpl_alwaysLearn",
         "semOnly_maxHelpExpl_doNotLearn", "semOnly_maxHelpExpl_alwaysLearn",
+        "semOnly_maxHelpExpl2_doNotLearn", "semOnly_maxHelpExpl2_alwaysLearn",
         # "semNeg_maxHelp_doNotLearn", "semNeg_maxHelp_alwaysLearn",
         # "semNegScal_maxHelp_doNotLearn", "semNegScal_maxHelp_alwaysLearn",
     ]
@@ -148,14 +149,17 @@ def main(cfg):
         # "semOnly_minHelp_doNotLearn": "minHelp_doNotLearn",
         # "semOnly_minHelp_alwaysLearn": "minHelp_alwaysLearn",
 
-        "semOnly_medHelp_doNotLearn": "medHelp_doNotLearn",
-        "semOnly_medHelp_alwaysLearn": "medHelp_alwaysLearn",
+        "semOnly_medHelp_doNotLearn": "Vision",
+        "semOnly_medHelp_alwaysLearn": "Vision",
 
-        "semOnly_maxHelpNoexpl_doNotLearn": "maxHelpNoexpl_doNotLearn",
-        "semOnly_maxHelpNoexpl_alwaysLearn": "maxHelpNoexpl_alwaysLearn",
+        "semOnly_maxHelpNoexpl_doNotLearn": "Vision+Generic",
+        "semOnly_maxHelpNoexpl_alwaysLearn": "Vision+Generic",
 
-        "semOnly_maxHelpExpl_doNotLearn": "maxHelpExpl_doNotLearn",
-        "semOnly_maxHelpExpl_alwaysLearn": "maxHelpExpl_alwaysLearn",
+        "semOnly_maxHelpExpl_doNotLearn": "Vision+Generic+ExplSuff",
+        "semOnly_maxHelpExpl_alwaysLearn": "Vision+Generic+ExplSuff",
+
+        "semOnly_maxHelpExpl2_doNotLearn": "Vision+Generic+ExplSuffCtfl",
+        "semOnly_maxHelpExpl2_alwaysLearn": "Vision+Generic+ExplSuffCtfl",
 
         # "semNeg_maxHelp_doNotLearn": "maxHelp_semNeg_doNotLearn",
         # "semNeg_maxHelp_alwaysLearn": "maxHelp_semNeg_alwaysLearn",
@@ -176,6 +180,9 @@ def main(cfg):
         "semOnly_maxHelpExpl_doNotLearn": "tab:blue",
         "semOnly_maxHelpExpl_alwaysLearn": "tab:blue",
 
+        "semOnly_maxHelpExpl2_doNotLearn": "tab:purple",
+        "semOnly_maxHelpExpl2_alwaysLearn": "tab:purple",
+
         # "semNeg_maxHelp_doNotLearn": "tab:blue",
         # "semNeg_maxHelp_alwaysLearn": "tab:blue",
 
@@ -195,6 +202,9 @@ def main(cfg):
         "semOnly_maxHelpExpl_doNotLearn": "-",
         "semOnly_maxHelpExpl_alwaysLearn": "-",
 
+        "semOnly_maxHelpExpl2_doNotLearn": "-",
+        "semOnly_maxHelpExpl2_alwaysLearn": "-",
+
         # "semNeg_maxHelp_doNotLearn": "--",
         # "semNeg_maxHelp_alwaysLearn": "-",
 
@@ -208,7 +218,6 @@ def main(cfg):
         ymax = 0
 
         for (strat_fb, strat_gn, strat_as), data in results_cumulReg.items():
-            if strat_fb == "minHelp": continue
             stats = [
                 (i, np.mean(rgs), 1.96 * np.std(rgs)/np.sqrt(len(rgs)))
                 for i, rgs in data.items()
