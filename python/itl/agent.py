@@ -76,7 +76,7 @@ class ITLAgent:
         the visual scene input is new.
         """
         self._vis_inp(usr_in=v_usr_in, new_scene=new_scene)
-        self._lang_inp(usr_in=l_usr_in)
+        self._lang_inp(usr_in=l_usr_in, pointing=pointing)
         self._update_belief(pointing=pointing)
         act_out = self._act()
 
@@ -182,7 +182,7 @@ class ITLAgent:
         if self.vision.new_input_provided:
             self.vision.last_input = usr_in
 
-    def _lang_inp(self, usr_in):
+    def _lang_inp(self, usr_in, pointing):
         """ Handle provided language input (from user) """
         if usr_in is None:
             usr_in = []
@@ -190,10 +190,34 @@ class ITLAgent:
             assert isinstance(usr_in, str)
             usr_in = [usr_in]
 
+        assert len(usr_in) == len(pointing)
+
         if len(usr_in) == 0:
             self.lang.new_input_provided = False
         else:
             self.lang.new_input_provided = True
+
+            # Patchwork handling of connectives, acknowledgements, interjections, etc.
+            # that don't really need principled treatment and can be shaved off without
+            # consequences. Treat these properly later if they ever become important...
+            usr_in_new = []
+            for utt_string, dem_ref in zip(usr_in, pointing):
+                # 'Sanitization' process
+                if utt_string.startswith("But ") or utt_string.startswith("And "):
+                    pf_len = 4
+                    utt_string = utt_string[pf_len:].capitalize()
+                    dem_ref = { (k[0]-pf_len, k[1]-pf_len): v for k, v in dem_ref.items() }
+                if utt_string.startswith("It's true "):
+                    pf_len = 10
+                    utt_string = utt_string[pf_len:].capitalize()
+                    dem_ref = { (k[0]-pf_len, k[1]-pf_len): v for k, v in dem_ref.items() }
+                if utt_string.endswith(", too."):
+                    sf_len = 5
+                    utt_string = utt_string[:-sf_len-1] + "."
+
+                # Add final processed utterance string
+                usr_in_new.append(utt_string)
+            usr_in = usr_in_new
 
             parsed_input = None
             try:
@@ -218,8 +242,7 @@ class ITLAgent:
         vis_ui_on = self.vis_ui_on
 
         # Previous dialogue record and visual context from currently stored values
-        prev_dialogue_state = self.lang.dialogue.export_as_dict()
-        prev_translated = self.symbolic.translate_dialogue_content(prev_dialogue_state)
+        prev_translated = self.symbolic.translate_dialogue_content(self.lang.dialogue)
         prev_scene = self.vision.scene
         prev_pr_prog = self.symbolic.concl_vis[1][1] if self.symbolic.concl_vis else None
         prev_kb = self.kb_snap
@@ -308,8 +331,6 @@ class ITLAgent:
             ##       Sensemaking via synthesis of perception+knowledge       ##
             ###################################################################
 
-            updated_dialogue_state = self.lang.dialogue.export_as_dict()
-
             if self.vision.new_input_provided or ents_updated or xb_updated or kb_updated:
                 # Sensemaking from vision input only
                 exported_kb = self.lt_mem.kb.export_reasoning_program()
@@ -320,12 +341,12 @@ class ITLAgent:
             if self.lang.new_input_provided:
                 # Reference & word sense resolution to connect vision & discourse
                 self.symbolic.resolve_symbol_semantics(
-                    updated_dialogue_state, self.lt_mem.lexicon
+                    self.lang.dialogue, self.lt_mem.lexicon
                 )
 
                 # if self.vision.scene is not None:
                 #     # Sensemaking from vision & language input
-                #     self.symbolic.sensemake_vis_lang(updated_dialogue_state)
+                #     self.symbolic.sensemake_vis_lang(self.lang.dialogue)
                 #     self.lang.dialogue.sensemaking_vl_snaps[ti_last] = \
                 #         self.symbolic.concl_vis_lang
 
@@ -361,7 +382,7 @@ class ITLAgent:
 
             # Translate dialogue record into processable format based on the result
             # of symbolic.resolve_symbol_semantics
-            translated = self.symbolic.translate_dialogue_content(updated_dialogue_state)
+            translated = self.symbolic.translate_dialogue_content(self.lang.dialogue)
 
             # Process translated dialogue record to do the following:
             #   - Identify recognition mismatch btw. user provided vs. agent
@@ -374,7 +395,7 @@ class ITLAgent:
                     if rule is None: continue
 
                     # Disregard clause if it is not domain-describing or is in irrealis mood
-                    clause_info = updated_dialogue_state["clause_info"][f"t{ti}c{ci}"]
+                    clause_info = self.lang.dialogue.clause_info[f"t{ti}c{ci}"]
                     if not clause_info["domain_describing"]:
                         continue
                     if clause_info["irrealis"]:
@@ -417,7 +438,7 @@ class ITLAgent:
 
             # Handle neologisms
             xb_updated |= self.comp_actions.handle_neologism(
-                novel_concepts, updated_dialogue_state
+                novel_concepts, self.lang.dialogue
             )
 
             # Terminate the loop when 'equilibrium' is reached

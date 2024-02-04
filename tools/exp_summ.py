@@ -273,7 +273,7 @@ def main(cfg):
             # Plot mean curve
             ax.plot(
                 [num_exs for num_exs, _, _ in stats],
-                [mmAP for _, mmAP, _ in stats],
+                [acc for _, acc, _ in stats],
                 label=f"{strat_gn}_{strat_fb}_{strat_as}",
                 color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
                 linestyle=config_lineStyles[f"{strat_gn}_{strat_fb}_{strat_as}"]
@@ -285,15 +285,16 @@ def main(cfg):
             # Plot confidence intervals
             ax.fill_between(
                 [0]+[num_exs for num_exs, _, _ in stats],
-                [0]+[mmAP-cl for _, mmAP, cl in stats],
-                [0]+[mmAP+cl for _, mmAP, cl in stats],
+                [0]+[acc-cl for _, acc, cl in stats],
+                [0]+[acc+cl for _, acc, cl in stats],
                 color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
             )
 
         # Plot curve
         ax.set_xlabel("# training examples")
-        ax.set_ylabel("mAP score")
+        ax.set_ylabel("mean accuracy")
         ax.set_xlim(0, stats[-1][0])
+        ax.set_xticks([25, 50, 75, 100])
         ax.set_ylim(0, 1)
         ax.grid()
 
@@ -344,7 +345,7 @@ def main(cfg):
                     # Plot mean curve
                     ax.plot(
                         [num_exs for num_exs, _, _ in stats],
-                        [mmAP for _, mmAP, _ in stats],
+                        [acc for _, acc, _ in stats],
                         label=f"{strat_gn}_{strat_fb}_{strat_as}",
                         color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
                         linestyle=config_lineStyles[f"{strat_gn}_{strat_fb}_{strat_as}"]
@@ -356,8 +357,8 @@ def main(cfg):
                     # Plot confidence intervals
                     ax.fill_between(
                         [0]+[num_exs for num_exs, _, _ in stats],
-                        [0]+[mmAP-cl for _, mmAP, cl in stats],
-                        [0]+[mmAP+cl for _, mmAP, cl in stats],
+                        [0]+[acc-cl for _, acc, cl in stats],
+                        [0]+[acc+cl for _, acc, cl in stats],
                         color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
                     )
 

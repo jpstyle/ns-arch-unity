@@ -76,13 +76,13 @@ class SymbolicReasonerModule:
 
         # Environmental referents
         occurring_atoms = set()
-        for ent in dialogue_state["referents"]["env"]:
+        for ent in dialogue_state.referents["env"]:
             if ent not in occurring_atoms:
                 sm_prog.add_absolute_rule(Rule(head=Literal("env", wrap_args(ent))))
                 occurring_atoms.add(ent)
 
         # Discourse referents
-        for rf, v in dialogue_state["referents"]["dis"].items():
+        for rf, v in dialogue_state.referents["dis"].items():
             # No need to assign if universally quantified or wh-quantified
             if v["univ_quantified"] or v["wh_quantified"]: continue
             # No need to assign if not an entity referent
@@ -93,7 +93,7 @@ class SymbolicReasonerModule:
                 sm_prog.add_absolute_rule(Rule(head=Literal("referential", wrap_args(rf))))
 
         # Hard assignments by pointing, etc.
-        for ref, env in dialogue_state["assignment_hard"].items():
+        for ref, env in dialogue_state.assignment_hard.items():
             sm_prog.add_absolute_rule(
                 Rule(body=[Literal("assign", [(ref, False), (env, False)], naf=True)])
             )
@@ -135,7 +135,7 @@ class SymbolicReasonerModule:
 
         # Understood dialogue record contents
         occurring_preds = set()
-        for ti, (speaker, turn_clauses) in enumerate(dialogue_state["record"]):
+        for ti, (speaker, turn_clauses) in enumerate(dialogue_state.record):
             # Nothing particular to do with agent's own utterances
             if speaker == "A": continue
 
@@ -175,7 +175,7 @@ class SymbolicReasonerModule:
                         ref for ref in occurring_ent_refs if ent.startswith("x")
                     }
 
-                    if all(arg in dialogue_state["assignment_hard"] for arg in occurring_ent_refs):
+                    if all(arg in dialogue_state.assignment_hard for arg in occurring_ent_refs):
                         # Below not required if all occurring args are hard-assigned to some entity
                         continue
 
@@ -402,7 +402,7 @@ class SymbolicReasonerModule:
             else [encode_lits(nc, ti, ci, rqca, inds+(i,)) for i, nc in enumerate(cnjt)]
 
         record_translated = []
-        for ti, (speaker, turn_clauses) in enumerate(dialogue_state["record"]):
+        for ti, (speaker, turn_clauses) in enumerate(dialogue_state.record):
             turn_translated = []
             for ci, ((rule, question), raw) in enumerate(turn_clauses):
                 # If the utterance contains an unresolved neologism, give up translation
@@ -493,7 +493,7 @@ class SymbolicReasonerModule:
 
             for ci, ((rule, _), _) in enumerate(turn_clauses):
                 # Disregard clause if it is not domain-describing or is in irrealis mood
-                clause_info = dialogue_state["clause_info"][f"t{ti}c{ci}"]
+                clause_info = dialogue_state.clause_info[f"t{ti}c{ci}"]
                 if not clause_info["domain_describing"]: continue
                 if clause_info["irrealis"]: continue
 
@@ -540,5 +540,5 @@ class SymbolicReasonerModule:
         return query(bjt, q_vars, event, restrictors or {})
 
     @staticmethod
-    def attribute(bjt, target_event, evidence, threshold=0.0):
-        return attribute(bjt, target_event, evidence, threshold)
+    def attribute(bjt, bjt_undir, target_event, evidence, competing_evts, vetos=None):
+        return attribute(bjt, bjt_undir, target_event, evidence, competing_evts, vetos)

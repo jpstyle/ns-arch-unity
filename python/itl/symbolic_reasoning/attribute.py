@@ -1,5 +1,4 @@
 """ Explanation query to BJT factored out """
-from copy import deepcopy
 from itertools import product
 
 from .query import query
@@ -13,7 +12,7 @@ from ..symbolic_reasoning.utils import bjt_extract_likelihood, bjt_replace_likel
 # that is 'reasonably' weaker that the corresponding literal actually being true.
 LOW = 0.15
 
-def attribute(bjt, target_event, evidence_atoms, competing_evts):
+def attribute(bjt, bjt_undir, target_event, evidence_atoms, competing_evts, vetos):
     """
     Query a BJT compiled from LP^MLN program to attribute why the specified target
     event holds, in terms of specified evidence atoms. The provided BJT might or
@@ -34,10 +33,15 @@ def attribute(bjt, target_event, evidence_atoms, competing_evts):
     expected values for `competing_evts` is a collection of event atoms such that
     their probabilities are considered as criteria against which the target event
     probability will be compared.
+
+    `vetos` (optional) lists literals that are deemed not useful as explanations,
+    disqualifying them as part of valid sufficient explanations (hence omitted).
     """
     if len(evidence_atoms) == 0:
-        # Can return empty in case we don't have any potential explanans atoms
-        return []
+        # Can return None in case we don't have any potential explanans atoms
+        return
+
+    if vetos is None: vetos = []
 
     # 'Explanation lattice' as per Koopman and Renooij. Implemented as a dict, where
     # each key corresponds to a subset of evidence and its corresponding value is
@@ -70,14 +74,14 @@ def attribute(bjt, target_event, evidence_atoms, competing_evts):
             alt_likelihoods.append((evd_atom, [LOW]))
 
     if len(alt_likelihoods) == 0:
-        # Can return empty in case we don't have any alternative likelihoods worth
+        # Can return None in case we don't have any alternative likelihoods worth
         # considering
-        return []
+        return
 
     # Initialize lattice with the top element, namely the full evidence. Index
     # each lattice node by (frozen)set of indices of evidence atoms whose values
     # differ from the original ones.
-    expl_lattice = { frozenset(): ("true", { (): bjt }) }
+    expl_lattice = { frozenset(): "true" }
 
     # Initialize breadth-first search queue with the children of the top element.
     search_queue = list(_lattice_children(frozenset(), len(alt_likelihoods)))
@@ -91,16 +95,21 @@ def attribute(bjt, target_event, evidence_atoms, competing_evts):
         ev_atoms_ordered = sorted(node)     # Sorted list for indexing
 
         # New lattice element entry
-        expl_lattice[node] = ("oth", {})
+        expl_lattice[node] = "oth"
 
         # List of parent lattice nodes
         parents = list(_lattice_parents(node))
 
         # No need to process further if any of the parents have non-true label
-        if any(expl_lattice[pn][0] != "true" for pn in parents):
+        if any(expl_lattice[pn] != "true" for pn in parents):
             continue
 
         label_true = True
+
+        backups = {
+            alt_likelihoods[ei][0]: bjt_extract_likelihood(bjt, alt_likelihoods[ei][0])
+            for ei in ev_atoms_ordered
+        }           # For rolling back to original values
 
         # Each possible combination of values correspond to one counterfactual case,
         # compute probabilities and labels for each
@@ -113,44 +122,24 @@ def attribute(bjt, target_event, evidence_atoms, competing_evts):
             # likelihood values and marking and all nodes with 'outdated' indicators
             # (which are needed for another round of incremental belief propagation)
 
-            # Find parent with matching counterfactual value signature for shared
-            # evidence atoms
-            alt_vals_for_shared = [
-                tuple(
-                    alt_val for ei, alt_val in zip(ev_atoms_ordered, cf_case)
-                    if ei in pn
-                )
-                for pn in parents
-            ]
-            parent_selected, bjt_parent = [
-                (pn, expl_lattice[pn][1][alt_vals])
-                for pn, alt_vals in zip(parents, alt_vals_for_shared)
-            ][0]
-            bjt_new = deepcopy(bjt_parent)
-
-            # Modify the copied BJT for incremental reasoning
+            # Modify the BJT for incremental reasoning
             replacements = {
                 alt_likelihoods[ei][0]: alt_val
                 for ei, alt_val in zip(ev_atoms_ordered, cf_case)
-                if ei not in parent_selected
-                        # Those in parent_selected are already processed
             }
-            bjt_replace_likelihood(bjt_new, replacements)
-
-            # Record the updated BJT to lattice along with the counterfactual case
-            cf_case_subset = tuple(cf_case[ei] for ei in ev_atoms_ordered)
-            expl_lattice[node][1][cf_case_subset] = bjt_new
+            bjt_replace_likelihood(bjt, bjt_undir, replacements)
 
             # Query the updated BJT for the event probabilities, indirectly invoking
             # incremental belief propagation as needed
             max_prob_evt = (None, float("-inf"))
             for evt in [target_event] + competing_evts:
-                _, prob_scores = query(bjt_new, None, (evt, None), {})
+                _, prob_scores = query(bjt, None, (evt, None), {})
 
                 # Update max probability event if applicable
                 evt_prob = [prob for prob, is_evt in prob_scores[()].values() if is_evt][0]
                 if evt_prob > max_prob_evt[1]:
                     max_prob_evt = (evt, evt_prob)
+            bjt_replace_likelihood(bjt, bjt_undir, backups)
 
             assert max_prob_evt[0] is not None
             if max_prob_evt[0] != target_event:
@@ -162,22 +151,53 @@ def attribute(bjt, target_event, evidence_atoms, competing_evts):
         if label_true:
             # Label value true, add to potential sufficient explanation list
             # and enqueue children
-            expl_lattice[node] = ("true", expl_lattice[node][1])
+            expl_lattice[node] = "true"
             potential_suff_expls.add(node)
             for child in _lattice_children(node, len(alt_likelihoods)):
                 search_queue.append(child)
 
-    # Search terminated: find and return sufficient explanations
-    suff_expls = [
-        {alt_likelihoods[ei][0] for ei in set(range(len(alt_likelihoods)))-node}
-        for node in potential_suff_expls
-        if all(
-            expl_lattice[chd][0] != "true"
-            for chd in _lattice_children(node, len(alt_likelihoods))
-        )
-    ]
+        # At the end of each while loop, test every potential explanation to see if
+        # any of them qualify as a valid sufficient explanation. As soon as one is
+        # found, return it, making this a greedy search.
+        potential_suff_expls_new = set()
+        for expl in potential_suff_expls:
+            # Check if any of its children have 'true' label
+            all_non_true = True; cannot_judge = False
 
-    return suff_expls
+            for chd in _lattice_children(expl, len(alt_likelihoods)):
+                if chd not in expl_lattice:
+                    # Doesn't have info in lattice yet, cannot judge
+                    cannot_judge = True
+                    break
+
+                if expl_lattice[chd] == "true":
+                    # Has a child with 'true' label, disqualify as potential explanation
+                    all_non_true = False
+                    break
+
+            if cannot_judge:
+                # Defer judgement on this one and add to the (new) set, moving on to next
+                potential_suff_expls_new.add(expl)
+                continue
+
+            if all_non_true:
+                # Found a qualifying candidate, see if non-empty after filtering out
+                # the vetoed literals
+                expl = {
+                    alt_likelihoods[ei][0]
+                    for ei in set(range(len(alt_likelihoods)))-expl
+                }
+                expl = {lit for lit in expl if lit not in vetos}
+
+                # Return if expl is nonempty after filtering out vetoed literals
+                if len(expl) > 0:
+                    return expl
+
+        # Switcheroo
+        potential_suff_expls = potential_suff_expls_new
+
+    # If reached here, no valid sufficient explanation found; return None
+    return
 
 
 # Helper methods for obtaining parents/children of a lattice element (given the

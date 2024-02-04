@@ -17,6 +17,8 @@ from python.itl.vision.utils import mask_iou
 singularize = inflect.engine().singular_noun
 pluralize = inflect.engine().plural
 
+MATCH_THRES = 0.8
+
 class SimulatedTeacher:
     
     def __init__(self, cfg):
@@ -34,11 +36,11 @@ class SimulatedTeacher:
         # Whether the agent is running in test mode
         self.agent_test_mode = cfg.agent.test_mode
 
-        # Load any domain knowledge stored as yamls in assets dir
+        # Load appropriate domain knowledge stored as yamls in assets dir
         self.domain_knowledge = {}
-        for yml_path in glob.glob(f"{cfg.paths.assets_dir}/domain_knowledge/*.yaml"):
-            with open(yml_path) as yml_f:
-                self.domain_knowledge.update(yaml.safe_load(yml_f))
+        yml_path = f"{cfg.paths.assets_dir}/domain_knowledge/{cfg.exp.concept_set}.yaml"
+        with open(yml_path) as yml_f:
+            self.domain_knowledge.update(yaml.safe_load(yml_f))
         # Convert lists to sets for order invariance
         for info in self.domain_knowledge.values():
             if info["part_attributes"] is None:
@@ -222,19 +224,19 @@ class SimulatedTeacher:
                 # answer vs. ground truth
                 assert self.strat_feedback.startswith("maxHelpExpl")
 
-                conc1 = string_name
-                conc2 = self.current_episode_record[string_name]
+                conc_gt = string_name
+                conc_ans = self.current_episode_record[string_name]
                 conc_diffs = _compute_concept_differences(
-                    self.domain_knowledge, conc1, conc2
+                    self.domain_knowledge, conc_gt, conc_ans
                 )
                 response += _properties_to_nl(conc_diffs)
 
-            elif utt.startswith("Because"):
+            elif utt.startswith("Because I thought "):
                 # Agent provided explanation for its previous answer; expecting the agent's
                 # recognition of truck parts (or failure thereof), which it deemed relevant
                 # to its reasoning
-                reasons = utt.strip("Because ").strip(".").split(", and ")
-                reasons = reasons[0].split(",") + reasons[1:]
+                reasons = re.findall(r"^Because I thought (.*).$", utt)[0].split(", and ")
+                reasons = reasons[0].split(", ") + reasons[1:]
                 reasons = [_parse_nl_reason(r) for r in reasons]
 
                 dem_refs = sorted(dem_refs.items())
@@ -242,26 +244,46 @@ class SimulatedTeacher:
                 # Prepare concept differences, needed for checking whether the agent's
                 # knowledge (indirectly revealed through its explanations) about the
                 # concepts is incomplete
-                conc1 = string_name
-                conc2 = self.current_episode_record[string_name]
+                conc_gt = string_name
+                conc_ans = self.current_episode_record[string_name]
                 conc_diffs = _compute_concept_differences(
-                    self.domain_knowledge, conc1, conc2
+                    self.domain_knowledge, conc_gt, conc_ans
                 )
 
-                # Part types that actually play role for distinguishing conc1 vs. conc2
-                relevant_part_types = {p for _, p in conc_diffs["parts"]}
+                # Part domain knowledge info dicts for ground truth and agent answer
+                gt_parts_info = self.domain_knowledge[conc_gt]["parts"]
+                ans_parts_info = self.domain_knowledge[conc_ans]["parts"]
 
-                knowledge_incomplete = False
+                # Part types that actually play role for distinguishing conc_gt vs. conc_ans
+                distinguishing_part_types = {p for _, p in conc_diffs["parts"]}
+
+                diff_knowledge_incomplete = False
                 for (part, reason_type), (_, reference) in zip(reasons, dem_refs):
                     # For each part statement given as explanation, provide feedback
                     # on whether the agent's judgement was correct (will be most likely
                     # wrong... I suppose for now)
 
-                    if part not in relevant_part_types:
+                    # Variable storing currently active pending connective
+                    pending_connective = None
+
+                    # Checking if mentioned part subtype is a property of the ground
+                    # truth concept & the agent answer concept
+                    part_type = self.taxonomy_knowledge[part]
+                    part_gt_prop = part_type in gt_parts_info and \
+                        gt_parts_info[part_type] == part
+                    part_ans_prop = part_type in ans_parts_info and \
+                        ans_parts_info[part_type] == part
+
+                    # Current experiment design is such that all parts of the ground
+                    # truth concept have their masks visible in the scene, not occluded
+                    # or anything
+                    assert part_type in self.current_gt_masks
+
+                    if part not in distinguishing_part_types:
                         # The part type cited in the reason does not actually bear any
                         # relevance as to distinguishing the agent answer vs. ground
                         # truth concepts. 
-                        knowledge_incomplete = True
+                        diff_knowledge_incomplete = True
 
                     if isinstance(reference, str):
                         # Reference by Unity GameObject string name; test by the object
@@ -275,60 +297,124 @@ class SimulatedTeacher:
                         # Reference by raw mask bitmap
                         assert isinstance(reference, np.ndarray)
 
-                        if reason_type == "positive":
-                            # The referenced entity is a 'bogus' that doesn't correspond
-                            # to any real GameObject, always incorrect
-                            response.append({
-                                "utterance": f"This is not a {part}.",
-                                "pointing": { (0, 4): reference.reshape(-1).tolist() }
-                            })
+                        if reason_type == "existence":
+                            # Agent made an explicit part claim as sufficient explanation,
+                            # which may or may not be true
 
-                        elif reason_type == "uncertain":
-                            # The referenced entity may or may not be an instance of the
-                            # part type currently suspected by the agent, compute the
-                            # mask IoU against the ground truth to check
-                            part_type = self.taxonomy_knowledge[part]
-                            gt_mask = self.current_gt_masks[part_type]
+                            # Sanity check: agent must be believing the mentioned part
+                            # is a (distinguishing) property of the concept it provided
+                            # as answer
+                            assert part_ans_prop
 
-                            match_score = mask_iou([gt_mask], [reference])[0][0]
-                            if match_score > 0.8:
-                                # Sufficient overlap, match good enough; endorse the
-                                # proposed mask reference as correct
-                                response.append({
-                                    "utterance": f"This is a {part}.",
-                                    "pointing": { (0, 4): reference.reshape(-1).tolist() }
-                                })
+                            if part_gt_prop:
+                                # Mentioned part actually exists somewhere, obtain IoU
+                                gt_mask = self.current_gt_masks[part_type]
+                                match_score = mask_iou([gt_mask], [reference])[0][0]
                             else:
-                                # Not enough overlap, bad match; reject the suspected
-                                # part reference and provide correct mask
+                                # Mentioned part absent, consider match score zero
+                                match_score = 0
+
+                            if match_score > MATCH_THRES:
+                                # The part claim itself is true
+                                response.append({
+                                    "utterance": f"It's true this is a {part}.",
+                                    "pointing": { (10, 14): reference.reshape(-1).tolist() }
+                                })
+                                pending_connective = "but"
+                            else:
+                                # The part claim is false, need correction
                                 response.append({
                                     "utterance": f"This is not a {part}.",
                                     "pointing": { (0, 4): reference.reshape(-1).tolist() }
                                 })
+                                pending_connective = "and"
+
+                            # If the mentioned part is also a property of the ground truth,
+                            # and thus doesn't serve as distinguishing property, need to
+                            # correct that
+                            if part_gt_prop:
+                                conc_gt_pl = pluralize(conc_gt).capitalize()
+                                part_pl = pluralize(part)
+                                response.append(_prepend_with_connective({
+                                    "utterance": f"{conc_gt_pl} have {part_pl}, too.",
+                                    "pointing": {}
+                                }, pending_connective))
+                                pending_connective = None
+
+                        elif reason_type == "uncertain" or reason_type == "absence":
+                            # Agent made a counterfactual excuse
+
+                            # Sanity check: agent must be believing the mentioned part
+                            # is a (distinguishing) property of the ground truth concept
+                            assert part_gt_prop
+
+                            if reason_type == "uncertain":
+                                # Agent exhibited uncertainty on part identity as counterfactual
+                                # excuse; the referenced entity may or may not be an instance of
+                                # the part subtype
+
+                                # Mentioned part always exists, obtain IoU
+                                gt_mask = self.current_gt_masks[part_type]
+                                match_score = mask_iou([gt_mask], [reference])[0][0]
+
+                                if match_score > MATCH_THRES:
+                                    # Sufficient overlap, match good enough; endorse the
+                                    # proposed mask reference as correct
+                                    response.append({
+                                        "utterance": f"This is a {part}.",
+                                        "pointing": { (0, 4): reference.reshape(-1).tolist() }
+                                    })
+                                    pending_connective = "but"
+                                else:
+                                    # Not enough overlap, bad match; reject the suspected
+                                    # part reference and provide correct mask
+                                    response.append({
+                                        "utterance": f"This is not a {part}.",
+                                        "pointing": { (0, 4): reference.reshape(-1).tolist() }
+                                    })
+                                    response.append({
+                                        "utterance": f"This is a {part}.",
+                                        "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
+                                    })
+                                    pending_connective = "and"
+
+                            elif reason_type == "absence":
+                                # Agent made an explicit absence claim as counterfactual excuse,
+                                # which may or may not be true
+                                gt_mask = self.current_gt_masks[part_type]
+
+                                # The absence claim is false; point to the ground-truth
                                 response.append({
                                     "utterance": f"This is a {part}.",
                                     "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
                                 })
+                                pending_connective = "and"
 
-                        elif reason_type == "nonexistent":
-                            # Agent revealed it wasn't able to find any existence of
-                            # the said part type, point to the ground-truth
-                            part_type = self.taxonomy_knowledge[part]
-                            gt_mask = self.current_gt_masks[part_type]
-
-                            response.append({
-                                "utterance": f"This is a {part}.",
-                                "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
-                            })
+                            # If the mentioned part is also a property of the incorrect agent
+                            # answer, and thus doesn't serve as distinguishing property, need
+                            # to correct that
+                            if part_ans_prop:
+                                conc_ans_pl = pluralize(conc_ans).capitalize()
+                                part_pl = pluralize(part)
+                                response.append(_prepend_with_connective({
+                                    "utterance": f"{conc_ans_pl} have {part_pl}, too.",
+                                    "pointing": {}
+                                }, pending_connective))
+                                pending_connective = None
 
                         else:
                             # Don't know how to handle other reason types
                             raise NotImplementedError
 
                 # If imperfect agent knowledge is revealed, provide appropriate
-                # feedback regarding generic differences between conc1 vs. conc2
-                if knowledge_incomplete:
-                    response += _properties_to_nl(conc_diffs)
+                # feedback regarding generic differences between conc_gt vs. conc_ans
+                if diff_knowledge_incomplete:
+                    conc_diff_feedback = [
+                        _prepend_with_connective(fb, pending_connective) if i==0 else fb
+                        for i, fb in enumerate(_properties_to_nl(conc_diffs))
+                    ]
+                    response += conc_diff_feedback
+                    pending_connective = None
 
             elif utt.startswith("How are") and utt.endswith("different?"):
                 # Agent requested generic differences between two similar concepts
@@ -434,10 +520,10 @@ def _parse_nl_reason(nl_string):
     # Case 1: Agent made 'positive statement' that the mask refers to a part type
     re_test = re.findall(r"^this is a (.*)$", nl_string)
     if len(re_test) > 0:
-        return (re_test[0], "positive")
+        return (re_test[0], "existence")
 
     # Case 2: Agent is not sure if the provided mask refers to a part type
-    re_test = re.findall(r"^I wasn't sure if this is a (.*)$", nl_string)
+    re_test = re.findall(r"^this might not be a (.*)$", nl_string)
     if len(re_test) > 0:
         return (re_test[0], "uncertain")
 
@@ -445,7 +531,7 @@ def _parse_nl_reason(nl_string):
     # of a part type
     re_test = re.findall(r"^this doesn't have a (.*)$", nl_string)
     if len(re_test) > 0:
-        return (re_test[0], "nonexistent")
+        return (re_test[0], "absence")
 
 
 def _properties_to_nl(conc_props):
@@ -491,3 +577,18 @@ def _properties_to_nl(conc_props):
         raise NotImplementedError       # Remove after sanity check
 
     return feedback
+
+
+def _prepend_with_connective(response, connective):
+    """
+    Helper method factored out for prepending a connective to an agent utterance
+    (if and only if connective is not None).
+    """
+    if connective is None: return response
+
+    utterance = response["utterance"]
+    response_new = {
+        "utterance": f"{connective.capitalize()} {utterance[0].lower() + utterance[1:]}",
+        "pointing": response["pointing"]
+    }
+    return response_new

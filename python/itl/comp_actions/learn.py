@@ -701,7 +701,7 @@ def handle_neologism(agent, novel_concepts, dialogue_state):
 
             ti = int(tok[0].strip("t"))
             ci = int(tok[1].strip("c"))
-            rule_cons, rule_ante = dialogue_state["record"][ti][1][ci][0][0]
+            rule_cons, rule_ante = dialogue_state.record[ti][1][ci][0][0]
 
             if len(rule_ante) == 0:
                 # Labelled exemplar provided; add new concept exemplars to

@@ -42,8 +42,7 @@ def attempt_answer_Q(agent, utt_pointer):
     If the agent can come up with an answer to the question, right or wrong,
     schedule to actually answer it by adding a new agenda item.
     """
-    dialogue_state = agent.lang.dialogue.export_as_dict()
-    translated = agent.symbolic.translate_dialogue_content(dialogue_state)
+    translated = agent.symbolic.translate_dialogue_content(agent.lang.dialogue)
 
     ti, ci = utt_pointer
     (_, question), _ = translated[ti][1][ci]
@@ -67,15 +66,14 @@ def prepare_answer_Q(agent, utt_pointer):
     agent.lang.dialogue.unanswered_Qs.remove(utt_pointer)
 
     ti, ci = utt_pointer
-    dialogue_state = agent.lang.dialogue.export_as_dict()
-    translated = agent.symbolic.translate_dialogue_content(dialogue_state)
+    translated = agent.symbolic.translate_dialogue_content(agent.lang.dialogue)
 
-    if dialogue_state["clause_info"][f"t{ti}c{ci}"]["domain_describing"]:
-        _answer_domain_Q(agent, utt_pointer, dialogue_state, translated)
+    if agent.lang.dialogue.clause_info[f"t{ti}c{ci}"]["domain_describing"]:
+        _answer_domain_Q(agent, utt_pointer, translated)
     else:
-        _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated)
+        _answer_nondomain_Q(agent, utt_pointer, translated)
 
-def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
+def _answer_domain_Q(agent, utt_pointer, translated):
     """
     Helper method factored out for computation of answers to an in-domain question;
     i.e. having to do with the current states of affairs of the task domain.
@@ -152,8 +150,8 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
             agent.symbolic.sensemake_vis(exported_kb, visual_evidence)
             agent.lang.dialogue.sensemaking_v_snaps[ti_new] = agent.symbolic.concl_vis
 
-            agent.symbolic.resolve_symbol_semantics(dialogue_state, agent.lt_mem.lexicon)
-            # agent.symbolic.sensemake_vis_lang(dialogue_state)
+            agent.symbolic.resolve_symbol_semantics(agent.lang.dialogue, agent.lt_mem.lexicon)
+            # agent.symbolic.sensemake_vis_lang(agent.lang.dialogue)
             # agent.lang.dialogue.sensemaking_vl_snaps[ti_new] = agent.symbolic.concl_vis_lang
 
             bjt_v, _ = agent.symbolic.concl_vis
@@ -230,14 +228,14 @@ def _answer_domain_Q(agent, utt_pointer, dialogue_state, translated):
                 raise NotImplementedError
 
     # Fetch segmentation mask for the demonstratively referenced entity
-    dem_mask = dialogue_state["referents"]["env"][pred_var_to_ent_ref[qv]]["mask"]
+    dem_mask = agent.lang.dialogue.referents["env"][pred_var_to_ent_ref[qv]]["mask"]
 
     # Push the translated answer to buffer of utterances to generate
     agent.lang.dialogue.to_generate.append(
         ((answer_logical_form, None), answer_nl, { (0, 4): dem_mask })
     )
 
-def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
+def _answer_nondomain_Q(agent, utt_pointer, translated):
     """
     Helper method factored out for computation of answers to a question that needs
     procedures different from those for in-domain questions for obtaining. Currently
@@ -315,10 +313,10 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
         # utterance have been made; that is, shouldn't use BJT compiled *after*
         # agent has uttered the explanandum statement
         latest_reasoning_ind = max(
-            snap_ti for snap_ti in dialogue_state["sensemaking_v_snaps"]
+            snap_ti for snap_ti in agent.lang.dialogue.sensemaking_v_snaps
             if snap_ti < ti
         )
-        bjt_v, (kb_prog, _) = dialogue_state["sensemaking_v_snaps"][latest_reasoning_ind]
+        bjt_v, (kb_prog, _) = agent.lang.dialogue.sensemaking_v_snaps[latest_reasoning_ind]
         kb_prog_analyzed = KnowledgeBase.analyze_exported_reasoning_program(kb_prog)
         scene_ents = {
             a[0] for atm in bjt_v.graph["atoms_map"]
@@ -342,8 +340,8 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
         prev_statements_U = [
             stm for (ti, ci), (spk, stm) in prev_statements
             if spk=="U" and \
-                dialogue_state["clause_info"][f"t{ti}c{ci}"]["domain_describing"] and \
-                not dialogue_state["clause_info"][f"t{ti}c{ci}"]["irrealis"]
+                agent.lang.dialogue.clause_info[f"t{ti}c{ci}"]["domain_describing"] and \
+                not agent.lang.dialogue.clause_info[f"t{ti}c{ci}"]["irrealis"]
         ]
         expected_gt = prev_statements_U[-1][0][0]
 
@@ -398,24 +396,21 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                 (atm,) for atm in possible_answers if atm.name!=tgt_lit.name
             ]
 
-            # Obtain all sufficient explanations by causal attribution
-            suff_expls = agent.symbolic.attribute(
-                bjt_v, tgt_ev, evidence_atoms, competing_evts
+            # Obtain a sufficient explanations by causal attribution (greedy search);
+            # veto dud explanations like 'Because it looked liked one'
+            bjt_undir = bjt_v.to_undirected()       # Shared for tree traversal
+            suff_expl = agent.symbolic.attribute(
+                bjt_v, bjt_undir, tgt_ev, evidence_atoms, competing_evts, vetos=[v_tgt_lit]
             )
-            suff_expls = [
-                {x_lit for x_lit in expl if x_lit != v_tgt_lit}
-                for expl in suff_expls
-            ]           # Remove dud explanation ('Because it looked liked one')
-            suff_expls = [expl for expl in suff_expls if len(expl) > 0]
 
-            if len(suff_expls) > 0:
+            if suff_expl is not None:
                 # Found some sufficient explanations; report the first one as the
                 # answer using the template "Because {}, {} and {}."
                 answer_logical_form = []
-                answer_nl = "Because "
+                answer_nl = "Because I thought "
                 dem_refs = {}; dem_offset = len(answer_nl)
 
-                for i, exps_lit in enumerate(suff_expls[0]):
+                for i, exps_lit in enumerate(suff_expl):
                     # For each explanans literal, add the string "this is a X"
                     conc_pred = exps_lit.name.strip("v_")
                     conc_type, conc_ind = conc_pred.split("_")
@@ -442,10 +437,10 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                     reason_prefix = f"this is a "
 
                     # Append a suffix appropriate for the number of reasons
-                    if i == len(suff_expls[0])-1:
+                    if i == len(suff_expl)-1:
                         # Last entry, period
                         reason_suffix = "."
-                    elif i == len(suff_expls[0])-2:
+                    elif i == len(suff_expl)-2:
                         # Next to last entry, comma+and
                         reason_suffix = ", and "
                     else:
@@ -457,7 +452,7 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
 
                     # Fetch mask for demonstrative reference and shift offset
                     dem_refs[(dem_offset, dem_offset+4)] = \
-                        dialogue_state["referents"]["env"][exps_lit.args[0][0]]["mask"]
+                        agent.lang.dialogue.referents["env"][exps_lit.args[0][0]]["mask"]
                     dem_offset += len(reason_nl)
 
                 # Wrapping logical form (consequent part, to be precise) as needed
@@ -543,15 +538,18 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                             # 'sufficiently high' values. (Note we are assuming evidence
                             # literals occur in rules with positive polarity only, which
                             # will suffice within our current scope.)
-                            bjt_new = deepcopy(bjt_v)
                             replacements = { evd_atm: HIGH for evd_atm in evidence_atoms }
-                            bjt_replace_likelihood(bjt_new, replacements)
+                            backups = {
+                                evd_atm: bjt_extract_likelihood(bjt_v, evd_atm)
+                                for evd_atm in evidence_atoms
+                            }           # For rolling back to original values
+                            bjt_replace_likelihood(bjt_v, bjt_undir, replacements)
 
                             # Query the updated BJT for the event probabilities
                             max_prob_evt = (None, float("-inf"))
                             for atm in possible_answers:
                                 evt = (atm,)
-                                _, prob_scores = query(bjt_new, None, (evt, None), {})
+                                _, prob_scores = query(bjt_v, None, (evt, None), {})
 
                                 # Update max probability event if applicable
                                 evt_prob = [
@@ -559,6 +557,7 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                                 ][0]
                                 if evt_prob > max_prob_evt[1]:
                                     max_prob_evt = (evt, evt_prob)
+                            bjt_replace_likelihood(bjt_v, bjt_undir, backups)
 
                             assert max_prob_evt[0] is not None
                             if max_prob_evt[0] == (expected_gt,):
@@ -568,11 +567,7 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
 
                                 # Provide the evidence atoms with current likelihood values
                                 # as data needed for generating the counterfactual explanation.
-                                evidence_likelihoods = {
-                                    evd_atm: bjt_extract_likelihood(bjt_v, evd_atm)
-                                    for evd_atm in evidence_atoms
-                                }
-                                selected_cf_expl = (evidence_likelihoods, template)
+                                selected_cf_expl = (backups, template)
                                 break
 
                         else:
@@ -675,7 +670,7 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                     # and the template that yielded the explanans instance
                     evidence_likelihoods, template = selected_cf_expl
 
-                    answer_nl = "Because "
+                    answer_nl = "Because I thought "
                     dem_refs = {}; dem_offset = len(answer_nl)
 
                     for i, (evd_atom, pr_val) in enumerate(evidence_likelihoods.items()):
@@ -692,13 +687,11 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
 
                         if pr_val is not None and pr_val >= 0.5:
                             # Had right reason, but wasn't confident enough
-                            reason_prefix = "I wasn't sure if this is a "
-                            prefix_offset = len("I wasn't sure if ")
+                            reason_prefix = "this might not be a "
 
                             # Demonstrative "this" refers to the (potential) part
-                            offset = dem_offset + prefix_offset
-                            dem_refs[(offset, offset+4)] = \
-                                dialogue_state["referents"]["env"][evd_atom.args[0][0]]["mask"]
+                            dem_refs[(dem_offset, dem_offset+4)] = \
+                                agent.lang.dialogue.referents["env"][evd_atom.args[0][0]]["mask"]
                         else:
                             # Wasn't aware of any instance of the potential explanans
                             # template in the scene
@@ -706,12 +699,10 @@ def _answer_nondomain_Q(agent, utt_pointer, dialogue_state, translated):
                             # This will need a more principled treatment if we ever get
                             # to handle relations other than "have"
                             reason_prefix = "this doesn't have a "
-                            prefix_offset = 0
 
                             # Demonstrative "this" refers to the whole object
-                            offset = dem_offset + prefix_offset
-                            dem_refs[(offset, offset+4)] = \
-                                dialogue_state["referents"]["env"][tgt_lit.args[0][0]]["mask"]
+                            dem_refs[(dem_offset, dem_offset+4)] = \
+                                agent.lang.dialogue.referents["env"][tgt_lit.args[0][0]]["mask"]
 
                         # Append a suffix appropriate for the number of reasons
                         if i == len(evidence_likelihoods)-1:

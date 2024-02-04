@@ -31,13 +31,11 @@ def bjt_extract_likelihood(bjt, evd_atom):
     return vev_likelihood
 
 
-def bjt_replace_likelihood(bjt, replacements):
+def bjt_replace_likelihood(bjt, bjt_undirected, replacements):
     """
     Updating likelihood values for the virtual evidence of the specified target
     event literals stored in the provided BJT
     """
-    bjt_undirected = bjt.to_undirected()    # For tree traversal
-
     # Modify the BJT, replacing appropriate likelihood value one by one
     for evd_atom, alt_val in replacements.items():
         
