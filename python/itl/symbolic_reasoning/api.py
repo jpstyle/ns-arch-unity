@@ -25,7 +25,7 @@ from ..lpmln.utils import wrap_args, flatten_cons_ante
 TAB = "\t"              # For use in format strings
 
 EPS = 1e-10             # Value used for numerical stabilization
-U_IN_PR = 1.0           # How much the agent values information provided by the user
+U_IN_PR = 0.95          # How much the agent values information provided by the user
 
 class SymbolicReasonerModule:
 
@@ -54,10 +54,10 @@ class SymbolicReasonerModule:
         """
         # Solve to find the best models of the program
         prog = exported_kb + visual_evidence
-        bjt_v = prog.compile()
+        reg_gr_v = prog.compile()
 
         # Store sensemaking result as module state
-        self.concl_vis = bjt_v, (exported_kb, visual_evidence)
+        self.concl_vis = reg_gr_v, (exported_kb, visual_evidence)
     
     def resolve_symbol_semantics(self, dialogue_state, lexicon):
         """
@@ -100,9 +100,9 @@ class SymbolicReasonerModule:
 
         # Add priming effect by recognized visual concepts
         if self.concl_vis is not None:
-            bjt_v, _ = self.concl_vis
+            reg_gr_v, _ = self.concl_vis
             ## TODO: Update to comply with the recent changes
-            # marginals_v = bjt_v.compute_marginals()
+            # marginals_v = reg_gr_v.compute_marginals()
 
             # if marginals_v is not None:
             #     vis_concepts = defaultdict(float)
@@ -179,7 +179,7 @@ class SymbolicReasonerModule:
                         # Below not required if all occurring args are hard-assigned to some entity
                         continue
 
-                    # If bjt_v is present and rule is grounded, add bias in favor of
+                    # If reg_gr_v is present and rule is grounded, add bias in favor of
                     # assignments which would satisfy the rule
                     is_grounded = all(not arg[0].isupper() for arg in occurring_ent_refs)
                     if self.concl_vis is not None and is_grounded:
@@ -480,10 +480,7 @@ class SymbolicReasonerModule:
                 manager
         """
         dl_prog = Program()
-        bjt_v, (pr_prog, kb_prog) = self.concl_vis
-
-        # TODO (in some future): Incremental BJT update from existing bjt_v and additional
-        # dl_prog info (cf. [Incremental junction tree inference], Agli et al. 2016)
+        reg_gr_v, (pr_prog, kb_prog) = self.concl_vis
 
         # Incorporate additional information provided by the user in language for updated
         # sensemaking
@@ -528,17 +525,17 @@ class SymbolicReasonerModule:
         # Finally, reasoning with all visual+language info
         if len(dl_prog) > 0:
             prog = pr_prog + kb_prog + dl_prog
-            bjt_vl = prog.compile()
+            reg_gr_vl = prog.compile()
         else:
-            bjt_vl = bjt_v
+            reg_gr_vl = reg_gr_v
 
         # Store sensemaking result as module state
-        self.concl_vis_lang = bjt_vl, (pr_prog, kb_prog, dl_prog)
+        self.concl_vis_lang = reg_gr_vl, (pr_prog, kb_prog, dl_prog)
 
     @staticmethod
-    def query(bjt, q_vars, event, restrictors=None):
-        return query(bjt, q_vars, event, restrictors or {})
+    def query(reg_gr, q_vars, event, restrictors=None):
+        return query(reg_gr, q_vars, event, restrictors or {})
 
     @staticmethod
-    def attribute(bjt, bjt_undir, target_event, evidence, competing_evts, vetos=None):
-        return attribute(bjt, bjt_undir, target_event, evidence, competing_evts, vetos)
+    def attribute(reg_gr, target_event, evidence, competing_evts, vetos=None):
+        return attribute(reg_gr, target_event, evidence, competing_evts, vetos)

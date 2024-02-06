@@ -106,8 +106,10 @@ class Program:
 
     def compile(self):
         """
-        Compiles program into a binary join tree from equivalent directed graph,
-        which would contain data needed to answer probabilistic inference queries
+        Compiles program (or the equivalent directed graph thereof) into a region
+        graph, which would contain data needed to answer probabilistic inference
+        queries after running sufficient number of (generalized?) belief propagation
+        message passing iterations.
         """
         return compile(self)
 

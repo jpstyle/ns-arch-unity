@@ -1,7 +1,7 @@
 """ Program().compile() subroutine factored out """
 import operator
 from functools import reduce
-from itertools import product, combinations
+from itertools import product
 from collections import defaultdict
 
 import clingo
@@ -16,196 +16,84 @@ from ..utils import logit
 
 def compile(prog):
     """
-    Compiles program into a binary join tree from equivalent directed graph, which
-    would contain data needed to answer probabilistic inference queries. Achieved
-    by running the following operations:
+    Compiles program (or the equivalent directed graph thereof) into a region
+    graph, which would contain data needed to answer probabilistic inference
+    queries after running sufficient number of (generalized?) belief propagation
+    message passing iterations. Achieved by running the following procedure:
 
-    1) Ground the program with clingo to find set of actually grounded atoms
-    2) Compile the factor graph into binary join tree, following the procedure
-        presented in Shenoy, 1997 (modified to comply with semantics of logic
-        programs). Include singleton node sets for each grounded atom, so that
-        the compiled join tree will be prepared to answer marginal queries for
-        atoms afterwards.
-    3) Identify factor potentials associated with valid sets of nodes. Each
+    1) Ground the program with clingo to find set of actually grounded atoms.
+    2) Identify factor potentials associated with valid sets of nodes. Each
         program rule corresponds to a piece of information contributing to the
         final factor potential for each node set. Essentially, this amounts to
         finding a factor graph corresponding to the provided program.
-    4) Run modified Shafer-Shenoy belief propagation algorithm to fill in values
-        needed for answering probabilistic inference queries later.
+    3) Compile the factor graph into a region graph, which represents the (G)BP
+        (G)BP algorithm instance corresponding to the graph (cf. Yedidia et al.,
+        2004). Currently uses Bethe's method of approximating Gibbs free energy,
+        ultimately corresponding to the standard loopy BP algorithm on factor
+        graphs. (May try to employ a more accurate approximation mechanism later?)
+        Note the message passing procedure is modified to comply with semantics
+        of normal logic programs.
+    4) Run modified belief propagation algorithm until convergence to fill in
+        values needed for answering probabilistic inference queries later.
     
-    Returns a binary join tree populated with the required values resulting from belief
+    Returns a region graph populated with the required values resulting from belief
     propagation.
     """
-    bjt = nx.DiGraph()
+    # Region graph returned. Each node is indexed with a pair (frozenset of atoms,
+    # frozenset of factors) and labeled with a counting number. Each (directed) edge
+    # connects a region to its subregion and stores a message from the source to the
+    # target. Also holds a graph-level storage of a mapping between grounded atoms
+    # and their integer indices, and also input potential tables for each factor (as
+    # factors can appear in different region nodes and their potentials are shared).
+    reg_gr = nx.DiGraph()
 
     if _grounded_facts_only([r for r, _, _ in prog.rules]):
-        # Can take simpler shortcut for constructing binary join tree if program
-        # consists only of grounded facts
-        bjt.graph["atoms_map"] = {}
-        bjt.graph["atoms_map_inv"] = {}
+        # Can take simpler shortcut for constructing region graph if program consists
+        # only of grounded facts
+        reg_gr.graph["atoms_map"] = {}
+        reg_gr.graph["atoms_map_inv"] = {}
+        reg_gr.graph["factor_potentials"] = {}
 
+        # Integer indexing should start from 1, to represent negated atoms as
+        # negative ints
+        ai = 1
         for i, (rule, r_pr, weighting) in enumerate(prog.rules):
-            # Integer indexing should start from 1, to represent negated atoms as
-            # negative ints
-            i += 1
-
             # Mapping between atoms and their integer indices
-            bjt.graph["atoms_map"][rule.head[0]] = i
-            bjt.graph["atoms_map_inv"][i] = rule.head[0]
+            reg_gr.graph["atoms_map"][rule.head[0]] = ai
+            reg_gr.graph["atoms_map_inv"][ai] = rule.head[0]
 
-            fact_input_potential = _rule_to_potential(
-                rule, r_pr, weighting, { rule.head[0]: i }
+            # Add an appropriate input potential from the rule weight
+            reg_gr.graph["factor_potentials"][i] = _rule_to_potential(
+                rule, r_pr, weighting, { rule.head[0]: ai }
             )
 
-            # Add singleton atom set node for the atom, with an appropriate input
-            # potential from the rule weight
-            bjt.add_node((frozenset({i}), 0), input_potential=fact_input_potential)
+            # Add a large region ~ small region node pair
+            large_label = (frozenset([ai]), frozenset([i]))
+            small_label = (frozenset([ai]), frozenset())
+            reg_gr.add_node(large_label)
+            reg_gr.add_node(small_label)
+            reg_gr.add_edge(large_label, small_label)
+            reg_gr.edges[(large_label, small_label)]["message"] = (None, set())
+
+            ai += 1
 
     else:
         grounded_rules_by_atms, atoms_map, atoms_map_inv = _ground_and_index(prog)
 
         # Mapping between atoms and their integer indices
-        bjt.graph["atoms_map"] = atoms_map
-        bjt.graph["atoms_map_inv"] = atoms_map_inv
+        reg_gr.graph["atoms_map"] = atoms_map
+        reg_gr.graph["atoms_map_inv"] = atoms_map_inv
 
-        # Identifying duplicate variable subsets in multisets by indexing
-        ss_inds = defaultdict(int)
+        # Maintain factor potentials in graph-level (instead of node-level) storage
+        reg_gr.graph["factor_potentials"] = {}
 
-        if len(atoms_map) == 0 or len(grounded_rules_by_atms) == 0:
-            # Happens to have no atoms and rules grounded; nothing to do here
-            pass
-        else:
-            # Binary join tree construction (cf. Shenoy, 1997)
+        # Implements Bethe's approximation method, enumerating over each collection of
+        # grounded rules (combined & considered as a factor with the atoms as argument)
+        for i, (atms, gr_rules) in enumerate(grounded_rules_by_atms.items()):
+            # Skip invalid rule collections
+            if len(atms) == 0: continue
 
-            # Set of variables to be processed; Psi_u in Shenoy
-            atoms_unpr = set(atoms_map_inv)
-
-            # 'Multiset' of variables to be processed; Phi_u in Shenoy. Initialized
-            # from 1) subset of variables for which we have rules (hence potentials),
-            # and 2) subsets for which we need marginals --- all singletons in our case
-            # (Multiset implemented with dicts, with variable subsets as key and
-            # sets of indices defined per subset as values)
-            atomsets_unpr = set()
-            atomsets_unpr |= {(atms, 0) for atms in grounded_rules_by_atms}
-            atomsets_unpr |= {(frozenset({atm}), 0) for atm in atoms_map_inv}
-
-            while len(atomsets_unpr) > 1:
-                # Pick a variable with a heuristic, namely one that would lead to smallest
-                # union of relevant nodes in factors
-                atomset_unions = {
-                    atm: frozenset.union(*{atms for atms, _ in atomsets_unpr if atm in atms})
-                    for atm in atoms_unpr
-                }
-                # Variable picked for the loop by the heuristic; Y in Shenoy
-                picked = sorted(atoms_unpr, key=lambda atm: len(atomset_unions[atm]))[0]
-
-                # Set of variable subsets; Phi_Y in Shenoy
-                atomsets_relevant = {
-                    (atms, a_i) for atms, a_i in atomsets_unpr if picked in atms
-                }
-
-                while len(atomsets_relevant) > 1:
-                    # Pick a node set pair that would give smallest union
-                    atomset_pair_unions = {
-                        (n1, n2): n1[0] | n2[0]
-                        for n1, n2 in combinations(atomsets_relevant, 2)
-                    }
-                    n1, n2 = sorted(
-                        atomset_pair_unions,
-                        key=lambda atmsp: len(atomset_pair_unions[atmsp])
-                    )[0]                                # r_1 and r_2 in Shenoy
-                    smallest_union = n1[0] | n2[0]      # s_k in Shenoy
-
-                    # Distinct subset (possibly duplicate with n1 or n2) with fresh index
-                    ss_inds[smallest_union] += 1
-                    nu = (smallest_union, ss_inds[smallest_union])
-
-                    # Add new nodes and edges; note that the node set (`N` in Shenoy)
-                    # is a multiset as long as we don't distinguish among the possibly
-                    # duplicate variable subsets. We implement N as a set by indexing
-                    # each entry of each variable subset.
-                    bjt.add_node(n1); bjt.add_node(n2); bjt.add_node(nu)
-
-                    # Both directions for the edges, for storing messages of two opposite
-                    # directions
-                    bjt.add_edge(n1, nu); bjt.add_edge(nu, n1)
-                    bjt.add_edge(n2, nu); bjt.add_edge(nu, n2)
-
-                    # Update relevant subset set; set size reduced exactly by one
-                    atomsets_relevant -= {n1, n2}
-                    atomsets_relevant |= {nu}
-
-                if len(atoms_unpr) >= 1:
-                    # Sole subset in Phi_Y, which must be a singleton set here; r in Shenoy
-                    n = list(atomsets_relevant)[0]
-                    atms, a_i = n
-                    # s_k := r - {Y} in Shenoy
-                    atms_cmpl_picked = atms - {picked}
-                    # Note that the two subsets just assigned are different by definition,
-                    # as atms must include the picked atom and atms_cmpl_picked must not
-
-                    n = (atms, a_i)
-
-                    # Add corresponding nodes and edges
-                    bjt.add_node(n)
-                    if len(atms_cmpl_picked) > 0:
-                        # Should process atms_cmpl_picked only if non-empty; empty ones
-                        # usually signals isolated nodes without any neighbors
-                        ss_inds[atms_cmpl_picked] += 1
-                        nc = (atms_cmpl_picked, ss_inds[atms_cmpl_picked])
-
-                        bjt.add_node(nc)
-                        bjt.add_edge(n, nc); bjt.add_edge(nc, n)
-
-                        # Updating atomsets_unpr with a new element (marked with the
-                        # fresh index)
-                        atomsets_unpr.add(nc)
-
-                    # Updating atoms_unpr & atomsets_unpr by complement
-                    atoms_unpr -= {picked}
-                    atomsets_unpr = {
-                        (atms, a_i) for (atms, a_i) in atomsets_unpr
-                        if picked not in atms
-                    }
-
-            if len(atomsets_unpr) > 0:
-                # atomsets_unpr must be a singleton set if entered
-                assert len(atomsets_unpr) == 1
-                atms_last = list(atomsets_unpr)[0]
-                bjt.add_node((atms_last, ss_inds[atms_last]))
-
-        # Condense the compiled BJT; merge nodes sharing the same variable subset,
-        # as long as the merging wouldn't breach the binary constraint (i.e., keeps
-        # neighbor counts no larger than 3)
-        while True:
-            undirected_edges = bjt.to_undirected().edges
-            for n1, n2 in undirected_edges:
-                # Not mergeable if nodes have different var subsets
-                if n1[0] != n2[0]: continue
-                # Not mergeable if merging would result in neighbor count larger than 3
-                if (bjt.in_degree[n1]-1)+(bjt.in_degree[n2]-1) > 3: continue
-
-                # Sort to leave lower index --- just my OCD
-                n1, n2 = sorted([n1, n2])
-
-                # Merge by removing n2 and connecting n2's other neighbors to n1
-                n2_neighbors = [nb for nb, _ in bjt.in_edges(n2) if nb != n1]
-                bjt.remove_node(n2)
-                for nb in n2_neighbors:
-                    bjt.add_edge(n1, nb); bjt.add_edge(nb, n1)
-                
-                # End this loop and start anew
-                break
-
-            else:
-                # No more nodes to merge, BJT fully condensed
-                break
-
-        # Associate each ground rule with an appropriate BJT node that covers all and
-        # only atoms occurring in the rule, then populate the BJT node with appropriate
-        # input potential
-        for atms, gr_rules in grounded_rules_by_atms.items():
-            # Convert each rule to matching potential, and combine into single potential
+            # Convert each rule to matching potential
             input_potentials = [
                 _rule_to_potential(gr_rule, r_pr, weighting, atoms_map)
                 for gr_rule, (r_pr, weighting), _ in gr_rules
@@ -215,81 +103,63 @@ def compile(prog):
                 # Falsity included, program has no answer set
                 return None
 
-            if len(atms) > 0:
-                inps_combined = _combine_factors_outer(input_potentials)
-                target_node = [n for n in bjt.nodes if atms==n[0]][0]
-                    # There can be multiple candidates; pick one and only one
-                bjt.nodes[target_node]["input_potential"] = inps_combined
-        
-        # Null-potentials for BJT nodes without any input potentials
-        for node in bjt.nodes:
-            if "input_potential" not in bjt.nodes[node]:
-                atms = node[0]
-                cases = {frozenset(case) for case in product(*[(ai, -ai) for ai in atms])}
-                bjt.nodes[node]["input_potential"] = {
-                    case: { (frozenset(), frozenset()): Polynomial(float_val=1.0) }
-                    for case in cases
-                }
+            # Combine the converted input potentials into a single factor potential
+            # then store
+            reg_gr.graph["factor_potentials"][i] = _combine_factors_outer(input_potentials)
 
-    # Mark 'not-up-to-date' to all nodes & edges (i.e., values nonexistent or
-    # potentially incorrect b/c input changed)
-    for n in bjt.nodes:
-        bjt.nodes[n]["update_needed"] = True
-        for e in bjt.in_edges(n):
-            bjt.edges[e]["update_needed"] = True
+            # A node for each 'large region' containing the index of the (combined)
+            # factor and the argument atoms
+            large_label = (atms, frozenset([i]))
+            reg_gr.add_node(large_label)
 
-    return bjt
+            for ai in atms:
+                # A node for each 'small region' containing exactly one atom
+                small_label = (frozenset([ai]), frozenset())
+                reg_gr.add_node(small_label)
+
+                # An edge from the 'large region' node added above to each 'small
+                # 'region' node
+                reg_gr.add_edge(large_label, small_label)
+                reg_gr.edges[(large_label, small_label)]["message"] = (None, set())
+
+    # Annotate each region node with its counting number
+    all_annotated = False
+    while not all_annotated:
+        for r in reg_gr.nodes:
+            parents = [p for p, _ in reg_gr.in_edges(r)]
+            if all("counting_num" in reg_gr.nodes[p] for p in parents):
+                reg_gr.nodes[r]["counting_num"] = 1 - sum(
+                    reg_gr.nodes[p]["counting_num"] for p in parents
+                )
+
+        all_annotated = all("counting_num" in reg_gr.nodes[r] for r in reg_gr.nodes)
+
+    return reg_gr
 
 
-def bjt_query(bjt, q_key):
-    """ Query a BJT for (unnormalized) belief table """
+def rg_query(reg_gr, q_key):
+    """ Query a region graph for (unnormalized) belief table """
     relevant_nodes = frozenset({abs(n) for n in q_key})
-    relevant_cliques = [n for n in bjt.nodes if relevant_nodes <= n[0]]
+    relevant_cliques = [
+        (atms, fcts) for atms, fcts in reg_gr.nodes if relevant_nodes <= atms
+    ]
 
     if len(relevant_cliques) > 0:
-        # In-clique query; find the BJT node with the smallest node set that
+        # In-clique query; find the region node with the smallest node set that
         # comply with the key
-        smallest_node = sorted(relevant_cliques, key=lambda x: len(x[0]))[0]
+        smallest_node = sorted(
+            relevant_cliques, key=lambda x: len(list(x[0])+list(x[1]))
+        )[0]
 
-        if bjt.nodes[smallest_node]["update_needed"]:
-            belief_propagation(bjt, smallest_node[0])
-            assert not bjt.nodes[smallest_node]["update_needed"]
-        beliefs = bjt.nodes[smallest_node]["output_beliefs"]
+        belief_propagation(reg_gr)
+        beliefs = reg_gr.nodes[smallest_node]["beliefs"]
 
         # Marginalize and return
         return _marginalize_simple(beliefs, relevant_nodes)
 
     else:
-        # Not really used for now. Make sure later, when needed, this works correctly;
-        # in particular, ensure it works alright with the newly introduced incremental
-        # belief propagation feature
+        # Not really used for now. Make sure later, when needed, this works correctly
         raise NotImplementedError
-
-        # Out-clique query; first divide query key node set by belonging components
-        # in the BJT
-        components = {
-            frozenset.union(*comp): bjt.subgraph(comp)
-            for comp in nx.connected_components(bjt.to_undirected())
-        }
-
-        divided_keys_and_subtrees = {
-            frozenset({l for l in q_key if abs(l) in comp_nodes}): sub_bjt
-            for comp_nodes, sub_bjt in components.items()
-            if len(comp_nodes & relevant_nodes) > 0
-        }
-
-        if len(divided_keys_and_subtrees) == 1:
-            # All query key nodes in the same component; variable elimination needed
-            raise NotImplementedError
-        else:
-            # Recursively query each subtree with corresponding 'subkey'
-            query_results = {
-                subkey: bjt_query(sub_bjt, subkey)
-                for subkey, sub_bjt in divided_keys_and_subtrees.items()
-            }
-
-            # Combine independent query results
-            return _combine_factors_simple(list(query_results.values()))
 
 
 class _Observer:
@@ -490,137 +360,251 @@ def _rule_to_potential(rule, r_pr, weighting, atoms_map):
     return potential
 
 
-def belief_propagation(bjt, atom_subset):
+def belief_propagation(reg_gr):
     """
-    (Modified) Shafer-Shenoy belief propagation on binary join trees, whose
-    input potential storage registers are properly filled in. Populate output
-    belief storage registers as demanded by `atom_subset`.
-
-    Lazy, incremental belief propagation is achieved by use of "updated_needed"
-    fields on nodes and edges. On nodes, true "updated_needed" indicates its
-    "output_beliefs" value is nonexistent or incorrect due to changes in some
-    input potentials. Similarly, true "updated_needed" on edges indicates its
-    message for the edge direction is nonexistent or incorrect.
+    Generalized belief propagation algorithm, the parent-to-child flavor (cf. Yedidia
+    et al., 2004). Iterate on the set of (products of) messages until convergence,
+    so that the marginalized beliefs obtained afterwards are 'sufficiently' accurate.
+    (Note that we cannot run the standard recursive BP for exact inference since the
+    provided region graph might have loops and thus no terminal nodes.) If the provided
+    region graph is obtained by Bethe approximation, this amounts to loopy BP in effect,
+    resulting in the same output values.
     """
-    # Corresponding node in BJT; there can be multiple, pick any
-    bjt_node = [n for n in bjt.nodes if atom_subset==n[0]][0]
+    # Extracting invariant information that will be used throughout the iteration
+    # from the provided region graph
 
-    # Fetch input potentials for the BJT node
-    input_potential = bjt.nodes[bjt_node]["input_potential"]
-
-    # Fetch incoming messages for the BJT node, if any
-    incoming_messages = []
-    for from_node, _, msg in bjt.in_edges(bjt_node, data="message"):
-        # Message will be computed if nonexistent or outdated; otherwise,
-        # cached value will be used
-        _compute_message(bjt, from_node, bjt_node)
-        msg = bjt.edges[(from_node, bjt_node)]["message"]
-
-        incoming_messages.append(msg)
-
-    # Combine incoming messages; combine entries by multiplying 'fully-alive'
-    # weights and 'half-alive' weights respectively
-    if len(incoming_messages) > 0:
-        msgs_combined = _combine_factors_outer(incoming_messages)
-
-        # Final binary combination of (combined) input potentials & (combined)
-        # incoming messages
-        inps_msgs_combined = _combine_factors_outer(
-            [input_potential, msgs_combined]
+    # Dict containing all parent-to-child message identifiers; edge source & target
+    # are dict keys, and values are '3-layer partitioning' of the region graph for
+    # the specified edge (that define N(P,R) and D(P,R) in the paper by Yedidia et al.)
+    p2r_edges = {
+        (p, r): (
+            set(reg_gr.nodes) - ({p} | nx.descendants(reg_gr, p)),
+            ({p} | nx.descendants(reg_gr, p) - ({r} | nx.descendants(reg_gr, r))),
+            ({r} | nx.descendants(reg_gr, r))
         )
-    else:
-        # Empty messages; just consider input potential
-        inps_msgs_combined = input_potential
-
-    # (Partial) marginalization down to domain for the node set for this BJT node
-    output_beliefs = _marginalize_outer(inps_msgs_combined, bjt_node[0])
-
-    # Weed out any subcases that still have lingering positive atom requirements
-    # (i.e. non-complete positive clearances), then fully marginalize per case
-    output_beliefs = {
-        case: sum(
-            [
-                val for subcase, val in inner.items()
-                if len(subcase[0])==len(subcase[1])
-            ],
-            Polynomial(float_val=0.0)
-        )
-        for case, inner in output_beliefs.items()
+        for p, r in reg_gr.edges
     }
 
-    # Populate the output belief storage register for the BJT node, and mark
-    # node as up-to-date
-    bjt.nodes[bjt_node]["output_beliefs"] = output_beliefs
-    bjt.nodes[bjt_node]["update_needed"] = False
+    # Test GBP convergence by tracking atom marginals
+    converged = True
+    atm_marginals = {
+        atm: None for atm in reg_gr.graph["atoms_map"]
+        if atm.name.startswith("cls_")
+    }
+
+    for _ in range(10):
+        # Continue iterating over the parent-to-child messages to update their values,
+        # until convergence (max 10 iterations)
+
+        # Collect old message values
+        msgs_old = { e: reg_gr.edges[e].get("message") for e in reg_gr.edges }
+
+        for (p, r), partition in p2r_edges.items():
+            # Compute messages (products) obtained by equating marginalized parent belief
+            # to child belief
+            _update_message(reg_gr, p, r, msgs_old, partition)
+
+        # Compute beliefs at current iteration (at variable nodes only, for now)
+        msgs_now = { e: reg_gr.edges[e].get("message") for e in reg_gr.edges }
+        for r in reg_gr.nodes():
+            atoms, factors = r
+            full_atom = reg_gr.graph["atoms_map_inv"][list(atoms)[0]]
+            if len(atoms) > 1 or len(factors) > 0: continue       # Temporary...?
+            if not full_atom.name.startswith("cls_"): continue    # Temporary...?
+
+            # Factor potential products
+            if len(factors) > 0:
+                factors_combined = _combine_factors_outer([
+                    reg_gr.graph["factor_potentials"][fi] for fi in factors
+                ])
+            else:
+                factors_combined = None
+
+            # Message potential products
+            D_r = nx.descendants(reg_gr, r); E_r = {r} | D_r
+            messages_needed = {
+                e for e in reg_gr.in_edges(r)
+            } | {
+                (pd, d) for d in D_r for pd, _ in reg_gr.in_edges(d)
+                if pd not in E_r
+            }           # Parents to the node, other non-descendant parents of descendants
+
+            # See if the collection of the needed messages can be cleanly assembled from
+            # the available message products. If not possible, division has to happen...
+            available_msg_products = {
+                frozenset({e} | remainder): e for e, (_, remainder) in msgs_now.items()
+            }           # Product key to edge handle value
+            products_by_size = sorted(available_msg_products, key=len, reverse=True)
+            # Greedy heuristic: First use as many larger chunks as possible, then fill in
+            # any remainder using message singletons (with necessary divisions marked)
+            recipe = []
+            for prd in products_by_size:
+                if prd <= messages_needed:
+                    recipe.append((available_msg_products[prd], None))  # (edge handle, divisor)
+                    messages_needed -= prd
+            if len(messages_needed) > 0:
+                recipe += [(e, frozenset(msgs_now[e][1])) for e in messages_needed]
+
+            # Then combine with the messages as needed
+            all_msg_potentials = [
+                [
+                    msgs_now[e][0],
+                    _exp_m1(msgs_now[available_msg_products[divisors]][0]) \
+                        if divisors is not None else None
+                ]
+                for e, divisors in recipe
+            ]
+            all_msg_potentials = [
+                pot for potentials in all_msg_potentials for pot in potentials
+                if pot is not None
+            ]
+            if len(all_msg_potentials) > 0:
+                messages_combined = _combine_factors_outer(all_msg_potentials)
+                if factors_combined is None:
+                    all_potentials_combined = messages_combined
+                else:
+                    all_potentials_combined = _combine_factors_outer(
+                        [factors_combined, messages_combined]
+                    )
+            else:
+                all_potentials_combined = factors_combined
+
+            # (Partial) marginalization down to domain for the node set for this node
+            current_beliefs = _marginalize_outer(all_potentials_combined, atoms)
+
+            # Weed out any subcases that still have lingering positive atom requirements
+            # (i.e. non-complete positive clearances), then fully marginalize per case
+            current_beliefs = {
+                case: sum(
+                    [
+                        val for subcase, val in inner.items()
+                        if len(subcase[0])==len(subcase[1])
+                    ],
+                    Polynomial(float_val=0.0)
+                )
+                for case, inner in current_beliefs.items()
+            }
+
+            # Track & compare against previous marginal to test convergence
+            prev_mgl = atm_marginals[full_atom]
+            curr_mgl = current_beliefs[frozenset(atoms)] / \
+                sum(current_beliefs.values(), Polynomial(float_val=0.0))
+            curr_mgl = curr_mgl.at_limit()
+            if prev_mgl is None or abs(prev_mgl-curr_mgl) > 0.05:
+                converged = False
+            atm_marginals[full_atom] = curr_mgl
+
+            # Update the output belief storage register for the node
+            reg_gr.nodes[r]["beliefs"] = current_beliefs
+
+        if converged:
+            break
+        else:
+            converged = True
 
 
-def _compute_message(bjt, from_node, to_node):
+def _update_message(reg_gr, from_node, to_node, msgs_old, partition):
     """
-    Recursive subroutine called during belief propagation for computing outgoing
-    message from one BJT node to another; populates the corresponding directed edge's
-    message storage register
+    Subroutine called during belief propagation for computing outgoing message from
+    one region graph node to another; updates the corresponding directed edge's message
+    storage register. As we are dealing with region graphs, update rules are obtained
+    by equating marginalized beliefs of `from_node` to beliefs of `to_node`, utilizing
+    the 3-layer partitioning of the region graph.
     """
-    if not bjt.edges[(from_node, to_node)]["update_needed"]:
-        # Can use existing message value, saving computation
-        assert "message" in bjt.edges[(from_node, to_node)]
-        return
+    # Variables (atoms) and factor sets for the two nodes
+    atms_from, factors_from = from_node
+    atms_to, factors_to = to_node
 
-    # Fetch input potentials for the BJT node
-    input_potential = bjt.nodes[from_node]["input_potential"]
+    # Top, middle, bottom 3-layered partitions
+    top_pt, mid_pt, btm_pt = partition
 
-    # Fetch incoming messages for the BJT node from the neighbors, except the
-    # message recipient
-    incoming_messages = []
-    for neighbor_node, _, msg in bjt.in_edges(from_node, data="message"):
-        if neighbor_node == to_node: continue    # Disregard to_node
+    # Identify the old messages needed from all existing edges originating from
+    # nodes in the top partition and ending up in the middle partition (N(P,R))
+    messages_old_needed = {(p, r) for p, r in reg_gr.edges if p in top_pt and r in mid_pt}
 
-        # Message will be computed if nonexistent or outdated; otherwise,
-        # cached value will be used
-        _compute_message(bjt, neighbor_node, from_node)
-        msg = bjt.edges[(neighbor_node, from_node)]["message"]
+    # Identify the new messages to be updated from all existing edges originating
+    # from nodes in the middle partition and ending up in the bottom partition
+    # (D(P,R)); always includes the message from `from_node` to `to_node`
+    messages_to_update = {(p, r) for p, r in reg_gr.edges if p in mid_pt and r in btm_pt}
+    assert (from_node, to_node) in messages_to_update
 
-        incoming_messages.append(msg)
-    
-    # Combine incoming messages; combine entries by multiplying 'fully-alive'
-    # weights and 'half-alive' weights respectively
-    if len(incoming_messages) > 0:
-        msgs_combined = _combine_factors_outer(incoming_messages)
-
-        # Final binary combination of (combined) input potentials & (combined)
-        # incoming messages
-        inps_msgs_combined = _combine_factors_outer(
-            [input_potential, msgs_combined]
-        )
+    # Fetch and combine input potentials, if any, for factors in `from_node` but
+    #not in `to_node`
+    factors_needed = factors_from - factors_to
+    if len(factors_needed) > 0:
+        factors_combined = _combine_factors_outer([
+            reg_gr.graph["factor_potentials"][fi] for fi in factors_needed
+        ])
     else:
-        inps_msgs_combined = input_potential
+        factors_combined = None
 
-    # (Partial) Marginalization down to domain for the intersection of from_node
-    # and to_node
-    common_atoms = from_node[0] & to_node[0]
-    outgoing_msg = _marginalize_outer(inps_msgs_combined, common_atoms)
+    # See if the collection of the needed messages can be cleanly assembled from
+    # the available message products. If not possible, division has to happen...
+    available_msg_products = {
+        frozenset({e} | remainder): e for e, (_, remainder) in msgs_old.items()
+    }           # Product key to edge handle value
+    products_by_size = sorted(available_msg_products, key=len, reverse=True)
+    # Greedy heuristic: First use as many larger chunks as possible, then fill in
+    # any remainder using message singletons (with necessary divisions marked)
+    recipe = []
+    for prd in products_by_size:
+        if prd <= messages_old_needed:
+            recipe.append((available_msg_products[prd], None))  # (edge handle, divisor)
+            messages_old_needed -= prd
+    if len(messages_old_needed) > 0:
+        recipe += [(e, frozenset(msgs_old[e][1])) for e in messages_old_needed]
 
-    # Dismissable nodes; if some nodes occur in the message sender but not in the
-    # message recipient, such nodes will never appear again at any point of the
-    # onward message path (due to running intersection property of join trees).
-    # The implication, that we exploit here for computational efficiency, is that
-    # we can now stop caring about clearances of such dismissable nodes, and if
-    # needed, safely eliminating subcases that still have lingering uncleared
-    # requirements of dismissable nodes.
-    dismissables = from_node[0] - to_node[0]
+    # Then combine with the messages as needed
+    all_msg_potentials = [
+        [
+            msgs_old[e][0],
+            _exp_m1(msgs_old[available_msg_products[divisors]][0]) \
+                if divisors is not None else None
+        ]
+        for e, divisors in recipe
+    ]
+    all_msg_potentials = [
+        pot for potentials in all_msg_potentials for pot in potentials
+        if pot is not None
+    ]
+    if len(all_msg_potentials) > 0:
+        messages_old_combined = _combine_factors_outer(all_msg_potentials)
+        if factors_combined is None:
+            all_potentials_combined = messages_old_combined
+        else:
+            all_potentials_combined = _combine_factors_outer(
+                [factors_combined, messages_old_combined]
+            )
+    else:
+        all_potentials_combined = factors_combined
+
+    # (Partial) Marginalization down to domain for the common atoms, now equal to
+    # the 'right-hand side' of the marginalization constraint equation
+    righthand_side = _marginalize_outer(all_potentials_combined, atms_from & atms_to)
+
+    # Dismissable nodes; if some nodes occur in `from_node` but not in `to_node`,
+    # such nodes will never appear again at any point of the onward message path
+    # due to the definitional characteristic of region graphs. The implication,
+    # that we exploit here for computational efficiency, is that we can now stop
+    # caring about clearances of such dismissable nodes, and if needed, safely
+    # eliminating subcases that still have lingering uncleared requirements of
+    # dismissable nodes.
+    dismissables = atms_from - atms_to
     if len(dismissables) > 0:
-        outgoing_msg = {
+        righthand_side = {
             case: {
                 (subcase[0]-dismissables, subcase[1]-dismissables): val
                 for subcase, val in inner.items()
                 if len(dismissables & (subcase[1]-subcase[0])) == 0
             }
-            for case, inner in outgoing_msg.items()
+            for case, inner in righthand_side.items()
         }
 
-    # Populate the outgoing message storage register for the BJT edge, and mark
-    # edge as up-to-date
-    bjt.edges[(from_node, to_node)]["message"] = outgoing_msg
-    bjt.edges[(from_node, to_node)]["update_needed"] = False
+    # Populate the message storage register for the edge with the pair (RHS value,
+    # remainder of the message product if any)
+    reg_gr.edges[(from_node, to_node)]["message"] = (
+        righthand_side, messages_to_update - {(from_node, to_node)}
+    )
 
 
 def _combine_factors_outer(factors):
@@ -682,33 +666,6 @@ def _combine_factors_inner(factors):
     return dict(combined_factor)
 
 
-def _combine_factors_simple(factors):
-    """
-    Subroutine for combining a set of 'simple' factors without layers (likely those
-    stored in 'output_beliefs' register for a BJT node); entries are combined by
-    multiplication
-    """
-    assert len(factors) > 0
-
-    # Compute entry values for possible cases considered
-    combined_factor = {}
-    for case in product(*factors):
-        # Union of case specification
-        case_union = frozenset.union(*case)
-
-        # Incompatible, cannot combine
-        if not _literal_set_is_consistent(case_union): continue
-
-        # Corresponding entry fetched from the factor
-        entries_per_factor = [factors[i][c] for i, c in enumerate(case)]
-
-        # Outer-layer combination where entries can be considered 'mini-factors'
-        # defined per postive atom clearances
-        combined_factor[case_union] = reduce(operator.mul, entries_per_factor)
-
-    return combined_factor
-
-
 def _marginalize_outer(factor, atom_subset):
     """
     Subroutine for (partially) marginalizing a factor at the outer-layer (while
@@ -737,7 +694,7 @@ def _marginalize_outer(factor, atom_subset):
 def _marginalize_simple(factor, atom_subset):
     """
     Subroutine for simple marginalization of factor without layers (likely those
-    stored in 'output_beliefs' register for a BJT node) down to some domain specified
+    stored in 'beliefs' register for a region node) down to some domain specified
     by atom_subset
     """
     marginalized_factor = defaultdict(lambda: Polynomial(float_val=0.0))
@@ -748,19 +705,6 @@ def _marginalize_simple(factor, atom_subset):
         marginalized_factor[matching_case] += f_val
 
     return dict(marginalized_factor)
-
-
-def _literal_set_is_consistent(lit_set):
-    """
-    Subroutine for checking if a set of literals (represented with signed integer
-    indices) is consistent; i.e. doesn't contain a literal and its negation at the
-    same time
-    """
-    atm_set = {abs(lit) for lit in lit_set}
-
-    # Inconsistent if and only if lit_set contained both atm & -atm for some atm,
-    # which would be reduced to atm in atm_set
-    return len(atm_set) == len(lit_set)
 
 
 def _consistent_unions(factors):
@@ -846,3 +790,13 @@ def _pairwise_consistent_unions(cumul, next_cases):
                     cumul_new.append((lits2,))
 
     return cumul_new
+
+
+# Power of -1 to all potential table entries
+_exp_m1 = lambda pot: {
+    case: {
+        subcase: Polynomial(float_val=1.0) / val
+        for subcase, val in inner.items()
+    }
+    for case, inner in pot.items()
+}

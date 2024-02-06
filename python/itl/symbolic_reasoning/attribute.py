@@ -1,8 +1,8 @@
-""" Explanation query to BJT factored out """
+""" Explanation query to regiongraphs graphs factored out """
 from itertools import product
 
 from .query import query
-from ..symbolic_reasoning.utils import bjt_extract_likelihood, bjt_replace_likelihood
+from ..symbolic_reasoning.utils import rgr_extract_likelihood, rgr_replace_likelihood
 
 
 # As it is simply impossible to enumerate 'every possible continuous value',
@@ -12,12 +12,10 @@ from ..symbolic_reasoning.utils import bjt_extract_likelihood, bjt_replace_likel
 # that is 'reasonably' weaker that the corresponding literal actually being true.
 LOW = 0.15
 
-def attribute(bjt, bjt_undir, target_event, evidence_atoms, competing_evts, vetos):
+def attribute(reg_gr, target_event, evidence_atoms, competing_evts, vetos):
     """
-    Query a BJT compiled from LP^MLN program to attribute why the specified target
-    event holds, in terms of specified evidence atoms. The provided BJT might or
-    might not have run the belief propagation already, but the belief propagation
-    outcome must be consistent with the provided target event.
+    Query a region graph compiled from LP^MLN program to attribute why the specified
+    target event holds, in terms of specified evidence atoms.
 
     Implements the causal attribution mechanism for Bayesian networks proposed in
     the paper by Koopman and Renooij (2021), appropriately modified for probabilistic
@@ -46,12 +44,10 @@ def attribute(bjt, bjt_undir, target_event, evidence_atoms, competing_evts, veto
     # 'Explanation lattice' as per Koopman and Renooij. Implemented as a dict, where
     # each key corresponds to a subset of evidence and its corresponding value is
     # the label annotation (l_S). We are only interested in sufficient explanations
-    # right now, so we won't track counterfactual modes (M_S). We also store the
-    # incrementally updated BJT's obtained for each possible counterfactuals, so as
-    # to minimize redundant computations
+    # right now, so we won't track counterfactual modes (M_S).
 
-    # For each evidence, find the corresponding likelihood value from the
-    # original BJT, then find possible alternative likelihood values to explore.
+    # For each evidence, find the corresponding likelihood value from the original
+    # region graph, then find possible alternative likelihood values to explore.
     # Will be used for enumerating all possible counterfactual cases below.
     #
     # Our heuristics for choice of the likelihoods: We consider alternatives of
@@ -64,11 +60,11 @@ def attribute(bjt, bjt_undir, target_event, evidence_atoms, competing_evts, veto
     # are the 'norm', or the 'default expectation').
     alt_likelihoods = []
     for evd_atom in evidence_atoms:
-        if evd_atom not in bjt.graph["atoms_map"]:
+        if evd_atom not in reg_gr.graph["atoms_map"]:
             # Visual observation not registered due to very low probability score
             continue
 
-        orig_vev_likelihood = bjt_extract_likelihood(bjt, evd_atom)
+        orig_vev_likelihood = rgr_extract_likelihood(reg_gr, evd_atom)
         if orig_vev_likelihood > 0.5:
             # Some ordering is automatically imposed among the atoms by list index
             alt_likelihoods.append((evd_atom, [LOW]))
@@ -107,7 +103,7 @@ def attribute(bjt, bjt_undir, target_event, evidence_atoms, competing_evts, veto
         label_true = True
 
         backups = {
-            alt_likelihoods[ei][0]: bjt_extract_likelihood(bjt, alt_likelihoods[ei][0])
+            alt_likelihoods[ei][0]: rgr_extract_likelihood(reg_gr, alt_likelihoods[ei][0])
             for ei in ev_atoms_ordered
         }           # For rolling back to original values
 
@@ -117,29 +113,25 @@ def attribute(bjt, bjt_undir, target_event, evidence_atoms, competing_evts, veto
             alt_vals for _, alt_vals in alt_likelihoods
         ])
         for cf_case in counterfactual_cases:
-            # Incremental reasoning with BJT; taking one of the parent's BJT with
-            # matching counterfactual values cached in lattice, replacing target
-            # likelihood values and marking and all nodes with 'outdated' indicators
-            # (which are needed for another round of incremental belief propagation)
 
-            # Modify the BJT for incremental reasoning
+            # Modify the region graph for reasoning
             replacements = {
                 alt_likelihoods[ei][0]: alt_val
                 for ei, alt_val in zip(ev_atoms_ordered, cf_case)
             }
-            bjt_replace_likelihood(bjt, bjt_undir, replacements)
+            rgr_replace_likelihood(reg_gr, replacements)
 
-            # Query the updated BJT for the event probabilities, indirectly invoking
+            # Query the updated graph for the event probabilities, indirectly invoking
             # incremental belief propagation as needed
             max_prob_evt = (None, float("-inf"))
             for evt in [target_event] + competing_evts:
-                _, prob_scores = query(bjt, None, (evt, None), {})
+                _, prob_scores = query(reg_gr, None, (evt, None), {})
 
                 # Update max probability event if applicable
                 evt_prob = [prob for prob, is_evt in prob_scores[()].values() if is_evt][0]
                 if evt_prob > max_prob_evt[1]:
                     max_prob_evt = (evt, evt_prob)
-            bjt_replace_likelihood(bjt, bjt_undir, backups)
+            rgr_replace_likelihood(reg_gr, backups)
 
             assert max_prob_evt[0] is not None
             if max_prob_evt[0] != target_event:

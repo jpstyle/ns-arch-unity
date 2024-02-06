@@ -15,7 +15,7 @@ from ..lpmln import Literal
 from ..lpmln.utils import flatten_cons_ante
 from ..memory.kb import KnowledgeBase
 from ..symbolic_reasoning.query import query
-from ..symbolic_reasoning.utils import bjt_extract_likelihood, bjt_replace_likelihood
+from ..symbolic_reasoning.utils import rgr_extract_likelihood, rgr_replace_likelihood
 
 
 # As it is simply impossible to enumerate 'every possible continuous value',
@@ -84,8 +84,8 @@ def _answer_domain_Q(agent, utt_pointer, translated):
 
     q_vars, (q_cons, q_ante) = question
 
-    bjt_v, _ = agent.symbolic.concl_vis
-    # bjt_vl, _ = symbolic.concl_vis_lang
+    reg_gr_v, _ = agent.symbolic.concl_vis
+    # reg_gr_vl, _ = symbolic.concl_vis_lang
 
     # New dialogue turn & clause index for the answer to be provided
     ti_new = len(agent.lang.dialogue.record)
@@ -126,7 +126,7 @@ def _answer_domain_Q(agent, utt_pointer, translated):
     # critical influence on the symbolic sensemaking process. Make sure such entities, if
     # actually present, are captured in scene graphs by performing visual search as needed.
     if len(agent.lt_mem.kb.entries) > 0:
-        search_specs = _search_specs_from_kb(agent, question, restrictors, bjt_v)
+        search_specs = _search_specs_from_kb(agent, question, restrictors, reg_gr_v)
         if len(search_specs) > 0:
             agent.vision.predict(
                 None, agent.lt_mem.exemplars, specs=search_specs,
@@ -154,11 +154,11 @@ def _answer_domain_Q(agent, utt_pointer, translated):
             # agent.symbolic.sensemake_vis_lang(agent.lang.dialogue)
             # agent.lang.dialogue.sensemaking_vl_snaps[ti_new] = agent.symbolic.concl_vis_lang
 
-            bjt_v, _ = agent.symbolic.concl_vis
-            # bjt_vl, _ = symbolic.concl_vis_lang
+            reg_gr_v, _ = agent.symbolic.concl_vis
+            # reg_gr_vl, _ = symbolic.concl_vis_lang
 
-    # Compute raw answer candidates by appropriately querying compiled BJT
-    answers_raw, _ = agent.symbolic.query(bjt_v, q_vars, (q_cons, q_ante), restrictors)
+    # Compute raw answer candidates by appropriately querying compiled region graph
+    answers_raw, _ = agent.symbolic.query(reg_gr_v, q_vars, (q_cons, q_ante), restrictors)
 
     # Pick out an answer to deliver; maximum confidence
     if len(answers_raw) > 0:
@@ -309,17 +309,17 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
         ]
         target_events = nst_expd_contents + st_expd_contents
 
-        # Fetch the BJT based on which the explanandum (i.e. explanation target)
-        # utterance have been made; that is, shouldn't use BJT compiled *after*
-        # agent has uttered the explanandum statement
+        # Fetch the region graph based on which the explanandum (i.e. explanation
+        # target) utterance have been made; that is, shouldn't use region graph
+        # compiled *after* agent has uttered the explanandum statement
         latest_reasoning_ind = max(
             snap_ti for snap_ti in agent.lang.dialogue.sensemaking_v_snaps
             if snap_ti < ti
         )
-        bjt_v, (kb_prog, _) = agent.lang.dialogue.sensemaking_v_snaps[latest_reasoning_ind]
+        reg_gr_v, (kb_prog, _) = agent.lang.dialogue.sensemaking_v_snaps[latest_reasoning_ind]
         kb_prog_analyzed = KnowledgeBase.analyze_exported_reasoning_program(kb_prog)
         scene_ents = {
-            a[0] for atm in bjt_v.graph["atoms_map"]
+            a[0] for atm in reg_gr_v.graph["atoms_map"]
             for a in atm.args if isinstance(a[0], str)
         }
 
@@ -386,7 +386,7 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
             # Manually select 'competitor' events that could've been the answer
             # in place of the true one (not necessarily mutually exclusive)
             possible_answers = [
-                atm for atm in bjt_v.graph["atoms_map"]
+                atm for atm in reg_gr_v.graph["atoms_map"]
                 if (
                     atm.name in restrictors[probing_Q[0][0][0]] and
                     atm.args==tgt_lit.args
@@ -398,9 +398,8 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
 
             # Obtain a sufficient explanations by causal attribution (greedy search);
             # veto dud explanations like 'Because it looked liked one'
-            bjt_undir = bjt_v.to_undirected()       # Shared for tree traversal
             suff_expl = agent.symbolic.attribute(
-                bjt_v, bjt_undir, tgt_ev, evidence_atoms, competing_evts, vetos=[v_tgt_lit]
+                reg_gr_v, tgt_ev, evidence_atoms, competing_evts, vetos=[v_tgt_lit]
             )
 
             if suff_expl is not None:
@@ -525,31 +524,31 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                         }
                         evidence_atoms = {
                             evd_atm for evd_atm in evidence_atoms
-                            if evd_atm in bjt_v.graph["atoms_map"]
-                        }       # Can try replacement only if `evd_atm` is registered in BJT
+                            if evd_atm in reg_gr_v.graph["atoms_map"]
+                        }       # Can try replacement only if `evd_atm` is registered in graph
 
                         if len(evidence_atoms) > 0:
                             # Potential explanation exists in scene, albeit with a
                             # probability value not high enough. Try raising likelihood
-                            # of relevant evidence atoms and querying the updated BJT
-                            # for ground truth event probability.
+                            # of relevant evidence atoms and querying the updated region
+                            # graph for ground truth event probability.
 
-                            # Obtain a modified BJT where the likelihoods are raised to
+                            # Obtain a modified graph where the likelihoods are raised to
                             # 'sufficiently high' values. (Note we are assuming evidence
                             # literals occur in rules with positive polarity only, which
                             # will suffice within our current scope.)
                             replacements = { evd_atm: HIGH for evd_atm in evidence_atoms }
                             backups = {
-                                evd_atm: bjt_extract_likelihood(bjt_v, evd_atm)
+                                evd_atm: rgr_extract_likelihood(reg_gr_v, evd_atm)
                                 for evd_atm in evidence_atoms
                             }           # For rolling back to original values
-                            bjt_replace_likelihood(bjt_v, bjt_undir, replacements)
+                            rgr_replace_likelihood(reg_gr_v, replacements)
 
-                            # Query the updated BJT for the event probabilities
+                            # Query the updated graph for the event probabilities
                             max_prob_evt = (None, float("-inf"))
                             for atm in possible_answers:
                                 evt = (atm,)
-                                _, prob_scores = query(bjt_v, None, (evt, None), {})
+                                _, prob_scores = query(reg_gr_v, None, (evt, None), {})
 
                                 # Update max probability event if applicable
                                 evt_prob = [
@@ -557,7 +556,7 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                                 ][0]
                                 if evt_prob > max_prob_evt[1]:
                                     max_prob_evt = (evt, evt_prob)
-                            bjt_replace_likelihood(bjt_v, bjt_undir, backups)
+                            rgr_replace_likelihood(reg_gr_v, backups)
 
                             assert max_prob_evt[0] is not None
                             if max_prob_evt[0] == (expected_gt,):
@@ -574,7 +573,8 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                             # Potential explanation doesn't exist in scene. Try adding
                             # hypothetical entities into the scene with appropriate
                             # likelihood values based on the info contained in template.
-                            # Compile a new BJT then query for ground truth probability.
+                            # Compile a new region graph then query for ground truth
+                            # event probability.
                             occurring_vars = {
                                 arg for t_lit in template for arg, is_var in t_lit.args
                                 if is_var
@@ -623,13 +623,13 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                                     scene_new[arg1][field][arg2][conc_ind] = HIGH
 
                             hyp_evidence = agent.lt_mem.kb.visual_evidence_from_scene(scene_new)
-                            bjt_hyp = (kb_prog + hyp_evidence).compile()
+                            reg_gr_hyp = (kb_prog + hyp_evidence).compile()
 
-                            # Query the updated BJT for the event probabilities
+                            # Query the hypothetical region graph for the event probabilities
                             max_prob_evt = (None, float("-inf"))
                             for atm in possible_answers:
                                 evt = (atm,)
-                                _, prob_scores = query(bjt_hyp, None, (evt, None), {})
+                                _, prob_scores = query(reg_gr_hyp, None, (evt, None), {})
 
                                 # Update max probability event if applicable
                                 evt_prob = [
@@ -747,11 +747,11 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
         # Don't know how to handle other non-domain questions
         raise NotImplementedError
 
-def _search_specs_from_kb(agent, question, restrictors, ref_bjt):
+def _search_specs_from_kb(agent, question, restrictors, ref_reg_gr):
     """
     Helper method factored out for extracting specifications for visual search,
     based on the agent's current knowledge-base entries and some sensemaking
-    result provided as a compiled binary join tree (BJT)
+    result provided as a compiled region graph
     """
     q_vars, (cons, _) = question
 
@@ -1054,7 +1054,7 @@ def _search_specs_from_kb(agent, question, restrictors, ref_bjt):
     # # Check if the agent is already (visually) aware of the potential search
     # # targets; if so, disregard this one
     # check_result, _ = agent.symbolic.query(
-    #     ref_bjt, tuple((v, False) for v in search_vars), (lits, None)
+    #     ref_reg_gr, tuple((v, False) for v in search_vars), (lits, None)
     # )
     # if len(check_result) > 0:
     #     continue

@@ -1,15 +1,15 @@
-""" Inference query to BJT factored out """
+""" Inference query to region graphs factored out """
 from itertools import product
 
 from ..lpmln import Rule, Polynomial
 from ..lpmln.utils import flatten_cons_ante
-from ..lpmln.program.compile import bjt_query
+from ..lpmln.program.compile import rg_query
 
 
-def query(bjt, q_vars, event, restrictors):
+def query(reg_gr, q_vars, event, restrictors):
     """
-    Query a BJT compiled from LP^MLN program to estimate the likelihood of each
-    possible answer to the provided question, represented as tuple of entities
+    Query a region graph compiled from LP^MLN program to estimate the likelihood of
+    each possible answer to the provided question, represented as tuple of entities
     (empty tuple for y/n questions). For each entity tuple that have some possible
     models satisfying the provided event specification, compute and return the
     marginal probability.
@@ -51,7 +51,7 @@ def query(bjt, q_vars, event, restrictors):
         assert type(q_vars) == tuple, "Provide q_vars as tuple"
 
         # Set of atoms that appear in models covered by this Models instance
-        atoms_covered = set(bjt.graph["atoms_map"])
+        atoms_covered = set(reg_gr.graph["atoms_map"])
 
         # Set of entities and predicates (along w/ arity info - values defined only for
         # predicate q_var) occurring in atoms_covered
@@ -119,15 +119,15 @@ def query(bjt, q_vars, event, restrictors):
             )
         }
 
-    # Appropriate query key to BJT
+    # Appropriate query key to region graph
     query_keys = {
-        assig: _ev_ins_to_query_key(bjt, ev_ins)
+        assig: _ev_ins_to_query_key(reg_gr, ev_ins)
         for assig, ev_ins in ev_instances.items()
     }
 
     # Obtain unnormalized potential table
     unnorm_potentials = {
-        assig: _query_wrapper(bjt, q_key) for assig, q_key in query_keys.items()
+        assig: _query_wrapper(reg_gr, q_key) for assig, q_key in query_keys.items()
     }
 
     # Compute normalized marginals, then fetch probability scores for the event
@@ -156,7 +156,7 @@ def query(bjt, q_vars, event, restrictors):
     return answers, prob_scores
 
 
-def _ev_ins_to_query_key(bjt, ev_ins):
+def _ev_ins_to_query_key(reg_gr, ev_ins):
     """
     Subroutine for converting grounded event instance into appropriate query key,
     in the form of (frozen)set of signed atom integer indices.
@@ -164,8 +164,8 @@ def _ev_ins_to_query_key(bjt, ev_ins):
     query_key = set()
     for ei in ev_ins:
         if ei.is_fact():
-            if ei.head[0].as_atom() not in bjt.graph["atoms_map"]:
-                # Grounded atom doesn't exist in BJT
+            if ei.head[0].as_atom() not in reg_gr.graph["atoms_map"]:
+                # Grounded atom doesn't exist in region graph
                 if ei.head[0].naf:
                     # ev_ins trivially satisfiable, doesn't need inclusion in key
                     pass
@@ -173,13 +173,13 @@ def _ev_ins_to_query_key(bjt, ev_ins):
                     # ev_ins never satisfiable, query has to give zero potential
                     return None
             else:
-                atm_id = bjt.graph["atoms_map"][ei.head[0].as_atom()]
+                atm_id = reg_gr.graph["atoms_map"][ei.head[0].as_atom()]
                 sign = 1 if ei.head[0].naf==False else -1
                 query_key.add(atm_id * sign)
         else:
             assert ei.is_single_body_constraint()
-            if ei.body[0].as_atom() not in bjt.graph["atoms_map"]:
-                # Grounded atom doesn't exist in BJT
+            if ei.body[0].as_atom() not in reg_gr.graph["atoms_map"]:
+                # Grounded atom doesn't exist in graph
                 if ei.body[0].naf:
                     # ev_ins never satisfiable, query has to give zero potential
                     return None
@@ -187,14 +187,14 @@ def _ev_ins_to_query_key(bjt, ev_ins):
                     # ev_ins trivially satisfiable, doesn't need inclusion in key
                     pass
             else:
-                atm_id = bjt.graph["atoms_map"][ei.body[0].as_atom()]
+                atm_id = reg_gr.graph["atoms_map"][ei.body[0].as_atom()]
                 sign = 1 if ei.body[0].naf==True else -1
                 query_key.add(atm_id * sign)
     
     return frozenset(query_key)
 
 
-def _query_wrapper(bjt, q_key):
+def _query_wrapper(reg_gr, q_key):
     """
     Wrapper subroutine for obtaining an appropriate table of unnormalized potential
     values for the provided query keys. Handle unsatisfiable & trivially satisfiable
@@ -208,4 +208,4 @@ def _query_wrapper(bjt, q_key):
         # Trivially satisfiable query
         return { q_key: Polynomial(float_val=1.0) }
 
-    return bjt_query(bjt, q_key)
+    return rg_query(reg_gr, q_key)

@@ -15,8 +15,8 @@ from ..lpmln.utils import flatten_cons_ante, wrap_args
 
 EPS = 1e-10                  # Value used for numerical stabilization
 SR_THRES = 0.8               # Mismatch surprisal threshold
-U_IN_PR = 1.00               # How much the agent values information provided by the user
-A_IM_PR = 1.00               # How much the agent values inferred implicature
+U_IN_PR = 0.95               # How much the agent values information provided by the user
+A_IM_PR = 0.95               # How much the agent values inferred implicature
 
 # Recursive helper methods for checking whether rule cons/ante is grounded (variable-
 # free), lifted (all variables), contains any predicate referent as argument, or uses
@@ -52,8 +52,8 @@ def identify_mismatch(agent, rule):
         # sensemaking result has been obtained
 
         # Make a yes/no query to obtain the likelihood of content
-        bjt_v, _ = agent.symbolic.concl_vis
-        q_response, _ = agent.symbolic.query(bjt_v, None, rule)
+        reg_gr_v, _ = agent.symbolic.concl_vis
+        q_response, _ = agent.symbolic.query(reg_gr_v, None, rule)
         ev_prob = q_response[()]
 
         surprisal = -math.log(ev_prob + EPS)
@@ -566,16 +566,16 @@ def add_scalar_implicature(agent, pair_rules):
             for pr_prog, dl_prog in agent.episodic_memory
         ]
         deduc_viol_cases = [
-            bjt for bjt in inspection_outputs
-            if any(atm.name=="deduc_viol_0" for atm in bjt.graph["atoms_map"])
+            reg_gr for reg_gr in inspection_outputs
+            if any(atm.name=="deduc_viol_0" for atm in reg_gr.graph["atoms_map"])
         ]
         deduc_viol_probs = [
             {
-                node: bjt.nodes[frozenset({node})]["output_beliefs"]
-                for atm, node in bjt.graph["atoms_map"].items()
+                node: reg_gr.nodes[frozenset({node})]["beliefs"]
+                for atm, node in reg_gr.graph["atoms_map"].items()
                 if atm.name=="deduc_viol_0"
             }
-            for bjt in deduc_viol_cases
+            for reg_gr in deduc_viol_cases
         ]
         deduc_viol_probs = [
             [
@@ -583,13 +583,13 @@ def add_scalar_implicature(agent, pair_rules):
                     potentials[frozenset({node})],
                     sum(potentials.values(), Polynomial(float_val=0.0))
                 )
-                for node, potentials in per_bjt.items()
+                for node, potentials in per_rgr.items()
             ]
-            for per_bjt in deduc_viol_probs
+            for per_rgr in deduc_viol_probs
         ]
         deduc_viol_probs = [
-            sum((unnorm / Z).at_limit() for unnorm, Z in per_bjt) / len(per_bjt)
-            for per_bjt in deduc_viol_probs
+            sum((unnorm / Z).at_limit() for unnorm, Z in per_rgr) / len(per_rgr)
+            for per_rgr in deduc_viol_probs
         ]
 
         # Retract the defeasible inference if refuted by memory of
