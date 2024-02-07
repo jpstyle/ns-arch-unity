@@ -208,7 +208,7 @@ class VisionModule:
                 if masks_provided:
                     # Instance classification mode
                     incr_preds = self.model(image, masks=list(masks.values()))
-                    
+
                 else:
                     # Instance search mode
                     assert specs_provided
@@ -258,13 +258,13 @@ class VisionModule:
                     # Binary classifier induced from pos/neg exemplars exists
                     clf = exemplars.binary_classifiers[conc_type][ci]
                     pred = clf.predict_proba(emb[None])[0]
+                    pred = min(pred[1], 0.99)       # Soften absolute certainty
                     predictions.append(pred)
                 else:
                     # No binary classifier exists due to lack of either positive
                     # or negative exemplars, fall back to default estimation
-                    fallback_pred = np.array([1.0-DEF_CON, DEF_CON])
-                    predictions.append(fallback_pred)
-            return np.stack(predictions)[:,1]
+                    predictions.append(DEF_CON)
+            return np.stack(predictions)
         else:
             # Empty concept inventory, likely at the very beginning of training
             # an agent from scratch,

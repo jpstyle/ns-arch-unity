@@ -2,8 +2,8 @@
 Simulated user which takes part in dialogue with rule-based pattern matching
 -- no cognitive architecture ongoing within the user
 """
+import os
 import re
-import glob
 import copy
 import random
 
@@ -39,8 +39,9 @@ class SimulatedTeacher:
         # Load appropriate domain knowledge stored as yamls in assets dir
         self.domain_knowledge = {}
         yml_path = f"{cfg.paths.assets_dir}/domain_knowledge/{cfg.exp.concept_set}.yaml"
-        with open(yml_path) as yml_f:
-            self.domain_knowledge.update(yaml.safe_load(yml_f))
+        if os.path.exists(yml_path):
+            with open(yml_path) as yml_f:
+                self.domain_knowledge.update(yaml.safe_load(yml_f))
         # Convert lists to sets for order invariance
         for info in self.domain_knowledge.values():
             if info["part_attributes"] is None:

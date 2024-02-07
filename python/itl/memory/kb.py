@@ -7,7 +7,7 @@ from ..lpmln import Literal, Rule, Program
 from ..lpmln.utils import wrap_args, flatten_cons_ante
 
 
-P_C = 0.05              # Default catchall hypothesis probability
+P_C = 0.01              # Default catchall hypothesis probability
 SCORE_THRES = 0.35      # Only consider recognised categories with category score higher
                         # than this value, unless focused attention warranted by KB
 LOWER_THRES = 0.25      # Lower threshold for predicates that deserve closer look

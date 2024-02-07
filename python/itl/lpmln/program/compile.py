@@ -134,6 +134,8 @@ def compile(prog):
 
         all_annotated = all("counting_num" in reg_gr.nodes[r] for r in reg_gr.nodes)
 
+    reg_gr.graph["converged"] = False
+
     return reg_gr
 
 
@@ -151,7 +153,8 @@ def rg_query(reg_gr, q_key):
             relevant_cliques, key=lambda x: len(list(x[0])+list(x[1]))
         )[0]
 
-        belief_propagation(reg_gr)
+        if not reg_gr.graph["converged"]:
+            belief_propagation(reg_gr)
         beliefs = reg_gr.nodes[smallest_node]["beliefs"]
 
         # Marginalize and return
@@ -385,16 +388,10 @@ def belief_propagation(reg_gr):
         for p, r in reg_gr.edges
     }
 
-    # Test GBP convergence by tracking atom marginals
-    converged = True
-    atm_marginals = {
-        atm: None for atm in reg_gr.graph["atoms_map"]
-        if atm.name.startswith("cls_")
-    }
-
-    for _ in range(10):
+    for x in range(15):
         # Continue iterating over the parent-to-child messages to update their values,
-        # until convergence (max 10 iterations)
+        # until convergence
+        # (Caveat: Not explicitly testing for convergence currently, max 15 iterations)
 
         # Collect old message values
         msgs_old = { e: reg_gr.edges[e].get("message") for e in reg_gr.edges }
@@ -485,22 +482,10 @@ def belief_propagation(reg_gr):
                 for case, inner in current_beliefs.items()
             }
 
-            # Track & compare against previous marginal to test convergence
-            prev_mgl = atm_marginals[full_atom]
-            curr_mgl = current_beliefs[frozenset(atoms)] / \
-                sum(current_beliefs.values(), Polynomial(float_val=0.0))
-            curr_mgl = curr_mgl.at_limit()
-            if prev_mgl is None or abs(prev_mgl-curr_mgl) > 0.05:
-                converged = False
-            atm_marginals[full_atom] = curr_mgl
-
             # Update the output belief storage register for the node
             reg_gr.nodes[r]["beliefs"] = current_beliefs
-
-        if converged:
-            break
-        else:
-            converged = True
+    
+    reg_gr.graph["converged"] = True
 
 
 def _update_message(reg_gr, from_node, to_node, msgs_old, partition):
@@ -600,10 +585,16 @@ def _update_message(reg_gr, from_node, to_node, msgs_old, partition):
             for case, inner in righthand_side.items()
         }
 
+    righthand_side = _normalize_potential(righthand_side)
+
     # Populate the message storage register for the edge with the pair (RHS value,
     # remainder of the message product if any)
+    old_potential = reg_gr.edges[(from_node, to_node)]["message"]
+    new_potential = _mix_factors_outer(old_potential[0], righthand_side)
+    new_potential = _normalize_potential(new_potential)
+
     reg_gr.edges[(from_node, to_node)]["message"] = (
-        righthand_side, messages_to_update - {(from_node, to_node)}
+        new_potential, messages_to_update - {(from_node, to_node)}
     )
 
 
@@ -707,6 +698,68 @@ def _marginalize_simple(factor, atom_subset):
     return dict(marginalized_factor)
 
 
+def _mix_factors_outer(old_factor, update_factor, momentum=0.2):
+    """
+    Subroutine for mixing potential values of previous iteration with a newer
+    one with a certain mixing ratio (momentum), at the outer layer
+    """
+    assert momentum > 0 and momentum <= 1
+    mmt_1m_poly = Polynomial(float_val=1-momentum)
+
+    if old_factor is None:
+        # Old is empty
+        new_factor = {
+            case: {
+                subcase: val * mmt_1m_poly
+                for subcase, val in inner.items()
+            }
+            for case, inner in update_factor.items()
+        }
+    else:
+        # Valid unions of cases
+        valid_cases = _consistent_unions([old_factor, update_factor])
+
+        # Compute entry values for possible cases considered
+        new_factor = {}
+        for case_common, case_specifics in valid_cases.items():
+            for case_sp in case_specifics:
+                # Corresponding entry fetched from the factor
+                old_entry = old_factor[frozenset.union(case_sp[0], case_common)]
+                update_entry = update_factor[frozenset.union(case_sp[1], case_common)]
+
+                case_union = frozenset.union(case_common, *case_sp)
+
+                # Outer-layer combination where entries can be considered 'mini-factors'
+                # defined per postive atom clearances
+                new_factor[case_union] = _mix_factors_inner(
+                    old_entry, update_entry, momentum
+                )
+
+    return new_factor
+
+
+def _mix_factors_inner(old_factor, update_factor, momentum):
+    """
+    Subroutine for mixing two factors at the inner-layer, using the provided
+    momentum as mixing ratio 
+    """
+    mmt_poly = Polynomial(float_val=momentum)
+    mmt_1m_poly = Polynomial(float_val=1-momentum)
+
+    # Compute entry values for possible cases considered
+    mixed_factor = {}
+    for case in set(old_factor) | set(update_factor):
+        # Corresponding entry fetched from the factor, with default value of 0
+        old_entry = old_factor.get(case, Polynomial(float_val=0.0))
+        update_entry = update_factor.get(case, Polynomial(float_val=0.0))
+
+        # Linear mixing with momentum ratio
+        new_entry = (old_entry * mmt_poly) + (update_entry * mmt_1m_poly)
+        mixed_factor[case] = new_entry
+
+    return mixed_factor
+
+
 def _consistent_unions(factors):
     """
     Efficient factor combination by exploiting factorization with common atom
@@ -790,6 +843,23 @@ def _pairwise_consistent_unions(cumul, next_cases):
                     cumul_new.append((lits2,))
 
     return cumul_new
+
+
+def _normalize_potential(potential):
+    """ Normalize the unnormalized potential entries """
+    Z = sum(
+        [val for inner in potential.values() for val in inner.values()],
+        Polynomial(float_val=0)
+    )
+    rescaled_potential = {
+        case: {
+            subcase: val / Z
+            for subcase, val in inner.items()
+        }
+        for case, inner in potential.items()
+    }
+
+    return rescaled_potential
 
 
 # Power of -1 to all potential table entries

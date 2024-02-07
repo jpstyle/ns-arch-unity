@@ -15,8 +15,8 @@ from ..lpmln.utils import flatten_cons_ante, wrap_args
 
 EPS = 1e-10                  # Value used for numerical stabilization
 SR_THRES = 0.8               # Mismatch surprisal threshold
-U_IN_PR = 0.95               # How much the agent values information provided by the user
-A_IM_PR = 0.95               # How much the agent values inferred implicature
+U_IN_PR = 0.99               # How much the agent values information provided by the user
+A_IM_PR = 0.99               # How much the agent values inferred implicature
 
 # Recursive helper methods for checking whether rule cons/ante is grounded (variable-
 # free), lifted (all variables), contains any predicate referent as argument, or uses

@@ -64,6 +64,7 @@ def rgr_replace_likelihood(reg_gr, replacements):
             # Making sure likelihood change is reflected at most once
             break
 
-    # Clean up existing messages
+    # Clean up existing messages and reset convergence flag
     for e in reg_gr.edges:
         reg_gr.edges[e]["message"] = (None, set())
+    reg_gr.graph["converged"] = False

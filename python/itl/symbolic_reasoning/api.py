@@ -25,7 +25,7 @@ from ..lpmln.utils import wrap_args, flatten_cons_ante
 TAB = "\t"              # For use in format strings
 
 EPS = 1e-10             # Value used for numerical stabilization
-U_IN_PR = 0.95          # How much the agent values information provided by the user
+U_IN_PR = 0.99          # How much the agent values information provided by the user
 
 class SymbolicReasonerModule:
 
