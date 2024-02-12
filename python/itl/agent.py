@@ -206,11 +206,17 @@ class ITLAgent:
                 if utt_string.startswith("But ") or utt_string.startswith("And "):
                     pf_len = 4
                     utt_string = utt_string[pf_len:].capitalize()
-                    dem_ref = { (k[0]-pf_len, k[1]-pf_len): v for k, v in dem_ref.items() }
+                    dem_ref_items = list(dem_ref.items())
+                    for k, v in dem_ref_items: del dem_ref[k]
+                    for k, v in dem_ref_items:
+                        dem_ref[(k[0]-pf_len, k[1]-pf_len)] = v
                 if utt_string.startswith("It's true "):
                     pf_len = 10
                     utt_string = utt_string[pf_len:].capitalize()
-                    dem_ref = { (k[0]-pf_len, k[1]-pf_len): v for k, v in dem_ref.items() }
+                    dem_ref_items = list(dem_ref.items())
+                    for k, v in dem_ref_items: del dem_ref[k]
+                    for k, v in dem_ref_items:
+                        dem_ref[(k[0]-pf_len, k[1]-pf_len)] = v
                 if utt_string.endswith(", too."):
                     sf_len = 5
                     utt_string = utt_string[:-sf_len-1] + "."

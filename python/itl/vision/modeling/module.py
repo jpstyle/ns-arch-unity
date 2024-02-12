@@ -396,7 +396,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
                 for conjunct in search_conds:
                     # Obtain t-conorms (max here) across disjunct concepts in the conjunct
                     conjunct_score = max(
-                        bin_clf.predict_proba(emb[None])[0][1].item()
+                        bin_clf.predict_proba(emb[None])[0][1].item() \
+                            if bin_clf is not None else 0.0
                         for _, bin_clf in conjunct
                     )
                     # Obtain t-norm between the conjunct score and aggregate score

@@ -388,7 +388,7 @@ def belief_propagation(reg_gr):
         for p, r in reg_gr.edges
     }
 
-    for x in range(15):
+    for _ in range(15):
         # Continue iterating over the parent-to-child messages to update their values,
         # until convergence
         # (Caveat: Not explicitly testing for convergence currently, max 15 iterations)

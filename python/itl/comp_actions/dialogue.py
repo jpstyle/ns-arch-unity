@@ -673,7 +673,8 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                     answer_nl = "Because I thought "
                     dem_refs = {}; dem_offset = len(answer_nl)
 
-                    for i, (evd_atom, pr_val) in enumerate(evidence_likelihoods.items()):
+                    reasons = {}
+                    for evd_atom, pr_val in evidence_likelihoods.items():
                         # For each counterfactual explanation, add appropriate string
                         conc_pred = evd_atom.name.strip("v_")
                         conc_type, conc_ind = conc_pred.split("_")
@@ -690,8 +691,8 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                             reason_prefix = "this might not be a "
 
                             # Demonstrative "this" refers to the (potential) part
-                            dem_refs[(dem_offset, dem_offset+4)] = \
-                                agent.lang.dialogue.referents["env"][evd_atom.args[0][0]]["mask"]
+                            dem_ref = evd_atom.args[0][0]
+
                         else:
                             # Wasn't aware of any instance of the potential explanans
                             # template in the scene
@@ -701,14 +702,21 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                             reason_prefix = "this doesn't have a "
 
                             # Demonstrative "this" refers to the whole object
-                            dem_refs[(dem_offset, dem_offset+4)] = \
-                                agent.lang.dialogue.referents["env"][tgt_lit.args[0][0]]["mask"]
+                            dem_ref = tgt_lit.args[0][0]
+
+                            # Avoid redundancy
+                            if conc_nl in reasons: continue
+
+                        reasons[conc_nl] = (reason_prefix, dem_ref)
+
+                    for i, (conc_nl, (reason_prefix, dem_ref)) in enumerate(reasons.items()):
+                        # Compose NL explanation utterance string
 
                         # Append a suffix appropriate for the number of reasons
-                        if i == len(evidence_likelihoods)-1:
+                        if i == len(reasons)-1:
                             # Last entry, period
                             reason_suffix = "."
-                        elif i == len(evidence_likelihoods)-2:
+                        elif i == len(reasons)-2:
                             # Next to last entry, comma+and
                             reason_suffix = ", and "
                         else:
@@ -718,7 +726,9 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                         reason_nl = f"{reason_prefix}{conc_nl}{reason_suffix}"
                         answer_nl += reason_nl
 
-                        # Shift offset
+                        # Add demonstrative reference and shift offset
+                        dem_refs[(dem_offset, dem_offset+4)] = \
+                                agent.lang.dialogue.referents["env"][dem_ref]["mask"]
                         dem_offset += len(reason_nl)
 
                     # Push the translated answer to buffer of utterances to generate; won't

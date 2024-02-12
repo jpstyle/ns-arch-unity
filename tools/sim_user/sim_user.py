@@ -258,7 +258,7 @@ class SimulatedTeacher:
                 # Part types that actually play role for distinguishing conc_gt vs. conc_ans
                 distinguishing_part_types = {p for _, p in conc_diffs["parts"]}
 
-                diff_knowledge_incomplete = False
+                has_diff_knowledge = False
                 for (part, reason_type), (_, reference) in zip(reasons, dem_refs):
                     # For each part statement given as explanation, provide feedback
                     # on whether the agent's judgement was correct (will be most likely
@@ -280,11 +280,10 @@ class SimulatedTeacher:
                     # or anything
                     assert part_type in self.current_gt_masks
 
-                    if part not in distinguishing_part_types:
-                        # The part type cited in the reason does not actually bear any
-                        # relevance as to distinguishing the agent answer vs. ground
-                        # truth concepts. 
-                        diff_knowledge_incomplete = True
+                    if part in distinguishing_part_types:
+                        # The part type cited in the reason bears relevance as to
+                        # distinguishing the agent answer vs. ground truth concepts.
+                        has_diff_knowledge = True
 
                     if isinstance(reference, str):
                         # Reference by Unity GameObject string name; test by the object
@@ -317,14 +316,14 @@ class SimulatedTeacher:
 
                             if match_score > MATCH_THRES:
                                 # The part claim itself is true
-                                response.append({
+                                _add_after_redundancy_check(response, {
                                     "utterance": f"It's true this is a {part}.",
                                     "pointing": { (10, 14): reference.reshape(-1).tolist() }
                                 })
                                 pending_connective = "but"
                             else:
                                 # The part claim is false, need correction
-                                response.append({
+                                _add_after_redundancy_check(response, {
                                     "utterance": f"This is not a {part}.",
                                     "pointing": { (0, 4): reference.reshape(-1).tolist() }
                                 })
@@ -336,7 +335,7 @@ class SimulatedTeacher:
                             if part_gt_prop:
                                 conc_gt_pl = pluralize(conc_gt).capitalize()
                                 part_pl = pluralize(part)
-                                response.append(_prepend_with_connective({
+                                _add_after_redundancy_check(response, _prepend_with_connective({
                                     "utterance": f"{conc_gt_pl} have {part_pl}, too.",
                                     "pointing": {}
                                 }, pending_connective))
@@ -361,7 +360,7 @@ class SimulatedTeacher:
                                 if match_score > MATCH_THRES:
                                     # Sufficient overlap, match good enough; endorse the
                                     # proposed mask reference as correct
-                                    response.append({
+                                    _add_after_redundancy_check(response, {
                                         "utterance": f"This is a {part}.",
                                         "pointing": { (0, 4): reference.reshape(-1).tolist() }
                                     })
@@ -369,11 +368,11 @@ class SimulatedTeacher:
                                 else:
                                     # Not enough overlap, bad match; reject the suspected
                                     # part reference and provide correct mask
-                                    response.append({
+                                    _add_after_redundancy_check(response, {
                                         "utterance": f"This is not a {part}.",
                                         "pointing": { (0, 4): reference.reshape(-1).tolist() }
                                     })
-                                    response.append({
+                                    _add_after_redundancy_check(response, {
                                         "utterance": f"This is a {part}.",
                                         "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
                                     })
@@ -385,7 +384,7 @@ class SimulatedTeacher:
                                 gt_mask = self.current_gt_masks[part_type]
 
                                 # The absence claim is false; point to the ground-truth
-                                response.append({
+                                _add_after_redundancy_check(response, {
                                     "utterance": f"This is a {part}.",
                                     "pointing": { (0, 4): gt_mask.reshape(-1).tolist() }
                                 })
@@ -397,7 +396,7 @@ class SimulatedTeacher:
                             if part_ans_prop:
                                 conc_ans_pl = pluralize(conc_ans).capitalize()
                                 part_pl = pluralize(part)
-                                response.append(_prepend_with_connective({
+                                _add_after_redundancy_check(response, _prepend_with_connective({
                                     "utterance": f"{conc_ans_pl} have {part_pl}, too.",
                                     "pointing": {}
                                 }, pending_connective))
@@ -409,7 +408,7 @@ class SimulatedTeacher:
 
                 # If imperfect agent knowledge is revealed, provide appropriate
                 # feedback regarding generic differences between conc_gt vs. conc_ans
-                if diff_knowledge_incomplete:
+                if not has_diff_knowledge:
                     conc_diff_feedback = [
                         _prepend_with_connective(fb, pending_connective) if i==0 else fb
                         for i, fb in enumerate(_properties_to_nl(conc_diffs))
@@ -593,3 +592,9 @@ def _prepend_with_connective(response, connective):
         "pointing": response["pointing"]
     }
     return response_new
+
+
+def _add_after_redundancy_check(outgoing_buffer, feedback):
+    """ Add to buffer of outgoing feedback messages only if not already included """
+    if feedback in outgoing_buffer: return
+    outgoing_buffer.append(feedback)
