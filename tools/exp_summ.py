@@ -54,6 +54,8 @@ def main(cfg):
         lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     )               # This is one ugly nesting but bear with me, myself...
 
+    results_cumulReg_with_seed = {}
+
     all_seeds = set()
 
     # Collect results
@@ -77,7 +79,10 @@ def main(cfg):
                     # Header column; 'episode,cumulative_regret'
                     _ = next(reader)
 
-                    curve = np.array([[int(ep_num), int(regret)] for ep_num, regret in reader])
+                    row = [row_data for row_data in reader]
+                    curve = np.array([
+                        [int(ep_num), int(regret)] for ep_num, regret, _ in row
+                    ])
 
                     # Aggregate cumulative regret curve data
                     strat_combi = (strat_fb, strat_gn, strat_as)
@@ -92,6 +97,11 @@ def main(cfg):
                         results_cumulReg[strat_combi] = {
                             ep_num: [regret] for ep_num, regret in curve
                         }
+
+                    # Also prepare data for cumul. regret difference curve
+                    results_cumulReg_with_seed[(strat_combi, seed)] = {
+                        ep_num: regret for ep_num, regret in curve
+                    }
 
             elif data_type == "outputs":
                 # Test question-answer pairs, from which learning curves and confusion
@@ -137,79 +147,79 @@ def main(cfg):
 
     # Pre-defined ordering for listing legends
     config_ord = [
-        # "semOnly_minHelp_doNotLearn", "semOnly_minHelp_alwaysLearn",
-        "semOnly_medHelp_doNotLearn", "semOnly_medHelp_alwaysLearn",
-        "semOnly_maxHelpNoexpl_doNotLearn", "semOnly_maxHelpNoexpl_alwaysLearn",
-        "semOnly_maxHelpExpl_doNotLearn", "semOnly_maxHelpExpl_alwaysLearn",
-        "semOnly_maxHelpExpl2_doNotLearn", "semOnly_maxHelpExpl2_alwaysLearn",
-        # "semNeg_maxHelp_doNotLearn", "semNeg_maxHelp_alwaysLearn",
-        # "semNegScal_maxHelp_doNotLearn", "semNegScal_maxHelp_alwaysLearn",
+        # "semOnly_minHelp_doNotLearn", "semOnly_minHelp_threshold",
+        "semOnly_medHelp_doNotLearn", "semOnly_medHelp_threshold",
+        "semOnly_maxHelpNoexpl_doNotLearn", "semOnly_maxHelpNoexpl_threshold",
+        "semOnly_maxHelpExpl_doNotLearn", "semOnly_maxHelpExpl_threshold",
+        "semOnly_maxHelpExpl2_doNotLearn", "semOnly_maxHelpExpl2_threshold",
+        # "semNeg_maxHelp_doNotLearn", "semNeg_maxHelp_threshold",
+        # "semNegScal_maxHelp_doNotLearn", "semNegScal_maxHelp_threshold",
     ]
     config_aliases = {
         # "semOnly_minHelp_doNotLearn": "minHelp_doNotLearn",
-        # "semOnly_minHelp_alwaysLearn": "minHelp_alwaysLearn",
+        # "semOnly_minHelp_threshold": "minHelp_threshold",
 
         "semOnly_medHelp_doNotLearn": "Vision",
-        "semOnly_medHelp_alwaysLearn": "Vision",
+        "semOnly_medHelp_threshold": "Vision",
 
         "semOnly_maxHelpNoexpl_doNotLearn": "Vision+Generic",
-        "semOnly_maxHelpNoexpl_alwaysLearn": "Vision+Generic",
+        "semOnly_maxHelpNoexpl_threshold": "Vision+Generic",
 
         "semOnly_maxHelpExpl_doNotLearn": "Vision+Generic+ExplSuff",
-        "semOnly_maxHelpExpl_alwaysLearn": "Vision+Generic+ExplSuff",
+        "semOnly_maxHelpExpl_threshold": "Vision+Generic+ExplSuff",
 
         "semOnly_maxHelpExpl2_doNotLearn": "Vision+Generic+ExplSuffCtfl",
-        "semOnly_maxHelpExpl2_alwaysLearn": "Vision+Generic+ExplSuffCtfl",
+        "semOnly_maxHelpExpl2_threshold": "Vision+Generic+ExplSuffCtfl",
 
         # "semNeg_maxHelp_doNotLearn": "maxHelp_semNeg_doNotLearn",
-        # "semNeg_maxHelp_alwaysLearn": "maxHelp_semNeg_alwaysLearn",
+        # "semNeg_maxHelp_threshold": "maxHelp_semNeg_threshold",
         
         # "semNegScal_maxHelp_doNotLearn": "maxHelp_semNegScal_doNotLearn",
-        # "semNegScal_maxHelp_alwaysLearn": "maxHelp_semNegScal_alwaysLearn",
+        # "semNegScal_maxHelp_threshold": "maxHelp_semNegScal_threshold",
     }   # To be actually displayed in legend
     config_colors = {
         # "semOnly_minHelp_doNotLearn": "tab:red",
-        # "semOnly_minHelp_alwaysLearn": "tab:red",
+        # "semOnly_minHelp_threshold": "tab:red",
 
         "semOnly_medHelp_doNotLearn": "tab:orange",
-        "semOnly_medHelp_alwaysLearn": "tab:orange",
+        "semOnly_medHelp_threshold": "tab:orange",
 
         "semOnly_maxHelpNoexpl_doNotLearn": "tab:green",
-        "semOnly_maxHelpNoexpl_alwaysLearn": "tab:green",
+        "semOnly_maxHelpNoexpl_threshold": "tab:green",
 
         "semOnly_maxHelpExpl_doNotLearn": "tab:blue",
-        "semOnly_maxHelpExpl_alwaysLearn": "tab:blue",
+        "semOnly_maxHelpExpl_threshold": "tab:blue",
 
         "semOnly_maxHelpExpl2_doNotLearn": "tab:purple",
-        "semOnly_maxHelpExpl2_alwaysLearn": "tab:purple",
+        "semOnly_maxHelpExpl2_threshold": "tab:purple",
 
         # "semNeg_maxHelp_doNotLearn": "tab:blue",
-        # "semNeg_maxHelp_alwaysLearn": "tab:blue",
+        # "semNeg_maxHelp_threshold": "tab:blue",
 
         # "semNegScal_maxHelp_doNotLearn": "tab:purple",
-        # "semNegScal_maxHelp_alwaysLearn": "tab:purple",
+        # "semNegScal_maxHelp_threshold": "tab:purple",
     }
     config_lineStyles = {
         # "semOnly_minHelp_doNotLearn": "--",
-        # "semOnly_minHelp_alwaysLearn": "-",
+        # "semOnly_minHelp_threshold": "-",
 
         "semOnly_medHelp_doNotLearn": "-",
-        "semOnly_medHelp_alwaysLearn": "-",
+        "semOnly_medHelp_threshold": "-",
 
         "semOnly_maxHelpNoexpl_doNotLearn": "-",
-        "semOnly_maxHelpNoexpl_alwaysLearn": "-",
+        "semOnly_maxHelpNoexpl_threshold": "-",
 
         "semOnly_maxHelpExpl_doNotLearn": "-",
-        "semOnly_maxHelpExpl_alwaysLearn": "-",
+        "semOnly_maxHelpExpl_threshold": "-",
 
         "semOnly_maxHelpExpl2_doNotLearn": "-",
-        "semOnly_maxHelpExpl2_alwaysLearn": "-",
+        "semOnly_maxHelpExpl2_threshold": "-",
 
         # "semNeg_maxHelp_doNotLearn": "--",
-        # "semNeg_maxHelp_alwaysLearn": "-",
+        # "semNeg_maxHelp_threshold": "-",
 
         # "semNegScal_maxHelp_doNotLearn": "--",
-        # "semNegScal_maxHelp_alwaysLearn": "-",
+        # "semNegScal_maxHelp_threshold": "-",
     }
 
     # Aggregate and visualize: cumulative regret curve
@@ -243,7 +253,7 @@ def main(cfg):
         # Plot curve
         ax.set_xlabel("# training episodes")
         ax.set_ylabel("cumulative regret")
-        ax.set_ylim(0, ymax * 1.1)
+        ax.set_ylim(0, (ymax+1) * 1.1)
         ax.grid()
 
         # Ordering legends according to the prespecified ordering above
@@ -258,6 +268,81 @@ def main(cfg):
         
         ax.set_title(f"Cumulative regret curve (N={len(all_seeds)} per config)")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulReg.png"))
+
+        # Also plot difference curves
+        results_cumulReg_diffs = {}
+        for (strat_combi, seed), data in results_cumulReg_with_seed.items():
+            strat_fb, strat_gn, strat_as = strat_combi
+            ref_combi = ("medHelp", strat_gn, strat_as)
+
+            if (ref_combi, seed) in results_cumulReg_with_seed:
+                ref_data = results_cumulReg_with_seed[(ref_combi, seed)]
+                diff_data = {
+                    ep_num: regret-ref_data[ep_num] for ep_num, regret in data.items()
+                }
+
+                if strat_combi in results_cumulReg_diffs:
+                    stats_agg = results_cumulReg_diffs[strat_combi]
+                    for ep_num, regret_diff in diff_data.items():
+                        if ep_num in stats_agg:
+                            stats_agg[ep_num].append(regret_diff)
+                        else:
+                            stats_agg[ep_num] = [regret_diff]
+                else:
+                    results_cumulReg_diffs[strat_combi] = {
+                        ep_num: [regret_diff]
+                        for ep_num, regret_diff in diff_data.items()
+                    }
+
+        _, ax = plt.subplots(figsize=(8, 6), dpi=80)
+        ymax = ymin = 0
+
+        config_lineStyles_diff = {
+            combi: "--" if "medHelp" in combi else style
+            for combi, style in config_lineStyles.items()
+        }       # Where reference is dashed line
+        for (strat_fb, strat_gn, strat_as), data in results_cumulReg_diffs.items():
+            stats = [
+                (i, np.mean(rgds), 1.96 * np.std(rgds)/np.sqrt(len(rgds)))
+                for i, rgds in data.items()
+            ]
+            ymax = max(ymax, max(mrgd+cl for _, mrgd, cl in stats))
+            ymin = min(ymin, min(mrgd-cl for _, mrgd, cl in stats))
+
+            # Plot mean curve
+            ax.plot(
+                [i+1 for i, _, _ in stats],
+                [mrgd for _, mrgd, _ in stats],
+                label=f"{strat_gn}_{strat_fb}_{strat_as}",
+                color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
+                linestyle=config_lineStyles_diff[f"{strat_gn}_{strat_fb}_{strat_as}"]
+            )
+            # Plot confidence intervals
+            ax.fill_between(
+                [i+1 for i, _, _ in stats],
+                [mrgd-cl for _, mrgd, cl in stats],
+                [mrgd+cl for _, mrgd, cl in stats],
+                color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
+            )
+
+        # Plot curve
+        ax.set_xlabel("# training episodes")
+        ax.set_ylabel("cumulative regret difference")
+        ax.set_ylim((ymin-1) * 1.1, (ymax+1) * 1.1)
+        ax.grid()
+
+        # Ordering legends according to the prespecified ordering above
+        handles, labels = ax.get_legend_handles_labels()
+        hls_sorted = sorted(
+            [(h, l) for h, l in zip(handles, labels)],
+            key=lambda x: config_ord.index(x[1])
+        )
+        handles = [hl[0] for hl in hls_sorted]
+        labels = [config_aliases.get(hl[1], hl[1]) for hl in hls_sorted]
+        ax.legend(handles, labels)
+        
+        ax.set_title(f"Cumulative regret difference curve (N={len(all_seeds)} per config)")
+        plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulRegDiff.png"))
 
     # Aggregate and visualize: learning curve
     if len(results_learningCurve) > 0:

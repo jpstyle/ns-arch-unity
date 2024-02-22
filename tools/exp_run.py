@@ -399,23 +399,29 @@ def main(cfg):
         out_csv_fname = f"outputs_{out_csv_fname}"
 
         with open(os.path.join(results_path, out_csv_fname), "w") as out_csv:
-            out_csv.write("episode,ground_truth,answer,reason_type\n")
+            out_csv.write("episode,ground_truth,answer\n")
 
             for i, record in enumerate(teacher.episode_records):
                 for gt_conc, ep_log in record.items():
                     ans_conc = ep_log["answer"]
-                    reason_type = ep_log["reason"]
-                    out_csv.write(f"{i+1},{gt_conc},{ans_conc},{reason_type}\n")
+                    out_csv.write(f"{i+1},{gt_conc},{ans_conc}\n")
 
     else:
         # Otherwise (i.e., learning enabled), save cumulative regret curves to output dir
         out_csv_fname = f"cumulReg_{exp_tag}.csv"
 
         with open(os.path.join(results_path, out_csv_fname), "w") as out_csv:
-            out_csv.write("episode,cumulative_regret\n")
+            out_csv.write("episode,cumulative_regret,reason_type\n")
 
-            for regrets, total in mistakes["__all__"]:
-                out_csv.write(f"{total},{regrets}\n")
+            training_log = zip(mistakes["__all__"], [{}] + teacher.episode_records)
+            for (regrets, total), ep_rec in training_log:
+                ep_log = list(ep_rec.values())[0] if len(ep_rec) > 0 else {}
+                if "reason" in ep_log:
+                    reason_type = ep_log["reason"]
+                else:
+                    reason_type = "na"
+
+                out_csv.write(f"{total},{regrets},{reason_type}\n")
 
 
 if __name__ == "__main__":

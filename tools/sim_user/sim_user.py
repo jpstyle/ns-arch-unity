@@ -226,7 +226,7 @@ class SimulatedTeacher:
                 assert self.strat_feedback.startswith("maxHelpExpl")
 
                 # Log (lack of) cited reasons
-                self.current_episode_record[string_name]["reason"] = "null"
+                self.current_episode_record[string_name]["reason"] = "noExpl"
 
                 conc_gt = string_name
                 conc_ans = self.current_episode_record[string_name]["answer"]
