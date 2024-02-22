@@ -180,7 +180,8 @@ class ITLAgent:
         """ Handle provided visual input """
         self.vision.new_input_provided = new_scene
         if self.vision.new_input_provided:
-            self.vision.last_input = usr_in
+            self.vision.previous_input = self.vision.latest_input
+            self.vision.latest_input = usr_in
 
     def _lang_inp(self, usr_in, pointing):
         """ Handle provided language input (from user) """
@@ -231,7 +232,7 @@ class ITLAgent:
             except IndexError as e:
                 logger.info(str(e))
             else:
-                self.lang.last_input = parsed_input
+                self.lang.latest_input = parsed_input
 
     def _update_belief(self, pointing):
         """ Form beliefs based on visual and/or language input """
@@ -247,12 +248,13 @@ class ITLAgent:
         # For showing visual UI on only the first time
         vis_ui_on = self.vis_ui_on
 
-        # Previous dialogue record and visual context from currently stored values
+        # Translated dialogue record and visual context from currently stored values
+        # (scene may or may not change)
         prev_translated = self.symbolic.translate_dialogue_content(self.lang.dialogue)
-        prev_scene = self.vision.scene
+        prev_vis_scene = self.vision.scene
         prev_pr_prog = self.symbolic.concl_vis[1][1] if self.symbolic.concl_vis else None
         prev_kb = self.kb_snap
-        prev_context = (prev_scene, prev_pr_prog, prev_kb)
+        prev_context = (prev_vis_scene, prev_pr_prog, prev_kb)
 
         # Some cleaning steps needed whenever visual context changes
         if self.vision.new_input_provided:
@@ -292,7 +294,7 @@ class ITLAgent:
             if self.vision.new_input_provided:
                 # Ground raw visual perception with scene graph generation module
                 self.vision.predict(
-                    self.vision.last_input, self.lt_mem.exemplars,
+                    self.vision.latest_input, self.lt_mem.exemplars,
                     visualize=vis_ui_on, lexicon=self.lt_mem.lexicon
                 )
                 vis_ui_on = False
@@ -312,7 +314,7 @@ class ITLAgent:
                 self.lang.dialogue.record = self.lang.dialogue.record[:ti_last]
 
                 # Understand the user input in the context of the dialogue
-                self.lang.understand(self.lang.last_input, pointing=pointing)
+                self.lang.understand(self.lang.latest_input, pointing=pointing)
 
             ents_updated = False
             if self.vision.scene is not None:

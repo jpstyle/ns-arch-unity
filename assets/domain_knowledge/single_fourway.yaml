@@ -21,7 +21,8 @@
 
 base truck:
     supertype: truck
-    parts: {}
+    parts:
+        load: platform
     part_attributes: null
 
 dump truck:

@@ -13,20 +13,20 @@ import torch
 import wandb
 import numpy as np
 import pytorch_lightning as pl
+from pycocotools import mask
 from dotenv import find_dotenv, load_dotenv
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
 from .data import FewShotDataModule
 from .modeling import VisualSceneAnalyzer
-from .utils import mask_nms
 from .utils.visualize import visualize_sg_predictions
 
 logger = logging.getLogger(__name__)
 
 
 WB_PREFIX = "wandb://"
-DEF_CON = 0.4       # Default confidence value in absence of binary concept classifier
+DEF_CON = 0.6       # Default confidence value in absence of binary concept classifier
 
 class VisionModule:
 
@@ -37,8 +37,8 @@ class VisionModule:
         self.cfg = cfg
 
         self.scene = None
-        self.last_input = None
-        self.last_output = None
+        self.latest_input = None        # Latest raw input
+        self.previous_input = None      # Any input *before* current self.latest_input
 
         self.fs_model_path = None
 
@@ -156,28 +156,24 @@ class VisionModule:
                 # Full (ensemble) prediction
                 vis_embs, masks_out, scores = self.model(image)
 
-                self.last_input = image
-
-                # Run NMS and leave top k predictions
-                kept_indices = mask_nms(masks_out, scores, self.NMS_THRES)
-                topk_inds = kept_indices[:self.K]
+                self.latest_input = image         # Cache last input image
 
                 # Newly compose a scene graph with the output; filter patches to leave top-k
                 # detections
                 self.scene = {
                     f"o{i}": {
-                        "vis_emb": vis_embs[det_ind],
-                        "pred_mask": masks_out[det_ind],
-                        "pred_objectness": scores[det_ind],
-                        "pred_cls": self._fs_conc_pred(exemplars, vis_embs[det_ind], "cls"),
-                        "pred_att": self._fs_conc_pred(exemplars, vis_embs[det_ind], "att"),
+                        "vis_emb": vis_embs[i],
+                        "pred_mask": masks_out[i],
+                        "pred_objectness": scores[i],
+                        "pred_cls": self._fs_conc_pred(exemplars, vis_embs[i], "cls"),
+                        "pred_att": self._fs_conc_pred(exemplars, vis_embs[i], "att"),
                         "pred_rel": {
                             f"o{j}": np.zeros(self.inventories.rel)
-                            for j in range(len(topk_inds)) if i != j
+                            for j in range(self.K) if i != j
                         },
                         "exemplar_ind": None       # Store exemplar storage index, if applicable
                     }
-                    for i, det_ind in enumerate(topk_inds)
+                    for i in range(self.K)
                 }
 
                 for oi, obj_i in self.scene.items():
@@ -243,7 +239,7 @@ class VisionModule:
                     }
                     for conc_type in ["cls", "att"]
                 }
-            self.summ = visualize_sg_predictions(self.last_input, self.scene, lexicon)
+            self.summ = visualize_sg_predictions(self.latest_input, self.scene, lexicon)
 
     def _fs_conc_pred(self, exemplars, emb, conc_type):
         """
@@ -258,7 +254,7 @@ class VisionModule:
                     # Binary classifier induced from pos/neg exemplars exists
                     clf = exemplars.binary_classifiers[conc_type][ci]
                     pred = clf.predict_proba(emb[None])[0]
-                    pred = min(pred[1], 0.99)       # Soften absolute certainty
+                    pred = max(min(pred[1], 0.99), 0.01)    # Soften absolute certainty)
                     predictions.append(pred)
                 else:
                     # No binary classifier exists due to lack of either positive
@@ -299,9 +295,18 @@ class VisionModule:
                         if conc_type == "cls" or conc_type == "att":
                             # Fetch set of positive exemplars
                             pos_exs_inds = exemplars.exemplars_pos[conc_type][conc_ind]
-                            pos_exs_vecs = exemplars.storage_vec[conc_type][list(pos_exs_inds)]
+                            pos_exs_info = [
+                                (
+                                    exemplars.scenes[scene_id][0],
+                                    mask.decode(
+                                        exemplars.scenes[scene_id][1][obj_id]["mask"]
+                                    ).astype(bool),
+                                    exemplars.scenes[scene_id][1][obj_id]["f_vec"]
+                                )
+                                for scene_id, obj_id in pos_exs_inds
+                            ]
                             bin_clf = exemplars.binary_classifiers[conc_type][conc_ind]
-                            disj_cond.append((pos_exs_vecs, bin_clf))
+                            disj_cond.append((pos_exs_info, bin_clf))
                         else:
                             assert conc_type == "rel"
 
@@ -320,9 +325,18 @@ class VisionModule:
                     if conc_type == "cls" or conc_type == "att":
                         # Fetch set of positive exemplars
                         pos_exs_inds = exemplars.exemplars_pos[conc_type][conc_ind]
-                        pos_exs_vecs = exemplars.storage_vec[conc_type][list(pos_exs_inds)]
+                        pos_exs_info = [
+                            (
+                                exemplars.scenes[scene_id][0],
+                                mask.decode(
+                                    exemplars.scenes[scene_id][1][obj_id]["mask"]
+                                ).astype(bool),
+                                exemplars.scenes[scene_id][1][obj_id]["f_vec"]
+                            )
+                            for scene_id, obj_id in pos_exs_inds
+                        ]
                         bin_clf = exemplars.binary_classifiers[conc_type][conc_ind]
-                        search_conds.append([(pos_exs_vecs, bin_clf)])
+                        search_conds.append([(pos_exs_info, bin_clf)])
                     else:
                         assert conc_type == "rel"
 

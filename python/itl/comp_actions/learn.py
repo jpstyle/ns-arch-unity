@@ -32,6 +32,7 @@ has_reserved_pred = \
     lambda cnjt: cnjt.name.startswith("*_") \
         if isinstance(cnjt, Literal) else any(has_reserved_pred(nc) for nc in cnjt)
 
+
 def identify_mismatch(agent, rule):
     """
     Test against vision-only sensemaking result to identify any mismatch btw.
@@ -59,6 +60,7 @@ def identify_mismatch(agent, rule):
         surprisal = -math.log(ev_prob + EPS)
         if surprisal >= -math.log(SR_THRES):
             agent.symbolic.mismatches.append([rule, surprisal, False])
+
 
 def identify_confusion(agent, rule, prev_statements, novel_concepts):
     """
@@ -122,6 +124,7 @@ def identify_confusion(agent, rule, prev_statements, novel_concepts):
                     # information
                     agent.vision.confusions.add((conc_type, confusion_pair))
 
+
 def identify_acknowledgement(agent, rule, prev_statements, prev_context):
     """
     Check whether the agent reported its estimate of something by its utterance
@@ -165,6 +168,7 @@ def identify_acknowledgement(agent, rule, prev_statements, prev_context):
             agent.lang.dialogue.acknowledged_stms[("curr", ti, ci)] = acknowledgement_data
                 # "curr" indicates the acknowledgement is relevant to a statement in the
                 # ongoing dialogue record
+
 
 def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
     """
@@ -262,9 +266,14 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
         entail_consts = defaultdict(list)       # Map from pred var to set of pred consts
         instance_consts = {}                    # Map from ent const to pred var
         context_Qs = {}                         # Pointers to user's original question
-        for _, (spk, (q_vars, (q_cons, _)), presup, raw) in prev_Qs:
-            # Consider only questions from user
-            if spk!="U": continue
+
+        # Disregard all questions except the last one from user
+        relevant_Qs = [
+            (q_vars, q_cons, presup, raw)
+            for _, (spk, (q_vars, (q_cons, _)), presup, raw) in prev_Qs if spk=="U"
+        ][-1:]
+
+        for q_vars, q_cons, presup, raw in relevant_Qs:
 
             if presup is None:
                 p_cons = []
@@ -309,6 +318,7 @@ def identify_generics(agent, rule, provenance, prev_Qs, generics, pair_rules):
                 (entailment_rule, U_IN_PR, knowledge_source, knowledge_type)
             )
 
+
 def handle_mismatch(agent, mismatch):
     """
     Handle cognition gap following some specified strategy. Note that we now
@@ -319,6 +329,7 @@ def handle_mismatch(agent, mismatch):
 
     if handled: return 
 
+    objs_to_add = set(); pointers = defaultdict(set)
     for cons, ante in flatten_cons_ante(*rule):
         is_grounded = all(not is_var for l in cons+ante for _, is_var in l.args)
 
@@ -326,11 +337,11 @@ def handle_mismatch(agent, mismatch):
             if len(cons) == 1 and len(ante) == 0:
                 # Positive grounded fact
                 atom = cons[0]
-                exm_pointer = ({0}, set())
+                pol = "pos"
             else:
                 # Negative grounded fact
                 atom = ante[0]
-                exm_pointer = (set(), {0})
+                pol = "neg"
 
             conc_type, conc_ind = atom.name.split("_")
             conc_ind = int(conc_ind)
@@ -338,26 +349,26 @@ def handle_mismatch(agent, mismatch):
 
             if conc_type == "cls" or conc_type == "att":
                 if agent.vision.scene[args[0]]["exemplar_ind"] is None:
-                    # Vector not stored in exemplar storage, provide vector
-                    f_vec = agent.vision.scene[args[0]]["vis_emb"][None,:]
+                    # New exemplar, mask & vector of the object should be added
+                    objs_to_add.add(args[0])
+                    pointers[(conc_type, conc_ind, pol)].add(args[0])
                 else:
-                    # Vector stored in exemplar storage, provide pointer
-                    f_vec = [agent.vision.scene[args[0]]["exemplar_ind"]]
+                    # Exemplar present in storage, only add pointer
+                    ex_ind = agent.vision.scene[args[0]]["exemplar_ind"]
+                    pointers[(conc_type, conc_ind, pol)].add(ex_ind)
             else:
                 assert conc_type == "rel"
                 raise NotImplementedError   # Step back for relation prediction...
 
-            # Add new concept exemplars to memory
-            added_inds = agent.lt_mem.exemplars.add_exs(
-                f_vecs={ conc_type: f_vec },
-                pointers={ conc_type: { conc_ind: exm_pointer } }
-            )
+    objs_to_add = list(objs_to_add)         # Assign arbitrary ordering
+    _add_scene_and_exemplars(
+        objs_to_add, pointers,
+        agent.vision.scene, agent.vision.latest_input, agent.lt_mem.exemplars
+    )
 
-            if agent.vision.scene[args[0]]["exemplar_ind"] is None:
-                # Record vector storage index for corresponding object in visual scene
-                agent.vision.scene[args[0]]["exemplar_ind"] = added_inds[conc_type][0]
-
+    # Mark as handled
     mismatch[2] = True
+
 
 def handle_confusion(agent, confusion):
     """
@@ -422,6 +433,7 @@ def handle_confusion(agent, confusion):
     # for the rest of the interaction episode sequence
     agent.confused_no_more.add(confusion)
 
+
 def handle_acknowledgement(agent, acknowledgement_info):
     """
     Handle (positive) acknowledgements to an utterance by the agent reporting its
@@ -435,6 +447,11 @@ def handle_acknowledgement(agent, acknowledgement_info):
 
     statement, polarity, context = ack_data
     vis_scene, pr_prog, kb_snap = context
+    if ack_ind[0] == "prev":
+        vis_raw = agent.vision.previous_input
+    else:
+        vis_raw = agent.vision.latest_input
+
     if polarity != True:
         # Nothing to do with negative acknowledgements
         agent.lang.dialogue.acknowledged_stms[ack_ind] = None
@@ -442,22 +459,21 @@ def handle_acknowledgement(agent, acknowledgement_info):
 
     # Vision-only (neural) estimations recognized
     lits_from_vis = {
-        r.body[0].as_atom() for r, _, _ in pr_prog.rules
-        if len(r.head)==0 and len(r.body)==2 and r.body[0].naf
+        rule.body[0].as_atom(): r_pr[0] for rule, r_pr, _ in pr_prog.rules
+        if len(rule.head)==0 and len(rule.body)==2 and rule.body[0].naf
     }
 
     # Find literals to be considered as confirmed via user's assent; always include
     # each literal in `statement`, and others if relevant via some rule in KB
-    literals_acknowledged = set()
+    lits_to_learn = set()
     for main_lit in statement:
         if main_lit.name.startswith("*_"): continue
 
-        literals_acknowledged.add(main_lit)
-
-        # Find relevant KB entries containing the main literal
+        # Find relevant KB entries (except taxonomy entries) containing the main literal
         relevant_kb_entries = [
             kb_snap.entries[ei][0]
             for ei in kb_snap.entries_by_pred[main_lit.name]
+            if kb_snap.entries[ei][3] != "taxonomy"
         ]
 
         # Into groups of literals to be recognized as learning signals
@@ -500,31 +516,46 @@ def handle_acknowledgement(agent, acknowledgement_info):
                 cons_subs_full = {l.substitute(terms=assig) for l in cons_subs}
                 ante_subs_full = {l.substitute(terms=assig) for l in ante_subs}
 
-                # Union the fully substituted consequent to `literals_acknowledged`
-                # only if all the literals in the substituted antecedent can be found
-                # in visual scene (no matter how high the estimation confidences are
-                # -- at least for now). The main literal is explicitly acknowledged
-                # and thus always can be considered as satisfied.
-                if all(lit in lits_from_vis for lit in ante_subs_full-{main_lit}):
-                    literals_acknowledged |= cons_subs_full
-                    literals_acknowledged |= ante_subs_full
+                # Union the fully substituted consequent to `lits_to_learn` only if
+                # all the literals in the substituted antecedent can be found in visual
+                # scene; apply some value threshold according to the strategy choice.
+                if all(lit in lits_from_vis for lit in ante_subs_full):
+                    for lit in cons_subs_full | ante_subs_full:
+                        easy_positive = lit in lits_from_vis and lits_from_vis[lit] > 0.75
+                        if agent.strat_assent == "threshold" and easy_positive:
+                            # Adopting thresholding strategy, and estimated probability
+                            # is already high enough; opt out of adding this as exemplar
+                            continue
 
-    # Add the instances represented by the literals as positive concept exemplars
-    for lit in literals_acknowledged:
+                        lits_to_learn.add(lit)
+
+    # Add the instances represented by the literals as concept exemplars
+    objs_to_add = set(); pointers = defaultdict(set)
+    for lit in lits_to_learn:
         conc_type, conc_ind = lit.name.split("_")
+        conc_ind = int(conc_ind)
         if conc_type == "rel": continue         # Relations are not neurally predicted
 
-        f_vec = vis_scene[lit.args[0][0]]["vis_emb"]
-        exm_pointer = ({0}, set()) if not lit.naf else (set(), {0})     # Pos & neg each
+        pol = "pos" if not lit.naf else "neg"
 
-        # Add new concept exemplars to memory
-        agent.lt_mem.exemplars.add_exs(
-            f_vecs={ conc_type: f_vec[None,:] },
-            pointers={ conc_type: { conc_ind: exm_pointer } }
-        )
+        if vis_scene[lit.args[0][0]]["exemplar_ind"] is None:
+            # New exemplar, mask & vector of the object should be added
+            objs_to_add.add(lit.args[0][0])
+            pointers[(conc_type, conc_ind, pol)].add(lit.args[0][0])
+        else:
+            # Exemplar present in storage, only add pointer
+            ex_ind = agent.vision.scene[lit.args[0][0]]["exemplar_ind"]
+            pointers[(conc_type, conc_ind, pol)].add(ex_ind)
+
+    objs_to_add = list(objs_to_add)         # Assign arbitrary ordering
+    _add_scene_and_exemplars(
+        objs_to_add, pointers,
+        vis_scene, vis_raw, agent.lt_mem.exemplars
+    )
 
     # Replace value with None to mark as 'already processed'
     agent.lang.dialogue.acknowledged_stms[ack_ind] = None
+
 
 def add_scalar_implicature(agent, pair_rules):
     """
@@ -601,8 +632,144 @@ def add_scalar_implicature(agent, pair_rules):
         # Remove the listed entries from KB
         agent.lt_mem.kb.remove_by_ids(list(entries_to_remove))
 
-# Helper method factored out for symmetric applications
+
+def handle_neologism(agent, novel_concepts, dialogue_state):
+    """
+    Identify neologisms (that the agent doesn't know which concepts they refer to)
+    to be handled, attempt resolving from information available so far if possible,
+    or record as unresolved neologisms for later addressing otherwise
+    """
+    # Return value, boolean flag whether there has been any change to the
+    # exemplar base
+    xb_updated = False
+
+    neologisms = {
+        tok: sym for tok, (sym, den) in agent.symbolic.word_senses.items()
+        if den is None
+    }
+
+    if len(neologisms) == 0: return False       # Nothing to do
+
+    objs_to_add = set(); pointers = defaultdict(set)
+    for tok, sym in neologisms.items():
+        neo_in_rule_cons = tok[2] == "rc"
+        neos_in_same_rule_ante = [
+            n for n in neologisms if tok[:3]==n[:3] and n[3].startswith("a")
+        ]
+        if neo_in_rule_cons and len(neos_in_same_rule_ante)==0:
+            # Occurrence in rule cons implies either definition or exemplar is
+            # provided by the utterance containing this token... Register new
+            # visual concept, and perform few-shot learning if appropriate
+            pos, name = sym
+            if pos == "n":
+                conc_type = "cls"
+            elif pos == "a":
+                conc_type = "att"
+            else:
+                assert pos == "v" or pos == "r"
+                conc_type = "rel"
+
+            # Expand corresponding visual concept inventory
+            conc_ind = agent.vision.add_concept(conc_type)
+            novel_concept = (conc_ind, conc_type)
+            novel_concepts.add(novel_concept)
+
+            # Acquire novel concept by updating lexicon
+            agent.lt_mem.lexicon.add((name, pos), novel_concept)
+
+            ti = int(tok[0].strip("t"))
+            ci = int(tok[1].strip("c"))
+            rule_cons, rule_ante = dialogue_state.record[ti][1][ci][0][0]
+
+            if len(rule_ante) == 0:
+                # Labelled exemplar provided; add new concept exemplars to
+                # memory, as feature vectors at the penultimate layer right
+                # before category prediction heads
+                args = [
+                    agent.symbolic.value_assignment[arg] for arg in rule_cons[0][2]
+                ]
+
+                if conc_type == "cls" or conc_type == "att":
+                    if agent.vision.scene[args[0]]["exemplar_ind"] is None:
+                        # New exemplar, mask & vector of the object should be added
+                        objs_to_add.add(args[0])
+                        pointers[(conc_type, conc_ind, "pos")].add(args[0])
+                    else:
+                        # Exemplar present in storage, only add pointer
+                        ex_ind = agent.vision.scene[args[0]]["exemplar_ind"]
+                        pointers[(conc_type, conc_ind, "pos")].add(ex_ind)
+                else:
+                    assert conc_type == "rel"
+                    raise NotImplementedError   # Step back for relation prediction...
+
+                # Register this instance as a handled mismatch, so that add_exs() won't
+                # be called upon this one during this loop again by handle_mismatch()
+                stm = ((Literal(f"{conc_type}_{conc_ind}", wrap_args(*args)),), None)
+                agent.symbolic.mismatches.append([stm, None, True])
+
+                # Set flag that XB is updated
+                xb_updated |= True
+        else:
+            # Otherwise not immediately resolvable
+            agent.lang.unresolved_neologisms.add((sym, tok))
+
+    objs_to_add = list(objs_to_add)         # Assign arbitrary ordering
+    _add_scene_and_exemplars(
+        objs_to_add, pointers,
+        agent.vision.scene, agent.vision.latest_input, agent.lt_mem.exemplars
+    )
+
+    return xb_updated
+
+
+def _add_scene_and_exemplars(
+        objs_to_add, pointers, current_scene, current_raw_img, ex_mem
+    ):
+    """
+    Helper method factored out for adding a scene, objects and/or concept exemplar
+    pointers
+    """
+    # Check if this scene is already stored in memory and if so fetch the ID
+    scene_ids = [
+        obj_info["exemplar_ind"][0] for obj_info in current_scene.values()
+        if obj_info["exemplar_ind"] is not None
+    ]
+    assert len(set(scene_ids)) <= 1         # All same or none
+    scene_id = scene_ids[0] if len(scene_ids) > 0 else None
+
+    # Add concept exemplars to memory
+    objs_to_add = list(objs_to_add)         # Assign arbitrary ordering
+    scene_img = current_raw_img if scene_id is None else None
+        # Need to pass the scene image if not already stored in memory
+    exemplars = [
+        {
+            "scene_id": scene_id,
+            "mask": current_scene[oi]["pred_mask"],
+            "f_vec": current_scene[oi]["vis_emb"]
+        }
+        for oi in objs_to_add
+    ]
+    pointers = {
+        conc_spec: {
+            # Pair (whether object is newly added, index within objs_to_add if True,
+            # (scene_id, obj_id) otherwise)
+            (True, objs_to_add.index(oi)) if isinstance(oi, str) else (False, oi)
+            for oi in objs
+        }
+        for conc_spec, objs in pointers.items()
+    }
+    added_inds = ex_mem.add_exs(
+        scene_img=scene_img, exemplars=exemplars, pointers=pointers
+    )
+
+    for oi, xi in zip(objs_to_add, added_inds):
+        # Record exemplar storage index for corresponding object in visual scene,
+        # so that any potential redundant additions can be avoided
+        current_scene[oi]["exemplar_ind"] = xi
+
+
 def _compute_scalar_implicature(c1, c2, rules, kb_snap):
+    """ Helper method factored out for symmetric applications """
     # Return value; list of inferred rules to add
     scal_impls = []
 
@@ -660,87 +827,3 @@ def _compute_scalar_implicature(c1, c2, rules, kb_snap):
             scal_impls.append((cons, ante, knowledge_type))
     
     return scal_impls
-
-def handle_neologism(agent, novel_concepts, dialogue_state):
-    """
-    Identify neologisms (that the agent doesn't know which concepts they refer to)
-    to be handled, attempt resolving from information available so far if possible,
-    or record as unresolved neologisms for later addressing otherwise
-    """
-    xb_updated = False
-
-    neologisms = {
-        tok: sym for tok, (sym, den) in agent.symbolic.word_senses.items()
-        if den is None
-    }
-    for tok, sym in neologisms.items():
-        neo_in_rule_cons = tok[2] == "rc"
-        neos_in_same_rule_ante = [
-            n for n in neologisms if tok[:3]==n[:3] and n[3].startswith("a")
-        ]
-        if neo_in_rule_cons and len(neos_in_same_rule_ante)==0:
-            # Occurrence in rule cons implies either definition or exemplar is
-            # provided by the utterance containing this token... Register new
-            # visual concept, and perform few-shot learning if appropriate
-            pos, name = sym
-            if pos == "n":
-                conc_type = "cls"
-            elif pos == "a":
-                conc_type = "att"
-            else:
-                assert pos == "v" or pos == "r"
-                conc_type = "rel"
-
-            # Expand corresponding visual concept inventory
-            conc_ind = agent.vision.add_concept(conc_type)
-            novel_concept = (conc_ind, conc_type)
-            novel_concepts.add(novel_concept)
-
-            # Acquire novel concept by updating lexicon
-            agent.lt_mem.lexicon.add((name, pos), novel_concept)
-
-            ti = int(tok[0].strip("t"))
-            ci = int(tok[1].strip("c"))
-            rule_cons, rule_ante = dialogue_state.record[ti][1][ci][0][0]
-
-            if len(rule_ante) == 0:
-                # Labelled exemplar provided; add new concept exemplars to
-                # memory, as feature vectors at the penultimate layer right
-                # before category prediction heads
-                args = [
-                    agent.symbolic.value_assignment[arg] for arg in rule_cons[0][2]
-                ]
-
-                if conc_type == "cls" or conc_type == "att":
-                    if agent.vision.scene[args[0]]["exemplar_ind"] is None:
-                        # Vector not stored in exemplar storage, provide vector
-                        f_vec = agent.vision.scene[args[0]]["vis_emb"][None,:]
-                    else:
-                        # Vector stored in exemplar storage, provide pointer
-                        f_vec = [agent.vision.scene[args[0]]["exemplar_ind"]]
-                else:
-                    assert conc_type == "rel"
-                    raise NotImplementedError   # Step back for relation prediction...
-
-                # Add new concept exemplars to memory
-                added_inds = agent.lt_mem.exemplars.add_exs(
-                    f_vecs={ conc_type: f_vec },
-                    pointers={ conc_type: { conc_ind: ({0}, set()) } }
-                )
-
-                if agent.vision.scene[args[0]]["exemplar_ind"] is None:
-                    # Record vector storage index for corresponding object in visual scene
-                    agent.vision.scene[args[0]]["exemplar_ind"] = added_inds[conc_type][0]
-
-                # Register this instance as a handled mismatch, so that add_exs() won't
-                # be called upon this one during this loop again by handle_mismatch()
-                stm = ((Literal(f"{conc_type}_{conc_ind}", wrap_args(*args)),), None)
-                agent.symbolic.mismatches.append([stm, None, True])
-
-                # Set flag that XB is updated
-                xb_updated = True
-        else:
-            # Otherwise not immediately resolvable
-            agent.lang.unresolved_neologisms.add((sym, tok))
-
-    return xb_updated

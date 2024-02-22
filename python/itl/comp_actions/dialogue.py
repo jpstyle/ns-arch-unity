@@ -5,7 +5,7 @@ import re
 import random
 from copy import deepcopy
 from functools import reduce
-from itertools import permutations, combinations
+from itertools import permutations, combinations, product
 from collections import defaultdict
 
 import numpy as np
@@ -363,6 +363,10 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
             for lit in probing_Q[1][0] if lit.name=="*_subtype"
         }
 
+        # Find valid templates of potential explanantia for the expected ground-truth
+        # answer based on the inference program
+        exps_templates_gt = _find_explanans_templates(expected_gt, kb_prog_analyzed)
+
         for tgt_ev in target_events:
             if len(tgt_ev) == 0: continue
 
@@ -371,12 +375,28 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
             tgt_lit = tgt_ev[0]
             v_tgt_lit = Literal(f"v_{tgt_lit.name}", tgt_lit.args)
 
-            # Find valid templates of potential explanantia for the target based on the
-            # inference program
-            exps_templates = _find_explanans_templates(tgt_lit, kb_prog_analyzed)
+            # Find valid templates of potential explanantia for the agent answer based
+            # on the inference program
+            exps_templates_ans = _find_explanans_templates(tgt_lit, kb_prog_analyzed)
+
+            # Asymmetric set difference for selecting distinguishing properties; based
+            # on the notion that shared explanantia shouldn't be considered as valid
+            # explanations (though they often are selected if not explicitly filtered...)
+            shared_template_pairs = [
+                (tpl1, tpl2)
+                for tpl1, tpl2 in product(exps_templates_ans[1:], exps_templates_gt[1:])
+                if Literal.entailing_mapping_btw(tpl1, tpl2)[0] == 0
+            ]
+            shared_templates_ans = {frozenset(tpl1) for tpl1, _ in shared_template_pairs}
+            distinguishing_templates_ans = [
+                tpl for tpl in exps_templates_ans[1:]
+                if frozenset(tpl) not in shared_templates_ans
+            ]
+            selected_templates = exps_templates_ans[:1] + distinguishing_templates_ans
+
             # Obtain every possible instantiations of the discovered templates, then
             # flatten to a set of (grounded) potential evidence atoms
-            exps_instances = _instantiate_templates(exps_templates, scene_ents)
+            exps_instances = _instantiate_templates(selected_templates, scene_ents)
             evidence_atoms = {
                 Literal(f"v_{c_lit.name}", c_lit.args)
                 for conjunction in exps_instances for c_lit in conjunction
@@ -492,15 +512,19 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                     )
                     continue
 
-                # Find valid templates of potential explanantia for the expected
-                # ground-truth answer based on the inference program
-                exps_templates = _find_explanans_templates(expected_gt, kb_prog_analyzed)
-                exps_templates = exps_templates[1:]
-                    # Exclude the dud explanation ('I would've said that if it looked like one)
+                # GT side of the distinguishing properties
+                shared_templates_gt = {frozenset(tpl2) for _, tpl2 in shared_template_pairs}
+                distinguishing_templates_gt = [
+                    tpl for tpl in exps_templates_gt[1:]
+                    if frozenset(tpl) not in shared_templates_gt
+                ]
+                # Not including the dud explanation ('I would've said that if it looked like one')
+                # unlike above
+                selected_templates = distinguishing_templates_gt
 
-                # len(exps_templates) > 0 iff there's any KB rule that can be leveraged
+                # len(selected_templates) > 0 iff there's any KB rule that can be leveraged
                 # to abduce the expected ground-truth answer
-                gt_inferrable_from_kb = len(exps_templates) > 0
+                gt_inferrable_from_kb = len(selected_templates) > 0
 
                 if gt_inferrable_from_kb:
                     # Try to find some meaningful counterfactual explanation that would
@@ -511,7 +535,7 @@ def _answer_nondomain_Q(agent, utt_pointer, translated):
                     # dud explanation.
 
                     # Test each template one-by-one
-                    for template in exps_templates:
+                    for template in selected_templates:
                         # Find every possible instantiation of the template
                         exps_instances = _instantiate_templates([template], scene_ents)
 

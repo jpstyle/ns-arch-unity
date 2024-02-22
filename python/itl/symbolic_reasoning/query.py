@@ -82,8 +82,7 @@ def query(reg_gr, q_vars, event, restrictors):
                     # placed for qv
                 }
                 preds_filtered = {
-                    p for p in preds_filtered
-                    if p!="unsat" and not p.startswith("v_")
+                    p for p in preds_filtered if not p.startswith("v_")
                 }   # These predicates shouldn't be used in query answers
                 subs_options.append(preds_filtered)
             else:

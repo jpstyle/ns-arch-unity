@@ -1,5 +1,6 @@
 model:
-    clipseg_model: "CIDAS/clipseg-rd64-refined"
+    dino_model: "facebook/dinov2-small"
+    sam_model: "facebook/sam-vit-base"
 
 data:
     batch_size: 16

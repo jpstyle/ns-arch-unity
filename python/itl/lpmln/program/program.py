@@ -149,25 +149,10 @@ class Program:
                 # No point in casting these 'absolute' rules as choice rules,
                 # simply add them as rule string as it stands
                 as_str += str(rule) + "\n"
-                continue
-
-            if len(rule.head) <= 1:
-                if len(rule.head) == 1:
+            else:
+                if len(rule.head) >= 1:
                     as_str += rule.str_as_choice() + "\n"
                 else:
-                    # Even when unsats=False, should add a modified rule with
-                    # an auxiliary atom as head when body contains more than
-                    # one literal, so that body literals are connected in the
-                    # dependency graph
-                    if len(rule.body) > 1:
-                        aux_args = [(ri, False)]
-                        aux_rule = Rule(
-                            head=Literal("unsat", aux_args),
-                            body=rule.body
-                        )
-                        as_str += str(aux_rule) + "\n"
-            else:
-                # Choice rules with multiple head literals
-                as_str += rule.str_as_choice() + "\n"
+                    as_str += str(rule) + "\n"
 
         return as_str

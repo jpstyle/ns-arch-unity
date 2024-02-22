@@ -12,41 +12,47 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from tqdm import tqdm
 from omegaconf import OmegaConf
-from PIL import ImageFilter, ImageEnhance
-from skimage.morphology import opening, closing
+from PIL import ImageFilter
+from scipy.optimize import linear_sum_assignment
+from skimage.morphology import opening, closing, dilation
 from skimage.measure import label
-from sklearn.cluster import HDBSCAN
+from sklearn.cluster import KMeans
 from torch.optim import AdamW
-from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+from torchvision.ops import batched_nms, masks_to_boxes, box_convert
+from transformers import AutoImageProcessor, Dinov2Model, SamProcessor, SamModel
 
 from .process_data import process_batch, preprocess_input
 from ..utils import flatten_cfg
 
 
 BLUR_RADIUS = 5                 # Gaussian blur kernel radius for background image
-INTENSITY_RATIO = 0.3           # Brightness multiplier for background image
-MASK_THRES = 0.6                # Segmentation mask binarization threshold
 
 class VisualSceneAnalyzer(pl.LightningModule):
     """
-    Few-shot visual object detection (concept recognition & segmentation) model,
-    implemented by attaching lightweight MLP blocks to pre-trained SAM (Meta's
-    Segment Anything Model) model.
+    Few-shot visual object detection (concept recognition & segmentation) model
     """
     def __init__(self, cfg):
         super().__init__()
 
         self.cfg = cfg
 
-        clipseg_model = self.cfg.vision.model.clipseg_model
+        dino_model = self.cfg.vision.model.dino_model
+        sam_model = self.cfg.vision.model.sam_model
         assets_dir = self.cfg.paths.assets_dir
 
-        # Loading pre-trained CLIPSeg to use as basis model
-        self.clipseg_processor = CLIPSegProcessor.from_pretrained(
-            clipseg_model, cache_dir=os.path.join(assets_dir, "vision_models", "clipseg")
+        # Loading pre-trained models to use as basis encoder & segmentation models
+        self.dino_processor = AutoImageProcessor.from_pretrained(
+            dino_model, cache_dir=os.path.join(assets_dir, "vision_models", "dino"),
+            do_resize=False, do_center_crop=False
         )
-        self.clipseg = CLIPSegForImageSegmentation.from_pretrained(
-            clipseg_model, cache_dir=os.path.join(assets_dir, "vision_models", "clipseg")
+        self.dino = Dinov2Model.from_pretrained(
+            dino_model, cache_dir=os.path.join(assets_dir, "vision_models", "dino")
+        )
+        self.sam_processor = SamProcessor.from_pretrained(
+            sam_model, cache_dir=os.path.join(assets_dir, "vision_models", "sam")
+        )
+        self.sam = SamModel.from_pretrained(
+            sam_model, cache_dir=os.path.join(assets_dir, "vision_models", "sam")
         )
 
         # if "task" in self.cfg.vision:
@@ -235,8 +241,8 @@ class VisualSceneAnalyzer(pl.LightningModule):
 
     def on_save_checkpoint(self, checkpoint):
         """
-        No need to save weights for SAM image & propmt encoder components; del their
-        weights to leave params for the newly added components only
+        No need to save weights for pretrained components; del their weights to
+        leave params for the newly added components only
         """
         # state_dict_filtered = OrderedDict()
         # for k, v in checkpoint["state_dict"].items():
@@ -285,35 +291,57 @@ class VisualSceneAnalyzer(pl.LightningModule):
         assert not (masks_provided and search_conds_provided), \
             "Cannot provide both masks and search conditions"
 
-        # Obtain image embedding computed by CLIP visual transformer; compute from scratch
-        # if image input is new, fetch cached features otherwise
+        # Obtain image embedding computed by pre-trained basis models; compute from
+        # scratch if image input is new, fetch cached features otherwise
         if img_provided:
             # Process image and pass through vision encoder
-            image_processed = self.clipseg_processor(images=image, return_tensors="pt")
-            image_processed = image_processed["pixel_values"].to(self.device)
-            vision_outputs = self.clipseg.clip.vision_model(
-                pixel_values=image_processed,
-                output_hidden_states=True,
-                return_dict=True
+
+            orig_size = (image.width, image.height)     # Self-explanatory
+
+            # Processing for image encoder
+            dino_processed_input = self.dino_processor(images=image, return_tensors="pt")
+            pixel_values = dino_processed_input.pixel_values.to(self.device)
+            dino_processed_input = self.dino(
+                pixel_values=pixel_values, return_dict=True
+            )
+            dino_embs = dino_processed_input.last_hidden_state[:,1:]
+
+            # Prepare grid prompt for ensemble prediction
+            w_g = 3; h_g = 2
+            grid_points = [
+                [[orig_size[0] * i/(w_g+1), orig_size[1] * j/(h_g+1)]]
+                for i, j in product(range(1,w_g+1), range(1,h_g+1))
+            ]
+
+            # Processing for promptable segmenter
+            sam_processed_input = self.sam_processor(
+                images=image, input_points=grid_points, return_tensors="pt"
+            )
+            pixel_values = sam_processed_input.pixel_values.to(self.device)
+            sam_grid_prompts = sam_processed_input.input_points.to(self.device)
+            sam_reshaped_size = sam_processed_input.reshaped_input_sizes.to(self.device)
+            sam_embs = self.sam.get_image_embeddings(
+                pixel_values=pixel_values, return_dict=True
             )
 
-            # Extract 'activation' features needed for the CLIPSeg decoder
-            hidden_states = vision_outputs.hidden_states
-            activations = [hidden_states[i + 1] for i in self.clipseg.config.extract_layers]
-            orig_size = (image.width, image.height)
-
-            # Background image prepared via greyscale + gaussian blur + decreased intensity
+            # Background image prepared via greyscale + gaussian blur
             bg_image = image.convert("L").convert("RGB")
             bg_image = bg_image.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
-            bg_image = ImageEnhance.Brightness(bg_image).enhance(INTENSITY_RATIO)
 
             # Cache image and processing results
-            self.processed_img_cached = (image, bg_image, activations, orig_size)
+            self.processed_img_cached = (
+                image, bg_image, dino_embs, sam_embs, sam_grid_prompts,
+                orig_size, sam_reshaped_size
+            )
         else:
             # No image provided, used cached data
             assert self.processed_img_cached is not None
             image = self.processed_img_cached[0]
             bg_image = self.processed_img_cached[1]
+            sam_embs = self.processed_img_cached[3]
+            sam_grid_prompts = self.processed_img_cached[4]
+            orig_size = self.processed_img_cached[5]
+            sam_reshaped_size = self.processed_img_cached[6]
 
         # Obtain masks in different manners according to the provided info
         if masks_provided:
@@ -326,59 +354,81 @@ class VisualSceneAnalyzer(pl.LightningModule):
             masks_all = [np.ones((image.height, image.width))]
             for conjunct in search_conds:
                 masks_cnjt = []
-                for pos_exs_vecs, _ in conjunct:
-                    # Run HDBSCAN clustering to obtain a set of prototypes, to be used
-                    # as exemplar prompts to CLIPSeg. Taking the global mean as a single
-                    # prototype is highly likely to misrepresent the concept since we
-                    # don't have any guarantee that the distribution of embeddings is
-                    # unimodal. Note that we would rather 'over-cluster' than 'under-
-                    # cluster' by the same logic.
-                    hdb = HDBSCAN(min_cluster_size=2, store_centers="centroid")
-                    clusters = hdb.fit_predict(pos_exs_vecs)
-
-                    # Cluster centroids + 'noise' points as prototypes
-                    prototypes = np.concatenate([hdb.centroids_, pos_exs_vecs[clusters==-1]])
-                    prototypes = torch.tensor(prototypes, dtype=torch.float, device=self.device)
-                    masks_cnjt += self._conditioned_segment(exemplar_prompts=prototypes)
+                for pos_exs_info, _ in conjunct:
+                    masks_cnjt += self._conditioned_segment(pos_exs_info)
 
                 # Find every possible intersection between the returned instances vs. the
                 # intersection outputs accumulated so far, obtained from each binary cross
                 # product; take logical_and for masks and minimums for scores
                 masks_int = [msk_a * msk_c for msk_a, msk_c in product(masks_all, masks_cnjt)]
 
-                # Filter out invalid (empty or extremely small) masks
-                valid_inds = [i for i, msk in enumerate(masks_int) if msk.sum() > 200]
-                masks_all = [masks_int[i] for i in valid_inds]
+            masks_all = masks_int
 
         else:
-            # Condition with a general text prompt ("an object") and recognize instances
-            # by connected component analysis to obtain masks
-            masks_all = self._conditioned_segment(text_prompts=["an object"])
+            # We don't really need ensemble prediction in our experiments though... Let's
+            # skip this for a while
+            masks_all = []
+
+            # # Condition with the grid of points prepared above to obtain a batch of mask
+            # # proposals, then postprocess by NMS to remove any duplicates
+            # w_o, h_o = orig_size
+            
+            # # Run SAM on grid
+            # sam_preds = self.sam(
+            #     image_embeddings=sam_embs.expand(len(sam_grid_prompts),-1,-1,-1),
+            #     input_points=sam_grid_prompts
+            # )
+            # sam_masks = self.sam_processor.image_processor.post_process_masks(
+            #     masks=sam_preds.pred_masks.cpu(),
+            #     original_sizes=[(h_o, w_o)]*len(sam_preds.pred_masks),
+            #     reshaped_input_sizes=sam_reshaped_size.expand(len(sam_preds.pred_masks), -1)
+            # )
+            # sam_masks = torch.stack(sam_masks).view(-1, h_o, w_o)
+            # valid_inds = torch.stack([msk.sum() > 0 for msk in sam_masks])
+            # sam_masks = sam_masks[valid_inds]
+
+            # # Collect masks and keep the largest chunks among the disconnected bits
+            # sam_masks = [label(msk.numpy(), return_num=True) for msk in sam_masks]
+            # sam_masks = [
+            #     max([msk==i+1 for i in range(num_chunks)], key=lambda x: x.sum())
+            #     for msk, num_chunks in sam_masks
+            # ]
+            # sam_masks = torch.stack([torch.tensor(msk) for msk in sam_masks])
+
+            # # Run NMS to remove duplicates with worse qualities
+            # sam_boxes = masks_to_boxes(sam_masks)
+            # sam_scores = sam_preds.iou_scores.cpu().view(-1)[valid_inds]
+            # kept_inds = batched_nms(
+            #     sam_boxes, sam_scores, torch.zeros(sam_boxes.shape[0]), 0.5
+            # )
+            # masks_all = [opening(closing(msk.numpy())) for msk in sam_masks[kept_inds]]
+
+        # Filter out invalid (empty or extremely small) masks
+        masks_all = [msk.astype(bool) for msk in masks_all if msk.sum() > 500]
 
         # If we have valid masks, obtain visual feature embeddings corresponding to each
         # mask instance by applying a series of 'visual prompt engineering' process, and 
         # assing through CLIP visual transformer; if none found, can return early
         if len(masks_all) > 0:
             # Non-empty list of segmentation masks
+            masks_all = np.stack(masks_all)
             visual_prompts = self._visual_prompt_by_mask(image, bg_image, masks_all)
 
             # Pass through vision encoder to obtain visual embeddings corresponding to each mask
-            visual_prompts_processed = self.clipseg_processor(
-                images=visual_prompts, return_tensors="pt"
-            )
-            visual_prompts_processed = visual_prompts_processed["pixel_values"].to(self.device)
-            vis_embs = self.clipseg.clip.get_image_features(visual_prompts_processed)
+            vis_embs = []
+            for vp in visual_prompts:
+                vp_processed = self.dino_processor(images=vp, return_tensors="pt")
+                vp_pixel_values = vp_processed.pixel_values.to(self.device)
+                vp_dino_out = self.dino(pixel_values=vp_pixel_values, return_dict=True)
+                vis_embs.append(vp_dino_out.pooler_output.cpu().numpy())
+            vis_embs = np.concatenate(vis_embs)
         else:
             # Empty list of segmentation masks; occurs when search returned zero matches
-            vis_embs = np.zeros((0, self.clipseg.config.projection_dim), dtype="float32")
+            vis_embs = np.zeros((0, self.dino.config.hidden_size), dtype="float32")
             masks_all = np.zeros((0, image.height, image.width), dtype="float32")
             scores_all = np.zeros((0,), dtype="float32")
 
             return vis_embs, masks_all, scores_all
-
-        # Output tensors to numpy arrays
-        vis_embs = vis_embs.cpu().numpy()
-        masks_all = np.stack(masks_all)
 
         # Obtain the confidence scores, again in different manners according to the info
         # provided
@@ -397,7 +447,7 @@ class VisualSceneAnalyzer(pl.LightningModule):
                     # Obtain t-conorms (max here) across disjunct concepts in the conjunct
                     conjunct_score = max(
                         bin_clf.predict_proba(emb[None])[0][1].item() \
-                            if bin_clf is not None else 0.0
+                            if bin_clf is not None else 0.5
                         for _, bin_clf in conjunct
                     )
                     # Obtain t-norm between the conjunct score and aggregate score
@@ -407,73 +457,43 @@ class VisualSceneAnalyzer(pl.LightningModule):
                 scores_all.append(agg_score)
 
         else:
-            # For ensemble prediction with the general text prompt, use the maximum float
-            # values in each mask as confidence score
-            scores_all = [msk.max().item() for msk in masks_all]
+            # See above for skipping ensemble prediction
+            scores_all = []
+
+            # # For ensemble prediction with the general text prompt, use the maximum float
+            # # values in each mask as confidence score
+            # scores_all = sam_scores[kept_inds].numpy().tolist()
 
         return vis_embs, masks_all, scores_all
 
-    def _conditioned_segment(self, text_prompts=None, exemplar_prompts=None):
+    def _conditioned_segment(self, exemplar_prompts):
         """
-        Conditional image segmentation factored out for readability and reusability;
-        condition with either a text prompt or exemplar feature set prompt to obtain
-        segmentation. Return found masks along with scores.
+        Conditional image segmentation factored out for readability; condition with
+        exemplar prompts to obtain segmentation. Return found masks along with scores.
         """
-        condition_on_text = text_prompts is not None
-        condition_on_exemplar = exemplar_prompts is not None
-
         assert self.processed_img_cached is not None
-        activations = self.processed_img_cached[2]
-        orig_size = self.processed_img_cached[3]
+        image = self.processed_img_cached[0]
+        dino_embs = self.processed_img_cached[2]
+        sam_embs = self.processed_img_cached[3]
+        orig_size = self.processed_img_cached[5]
 
-        if condition_on_text:
-            # Process the conditioning text prompt
-            text_processed = [
-                self.clipseg_processor(text=txt_prt, return_tensors="pt")
-                for txt_prt in text_prompts
-            ]
-            text_processed = [
-                txt_prt_processed["input_ids"].to(self.device)
-                for txt_prt_processed in text_processed
-            ]
-            cond_embs = torch.cat([
-                self.clipseg.clip.get_text_features(txt_prt_processed)
-                for txt_prt_processed in text_processed
-            ])
-        else:
-            assert condition_on_exemplar
-            cond_embs = exemplar_prompts
+        # Obtain cropped images and masks
+        cropped_images, cropped_masks = _crop_exemplars_by_masks(exemplar_prompts)
 
-        # Expand activations according to the number of prompts provided
-        activations = [actv.expand(cond_embs.shape[0], -1, -1) for actv in activations]
+        # Matching between cropped exemplar (reference) images w/ masks vs. current
+        # scene view, select low resolution patches
+        matched_patches = _patch_matching(
+            cropped_images, cropped_masks, orig_size, self.device,
+            self.dino, self.dino_processor, dino_embs, self.dino.config
+        )
 
-        # Call mask decoder with the prompt encoding
-        decoder_outputs = self.clipseg.decoder(activations, cond_embs, return_dict=True)
-        decoder_outputs = torch.sigmoid(decoder_outputs.logits)
-        if len(decoder_outputs.shape) == 2:
-            decoder_outputs = decoder_outputs[None]
+        # Obtain segmentation input prompts, run segmentation model and postprocess
+        final_masks = _prompted_segmentation(
+            matched_patches, image, orig_size, self.device,
+            self.sam, self.sam_processor, sam_embs, self.dino.config
+        )
 
-        # Binarize, and some morphological processing to clean noises
-        low_res_masks = decoder_outputs.cpu().numpy() > MASK_THRES
-        low_res_masks = [opening(closing(lr_msk)) for lr_msk in low_res_masks]
-
-        # Split the processed decoder output into a collection of masks for individual
-        # instances by connected component analysis
-        low_res_masks = [label(lr_msk, return_num=True) for lr_msk in low_res_masks]
-        low_res_masks = [
-            lr_msk==i+1 for lr_msk, num_insts in low_res_masks for i in range(num_insts)
-        ]           # Split by connected components and flatten, ignoring empty masks
-
-        # Obtain masks resized to original image size, and 'objectness scores' for each
-        # instance by its max score per mask in original decoder output
-        masks = [
-            cv2.resize(
-                lr_msk.astype("float32"), orig_size, interpolation=cv2.INTER_NEAREST_EXACT
-            )
-            for lr_msk in low_res_masks
-        ]
-
-        return masks
+        return final_masks
 
     def _visual_prompt_by_mask(self, image, bg_image, masks):
         """
@@ -492,20 +512,30 @@ class VisualSceneAnalyzer(pl.LightningModule):
             x1 = nonzero_x.min(); x2 = nonzero_x.max(); w = x2-x1
             y1 = nonzero_y.min(); y2 = nonzero_y.max(); h = y2-y1
 
+            pad_ratio = 1/16          # Relative size to one side
             if w >= h:
-                x1_crp = max(0, x1-w//4); x2_crp = min(image.width, x2+w//4)
-                y1_crp = max(0, y1-w*3//4+h//2); y2_crp = min(image.height, y2+w*3//4-h//2)
-                pad_spec = (
-                    -min(0, x1-w//4), max(image.width, x2+w//4) - image.width,
-                    -min(0, y1-w*3//4+h//2), max(image.height, y2+w*3//4-h//2) - image.height
-                )
+                w_pad = int(w*pad_ratio)
+                target_size = w + 2*w_pad
+                h_pad = (target_size-h) // 2
+                # w_pad = int(w*pad_ratio)
+                # h_pad = w_pad
             else:
-                x1_crp = max(0, x1-h*3//4+w//2); x2_crp = min(image.width, x2+h*3//4-w//2)
-                y1_crp = max(0, y1-h//4); y2_crp = min(image.height, y2+h//4)
-                pad_spec = (
-                    -min(0, x1-h*3//4+w//2), max(image.width, x2+h*3//4-w//2) - image.width,
-                    -min(0, y1-h//4), max(image.height, y2+h//4) - image.height
-                )
+                h_pad = int(h*pad_ratio)
+                target_size = h + 2*h_pad
+                w_pad = (target_size-w) // 2
+                # h_pad = int(h*pad_ratio)
+                # w_pad = h_pad
+
+            x1_crp = max(0, x1-w_pad); x2_crp = min(image.width, x2+w_pad)
+            y1_crp = max(0, y1-h_pad); y2_crp = min(image.height, y2+h_pad)
+            pad_spec = (
+                -min(0, x1-w_pad), max(image.width, x2+w_pad) - image.width,
+                -min(0, y1-h_pad), max(image.height, y2+h_pad) - image.height
+            )
+
+            # Draw contour as guided by mask
+            contour = dilation(dilation(msk)) & ~msk
+            images_mixed[i][contour] = [255,0,0]
 
             cropped = torch.tensor(images_mixed[i][y1_crp:y2_crp, x1_crp:x2_crp])
             cropped = F.pad(cropped.permute(2,0,1), pad_spec)
@@ -567,3 +597,157 @@ class VisualSceneAnalyzer(pl.LightningModule):
                     processed_input["reshaped_input_sizes"][0].tolist()
                 del processed_input["pixel_values"]
                 pickle.dump(processed_input, enc_f)
+
+
+def _crop_exemplars_by_masks(exemplar_prompts):
+    """
+    Helper method factored out for cropping original scene images & masks so
+    that they are centered
+    """
+    # Process exemplar scene image + mask info to obtain square-cropped images
+    # with center focus on the exemplars. Don't make the cropping boxes too tight
+    # so that enough visual contexts are included; about twice the max(width, height)
+    # w.r.t. the bounding box for each exemplar?
+    scene_imgs_wh = torch.tensor(
+        [scene_img.size for scene_img, _, _ in exemplar_prompts]
+    )
+    ex_boxes_xyxy = masks_to_boxes(
+        torch.tensor(np.stack([msk for _, msk, _ in exemplar_prompts]))
+    ).to(torch.long)
+    ex_boxes_cwh = box_convert(ex_boxes_xyxy, "xyxy", "cxcywh").to(torch.long)
+    ex_max_dims = ex_boxes_cwh[:,2:].max(dim=1).values[:,None]
+    ex_crops_xyxy = torch.cat([
+        (ex_boxes_cwh[:,:2] - ex_max_dims),
+        (ex_boxes_cwh[:,:2] + ex_max_dims)
+    ], dim=1)
+    ex_crops_xyxy_clamped = torch.cat([
+        ex_crops_xyxy[:,:2].clamp(min=0),
+        ex_crops_xyxy[:,2:].clamp(max=scene_imgs_wh)
+    ], dim=1)
+    clamp_diffs = ex_crops_xyxy_clamped - ex_crops_xyxy
+
+    # Cropping images and masks; images are easier thanks to PIL crop method,
+    # but masks take more work :/
+    cropped_images = [
+        scene_img.crop(box.tolist())
+        for (scene_img, _, _), box in zip(exemplar_prompts, ex_crops_xyxy)
+    ]
+    cropped_masks = [np.zeros((d*2,d*2)) for d in ex_max_dims]
+    for i in range(len(cropped_masks)):
+        src_mask = exemplar_prompts[i][1]
+        cr_w, cr_h = ex_crops_xyxy[i][2:] - ex_crops_xyxy[i][:2]
+        src_slice_w = slice(
+            int(ex_crops_xyxy_clamped[i][0]), int(ex_crops_xyxy_clamped[i][2])
+        )
+        src_slice_h = slice(
+            int(ex_crops_xyxy_clamped[i][1]), int(ex_crops_xyxy_clamped[i][3])
+        )
+        tgt_slice_w = slice(int(clamp_diffs[i][0]), int(cr_w+clamp_diffs[i][2]))
+        tgt_slice_h = slice(int(clamp_diffs[i][1]), int(cr_h+clamp_diffs[i][3]))
+        cropped_masks[i][tgt_slice_h, tgt_slice_w] = src_mask[src_slice_h, src_slice_w]
+
+    return cropped_images, cropped_masks
+
+
+
+def _patch_matching(
+        cropped_images, cropped_masks, orig_size, device,
+        dino_model, dino_processor, dino_embs, dino_config
+    ):
+    """
+    Helper method factored out for 'patch-level feature matching (cf. Matcher
+    by Liu et al., 2024)'
+    """
+    w_d = orig_size[0] // dino_config.patch_size
+
+    # Process the cropped exemplar images with the image encoder module to obtain
+    # patch-level embeddings
+    lr_dim = 32; resize_target = lr_dim * dino_config.patch_size
+    cropped_images_processed = dino_processor.preprocess(
+        images=cropped_images,
+        do_resize=True, size={ "shortest_edge": resize_target }, return_tensors="pt"
+    )
+    ex_dino_out = dino_model(
+        cropped_images_processed.pixel_values.to(device), return_dict=True
+    )
+    ex_patch_embs = ex_dino_out.last_hidden_state[:,1:]
+
+    # Compute cosine similarities between patches, exemplars vs. current scene view
+    dino_embs_nrm = F.normalize(dino_embs.reshape(-1, dino_config.hidden_size))
+    exs_embs_nrm = F.normalize(ex_patch_embs.reshape(-1, dino_config.hidden_size))
+    S = (exs_embs_nrm @ dino_embs_nrm.t()).cpu()
+
+    # Flatten exemplar masks to 1 dimension
+    ex_masks_flattened = [
+        cv2.resize(msk, (lr_dim, lr_dim), interpolation=cv2.INTER_NEAREST_EXACT)
+        for msk in cropped_masks
+    ]
+    ex_masks_flattened = np.concatenate([
+        msk_resized.reshape(-1).astype(bool)
+        for msk_resized in ex_masks_flattened
+    ])
+
+    # Forward matching
+    match_forward = linear_sum_assignment(S[ex_masks_flattened], maximize=True)
+    # Reverse matching
+    match_reverse = linear_sum_assignment(S.t()[match_forward[1]], maximize=True)
+    # Mask filtering
+    retain_inds = np.isin(match_reverse[1], ex_masks_flattened.nonzero()[0])
+    # Fetch and unflatten matched patch indices
+    matched_patches = np.stack([
+        match_forward[1][retain_inds] % w_d, match_forward[1][retain_inds] // w_d
+    ], axis=1)
+
+    return matched_patches
+
+
+def _prompted_segmentation(
+        matched_patches, image, orig_size, device,
+        sam_model, sam_processor, sam_embs, dino_config
+    ):
+    """
+    Helper method factored out for running segmentation model; obtain point & box
+    prompt inputs based on the matched patches provided
+    """
+    if len(matched_patches) < 4: return []
+
+    w_o, h_o = orig_size
+    w_d = w_o // dino_config.patch_size
+    h_d = h_o // dino_config.patch_size
+
+    # Obtain segmentation input prompts; point prompts by clustering, box prompts
+    # by finding bounding box.
+    cluster_means = KMeans(n_clusters=4).fit(matched_patches).cluster_centers_
+    cluster_means = cluster_means * dino_config.patch_size
+    point_prompts = cluster_means.round().astype(int).tolist()
+        # Mapping back to original input resolution
+    lr_msk = torch.zeros((1, h_d, w_d))
+    lr_msk[0][(matched_patches[:,1], matched_patches[:,0])] = 1
+    box_prompts = masks_to_boxes(lr_msk)
+    box_prompts = (box_prompts.numpy() * dino_config.patch_size).tolist()
+
+    # Process the input prompts and run the segmentation model
+    input_processed = sam_processor(
+        image, input_points=[point_prompts], input_boxes=[box_prompts]
+    )
+    sam_out = sam_model(
+        image_embeddings=sam_embs,
+        input_points=torch.tensor(input_processed.input_points[None]).to(device),
+        input_boxes=torch.tensor(input_processed.input_boxes).to(device),
+        multimask_output=False
+    )
+
+    # Postprocessing to obtain the final refined mask in original resolution space;
+    # upscale, morphological processing, then separate disconnected masks
+    mask_upscaled = sam_processor.image_processor.post_process_masks(
+        sam_out.pred_masks.cpu(),
+        input_processed.original_sizes,
+        input_processed.reshaped_input_sizes
+    )[0][0][0].numpy()
+    mask_upscaled = opening(closing(mask_upscaled))
+    chunks, count = label(mask_upscaled, return_num=True)
+    final_masks = [chunks==i+1 for i in range(count)]
+    final_masks = [msk for msk in final_masks if msk.sum() > 500]
+        # Size thresholding by some arbitrary area criterion
+
+    return final_masks

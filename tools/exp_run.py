@@ -91,11 +91,11 @@ def main(cfg):
         "prior_supertypes": [
             (
                 (("cabin_type", 0), ("load_type", 0)),
-                [(None, "truck"), (("cabin", "hemtt cabin"), "cabin")]
+                [(None, "truck"), (("cabin", "hemtt cabin"), "cabin"), (("load", "platform"), "load")]
             ),
             (
                 (("cabin_type", 1), ("load_type", 0)),
-                [(None, "truck"), (("cabin", "quad cabin"), "cabin")]
+                [(None, "truck"), (("cabin", "quad cabin"), "cabin"), (("load", "platform"), "load")]
             ),
             (
                 (("cabin_type", 0), ("load_type", 1)),
@@ -125,11 +125,11 @@ def main(cfg):
         "prior_parts": [
             (
                 (("cabin_type", 0), ("load_type", 0)),
-                [(("cabin", "hemtt cabin"), "hemtt cabin")]
+                [(("cabin", "hemtt cabin"), "hemtt cabin"), (("load", "platform"), "platform")]
             ),
             (
                 (("cabin_type", 1), ("load_type", 0)),
-                [(("cabin", "quad cabin"), "quad cabin")]
+                [(("cabin", "quad cabin"), "quad cabin"), (("load", "platform"), "platform")]
             ),
             (
                 (("cabin_type", 0), ("load_type", 1)),
@@ -362,7 +362,9 @@ def main(cfg):
             else:
                 env.step()
 
-        for gt_conc, ans_conc in teacher.current_episode_record.items():
+        for gt_conc, ep_log in teacher.current_episode_record.items():
+            ans_conc = ep_log["answer"]
+
             # Update metrics
             regrets_conc, total_conc = mistakes[gt_conc][-1]
             regrets_all, total_all = mistakes["__all__"][-1]
@@ -384,7 +386,7 @@ def main(cfg):
 
         # If not test mode (i.e., training mode), save current agent model checkpoint
         # to output dir every 25 episodes
-        if not cfg.agent.test_mode and (i+1) % 25 == 0:
+        if not cfg.agent.test_mode and (i+1) % cfg.exp.checkpoint_interval == 0:
             student.save_model(f"{ckpt_path}/{exp_tag}_{i+1}.ckpt")
 
     # Close Unity environment & tensorboard writer
@@ -397,11 +399,13 @@ def main(cfg):
         out_csv_fname = f"outputs_{out_csv_fname}"
 
         with open(os.path.join(results_path, out_csv_fname), "w") as out_csv:
-            out_csv.write("episode,ground_truth,answer\n")
+            out_csv.write("episode,ground_truth,answer,reason_type\n")
 
             for i, record in enumerate(teacher.episode_records):
-                for gt_conc, ans_conc in record.items():
-                    out_csv.write(f"{i+1},{gt_conc},{ans_conc}\n")
+                for gt_conc, ep_log in record.items():
+                    ans_conc = ep_log["answer"]
+                    reason_type = ep_log["reason"]
+                    out_csv.write(f"{i+1},{gt_conc},{ans_conc},{reason_type}\n")
 
     else:
         # Otherwise (i.e., learning enabled), save cumulative regret curves to output dir

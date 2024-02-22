@@ -144,7 +144,7 @@ PrefabInstance:
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
-      objectReference: {fileID: 2100000, guid: fc3b82290ce3f52fdb07091e26cbb2bf, type: 2}
+      objectReference: {fileID: 2100000, guid: 59f6b1950f11f287b91b0f1d85579c9d, type: 2}
     - target: {fileID: 6155353427560462183, guid: c7f9632773265084a9b93d5839aa1b03,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -154,7 +154,7 @@ PrefabInstance:
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
-      objectReference: {fileID: 2100000, guid: fc3b82290ce3f52fdb07091e26cbb2bf, type: 2}
+      objectReference: {fileID: 2100000, guid: 59f6b1950f11f287b91b0f1d85579c9d, type: 2}
     - target: {fileID: 7154281806537785644, guid: c7f9632773265084a9b93d5839aa1b03,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -211,9 +211,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a611df269dde2ed0bb259fb39c2ea5a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  cameras: []
   uid: 
   isAtomic: 0
+  isBogus: 0
 --- !u!114 &779487885538640100
 MonoBehaviour:
   m_ObjectHideFlags: 0

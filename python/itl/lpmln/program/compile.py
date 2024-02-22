@@ -388,7 +388,7 @@ def belief_propagation(reg_gr):
         for p, r in reg_gr.edges
     }
 
-    for _ in range(15):
+    for _ in range(10):
         # Continue iterating over the parent-to-child messages to update their values,
         # until convergence
         # (Caveat: Not explicitly testing for convergence currently, max 15 iterations)
@@ -698,7 +698,7 @@ def _marginalize_simple(factor, atom_subset):
     return dict(marginalized_factor)
 
 
-def _mix_factors_outer(old_factor, update_factor, momentum=0.2):
+def _mix_factors_outer(old_factor, update_factor, momentum=0.1):
     """
     Subroutine for mixing potential values of previous iteration with a newer
     one with a certain mixing ratio (momentum), at the outer layer

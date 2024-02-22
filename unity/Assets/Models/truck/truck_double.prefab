@@ -616,9 +616,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a611df269dde2ed0bb259fb39c2ea5a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  cameras: []
   uid: 
   isAtomic: 0
+  isBogus: 0
 --- !u!114 &2750893824407148920
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1041,7 +1041,7 @@ PrefabInstance:
     - target: {fileID: 2778262593457678370, guid: db0b40214ced5f2469105789823aee6a,
         type: 3}
       propertyPath: m_Name
-      value: load_empty
+      value: load_platform
       objectReference: {fileID: 0}
     - target: {fileID: 3298200319426343576, guid: db0b40214ced5f2469105789823aee6a,
         type: 3}

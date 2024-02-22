@@ -118,7 +118,7 @@ PrefabInstance:
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
       value: 
-      objectReference: {fileID: 2100000, guid: fc3b82290ce3f52fdb07091e26cbb2bf, type: 2}
+      objectReference: {fileID: 2100000, guid: 2a7154720663f0d608bd6f0a0f9e6646, type: 2}
     - target: {fileID: -919832206186008516, guid: 74f759c6d51bd1f1ea708f39b98015f4,
         type: 3}
       propertyPath: 'm_Materials.Array.data[0]'
@@ -187,9 +187,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a611df269dde2ed0bb259fb39c2ea5a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  cameras: []
   uid: 
   isAtomic: 0
+  isBogus: 0
 --- !u!114 &-8358604960377849460
 MonoBehaviour:
   m_ObjectHideFlags: 0

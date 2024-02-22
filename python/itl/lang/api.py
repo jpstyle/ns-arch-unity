@@ -151,7 +151,7 @@ class LanguageModule:
                         ] if pointing is not None else []
 
                         if len(matching_masks) > 0:
-                            dem_mask = matching_masks[0]
+                            dem_mask = matching_masks[0].astype(bool)
                         else:
                             dem_mask = None
 

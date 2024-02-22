@@ -146,7 +146,7 @@ class SimulatedTeacher:
                 # Agent answered it doesn't have any clue what the concept instance
                 # is; provide correct label, even if taking minimalist strategy (after
                 # all, learning cannot take place if we don't provide any)
-                self.current_episode_record[string_name] = None
+                self.current_episode_record[string_name] = { "answer": None }
 
                 if self.agent_test_mode:
                     # No feedback needed if agent running in test mode
@@ -165,7 +165,7 @@ class SimulatedTeacher:
             elif utt.startswith("This is"):
                 # Agent provided an answer what the instance is
                 answer_content = re.findall(r"This is a (.*)\.$", utt)[0]
-                self.current_episode_record[string_name] = answer_content
+                self.current_episode_record[string_name] = { "answer": answer_content }
 
                 if self.agent_test_mode:
                     # No feedback needed if agent running in test mode
@@ -225,8 +225,11 @@ class SimulatedTeacher:
                 # answer vs. ground truth
                 assert self.strat_feedback.startswith("maxHelpExpl")
 
+                # Log (lack of) cited reasons
+                self.current_episode_record[string_name]["reason"] = "null"
+
                 conc_gt = string_name
-                conc_ans = self.current_episode_record[string_name]
+                conc_ans = self.current_episode_record[string_name]["answer"]
                 conc_diffs = _compute_concept_differences(
                     self.domain_knowledge, conc_gt, conc_ans
                 )
@@ -240,13 +243,17 @@ class SimulatedTeacher:
                 reasons = reasons[0].split(", ") + reasons[1:]
                 reasons = [_parse_nl_reason(r) for r in reasons]
 
+                # Log types of cited reasons
+                self.current_episode_record[string_name]["reason"] = \
+                    "|".join({reason_type for _, reason_type in reasons})
+
                 dem_refs = sorted(dem_refs.items())
 
                 # Prepare concept differences, needed for checking whether the agent's
                 # knowledge (indirectly revealed through its explanations) about the
                 # concepts is incomplete
                 conc_gt = string_name
-                conc_ans = self.current_episode_record[string_name]
+                conc_ans = self.current_episode_record[string_name]["answer"]
                 conc_diffs = _compute_concept_differences(
                     self.domain_knowledge, conc_gt, conc_ans
                 )

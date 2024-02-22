@@ -51,7 +51,12 @@ def main(cfg):
         if conc_type == "cls" or conc_type == "att":
             pos_exs_inds = exemplars.exemplars_pos[conc_type]
             neg_exs_inds = exemplars.exemplars_neg[conc_type]
-            vectors = exemplars.storage_vec[conc_type]
+            all_exs_inds = list(set.union(*pos_exs_inds.values(), *neg_exs_inds.values()))
+            ind_map = { xi: i for i, xi in enumerate(all_exs_inds) }
+            vectors = np.stack([
+                exemplars.scenes[scene_id][1][obj_id]["f_vec"]
+                for scene_id, obj_id in all_exs_inds
+            ])
 
             # Dimensionality reduction down to 2D by UMAP, for visual inspection
             mapper = umap.UMAP().fit(vectors)
@@ -66,12 +71,16 @@ def main(cfg):
                 concept_name = agent.lt_mem.lexicon.d2s[(c, conc_type)][0][0]
                 concept_name = concept_name.replace("/", "_")
 
+                # Mapping pair indices to union vector matrix index
+                pos_exs_inds_mapped = [ind_map[xi] for xi in pos_exs_inds[c]]
+                neg_exs_inds_mapped = [ind_map[xi] for xi in neg_exs_inds[c]]
+
                 # Evaluating exemplar sets by binary classification performance on
-                # random 90:10 train/test split
-                pos_shuffled = random.sample(pos_exs_inds[c], len(pos_exs_inds[c]))
+                # random 80:20 train/test split
+                pos_shuffled = random.sample(pos_exs_inds_mapped, len(pos_exs_inds[c]))
                 pos_train = pos_shuffled[:int(0.8*len(pos_shuffled))]
                 pos_test = pos_shuffled[int(0.8*len(pos_shuffled)):]
-                neg_shuffled = random.sample(neg_exs_inds[c], len(neg_exs_inds[c]))
+                neg_shuffled = random.sample(neg_exs_inds_mapped, len(neg_exs_inds[c]))
                 neg_train = neg_shuffled[:int(0.8*len(neg_shuffled))]
                 neg_test = neg_shuffled[int(0.8*len(neg_shuffled)):]
 
@@ -80,7 +89,7 @@ def main(cfg):
 
                 # Fit classifier and run on test set
                 bin_clf = KNeighborsClassifier(n_neighbors=min(len(X), 10), weights="distance")
-                # bin_clf = SVC(C=1000, probability=True)
+                # bin_clf = SVC(C=1000, probability=True, random_state=cfg.seed)
                 bin_clf.fit(X, y)
                 true_pos = bin_clf.predict_proba(vectors[pos_test])[:,1] > 0.5
                 true_neg = bin_clf.predict_proba(vectors[neg_test])[:,0] > 0.5
@@ -94,8 +103,8 @@ def main(cfg):
                 }
 
                 labels = [
-                    "p" if fv_i in pos_exs_inds[c]
-                        else "n" if fv_i in neg_exs_inds[c] else "."
+                    "p" if fv_i in pos_exs_inds_mapped
+                        else "n" if fv_i in neg_exs_inds_mapped else "."
                     for fv_i in range(len(vectors))
                 ]
                 hover_data = pd.DataFrame(
