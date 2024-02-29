@@ -17,7 +17,7 @@ from python.itl.vision.utils import mask_iou
 singularize = inflect.engine().singular_noun
 pluralize = inflect.engine().plural
 
-MATCH_THRES = 0.8
+MATCH_THRES = 0.9
 
 class SimulatedTeacher:
     

@@ -37,10 +37,13 @@ public class TeacherAgent : DialogueAgent
         // Fetch environment parameters received from python backend
         var envParams = Academy.Instance.EnvironmentParameters;
 
-        // Destroy any existing truck object
+        // Destroy any existing truck & bogus objects
         var existingTruck = GameObject.Find("truck");
         if (existingTruck is not null)
             Destroy(existingTruck);
+        var existingBogus = GameObject.Find("bogus");
+        if (existingBogus is not null)
+            Destroy(existingBogus);
         // Disable all existing EnvEntity components; needed because the Destroy call
         // above is delayed
         foreach (var ent in FindObjectsByType<EnvEntity>(FindObjectsSortMode.None))

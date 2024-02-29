@@ -159,8 +159,8 @@ def main(cfg):
         # "semOnly_minHelp_doNotLearn": "minHelp_doNotLearn",
         # "semOnly_minHelp_threshold": "minHelp_threshold",
 
-        "semOnly_medHelp_doNotLearn": "Vision",
-        "semOnly_medHelp_threshold": "Vision",
+        "semOnly_medHelp_doNotLearn": "Vision-Only",
+        "semOnly_medHelp_threshold": "Vision-Only",
 
         "semOnly_maxHelpNoexpl_doNotLearn": "Vision+Generic",
         "semOnly_maxHelpNoexpl_threshold": "Vision+Generic",
@@ -341,7 +341,7 @@ def main(cfg):
         labels = [config_aliases.get(hl[1], hl[1]) for hl in hls_sorted]
         ax.legend(handles, labels)
         
-        ax.set_title(f"Cumulative regret difference curve (N={len(all_seeds)} per config)")
+        ax.set_title(f"Cumulative regret difference curve vs. Vision-Only (N={len(all_seeds)} per config)")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulRegDiff.png"))
 
     # Aggregate and visualize: learning curve
@@ -379,7 +379,7 @@ def main(cfg):
         ax.set_xlabel("# training examples")
         ax.set_ylabel("mean accuracy")
         ax.set_xlim(0, stats[-1][0])
-        ax.set_xticks([25, 50, 75, 100])
+        ax.set_xticks([30, 60, 90, 120])
         ax.set_ylim(0, 1)
         ax.grid()
 
