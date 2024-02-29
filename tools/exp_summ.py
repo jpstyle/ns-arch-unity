@@ -48,13 +48,12 @@ def main(cfg):
             if "results" in os.listdir(full_out_dir):
                 dirs_with_results.append((group_dir, run_dir))
 
-    results_cumulReg = {}
+    results_cumulReg = {}; results_cumulReg_with_seed = {}
     results_learningCurve = defaultdict(lambda: defaultdict(list))
     results_confMat = defaultdict(
         lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     )               # This is one ugly nesting but bear with me, myself...
-
-    results_cumulReg_with_seed = {}
+    results_reasonTypes = defaultdict(lambda: defaultdict(int))
 
     all_seeds = set()
 
@@ -72,7 +71,7 @@ def main(cfg):
             all_seeds.add(seed)
 
             if data_type == "cumulReg":
-                # Cumulative regret curve data
+                # Cumulative regret curve & explanation type data
                 with open(os.path.join(res_dir, data)) as data_f:
                     reader = csv.reader(data_f)
 
@@ -83,6 +82,9 @@ def main(cfg):
                     curve = np.array([
                         [int(ep_num), int(regret)] for ep_num, regret, _ in row
                     ])
+                    reason_types = [
+                        reason_type for _, _, reason_type in row if reason_type != "na"
+                    ]
 
                     # Aggregate cumulative regret curve data
                     strat_combi = (strat_fb, strat_gn, strat_as)
@@ -102,6 +104,11 @@ def main(cfg):
                     results_cumulReg_with_seed[(strat_combi, seed)] = {
                         ep_num: regret for ep_num, regret in curve
                     }
+
+                    # Aggregate explanation type stats, disregarding "na" (correct answers,
+                    # no explanation expected)
+                    for rt in set(reason_types):
+                        results_reasonTypes[strat_combi][rt] += reason_types.count(rt)
 
             elif data_type == "outputs":
                 # Test question-answer pairs, from which learning curves and confusion
@@ -454,6 +461,20 @@ def main(cfg):
         fig.supxlabel("# training examples")
         fig.supylabel("Response rate")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"confMat.png"))
+
+    # Report reason type statistics
+    TAB = "\t"
+    print("")
+    for strat_combi, data in results_reasonTypes.items():
+        print(f"Reason type statistics for {strat_combi}:")
+
+        total = sum(data.values())
+        print(f"{TAB}Total: {total}")
+
+        for rt, count in data.items():
+            print(f"{TAB}{rt}: {count} ({count/total:.2%})")
+
+        print("")
 
 if __name__ == "__main__":
     main()

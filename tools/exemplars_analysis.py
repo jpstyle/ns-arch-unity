@@ -132,10 +132,10 @@ def main(cfg):
         f1 = 2 * precision * recall / (precision+recall)
 
         print(f"Scores for {concept_name} ({conc_type}):")
-        print(f"{TAB} Accuracy: {accuracy}")
-        print(f"{TAB} Precision: {precision}")
-        print(f"{TAB} Recall: {recall}")
-        print(f"{TAB} F1: {f1}")
+        print(f"{TAB}Accuracy: {accuracy}")
+        print(f"{TAB}Precision: {precision}")
+        print(f"{TAB}Recall: {recall}")
+        print(f"{TAB}F1: {f1}")
 
 if __name__ == "__main__":
     main()
