@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 from omegaconf import OmegaConf
 
 logger = logging.getLogger(__name__)
+TAB = "\t"
 
 
 OmegaConf.register_new_resolver(
@@ -48,7 +49,7 @@ def main(cfg):
             if "results" in os.listdir(full_out_dir):
                 dirs_with_results.append((group_dir, run_dir))
 
-    results_cumulReg = {}; results_cumulReg_with_seed = {}
+    results_cumulReg = {}
     results_learningCurve = defaultdict(lambda: defaultdict(list))
     results_confMat = defaultdict(
         lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
@@ -99,11 +100,6 @@ def main(cfg):
                         results_cumulReg[strat_combi] = {
                             ep_num: [regret] for ep_num, regret in curve
                         }
-
-                    # Also prepare data for cumul. regret difference curve
-                    results_cumulReg_with_seed[(strat_combi, seed)] = {
-                        ep_num: regret for ep_num, regret in curve
-                    }
 
                     # Aggregate explanation type stats, disregarding "na" (correct answers,
                     # no explanation expected)
@@ -234,6 +230,8 @@ def main(cfg):
         _, ax = plt.subplots(figsize=(8, 6), dpi=80)
         ymax = 0
 
+        print("")
+        print(f"Endpoint cumulative regret CIs:")
         for (strat_fb, strat_gn, strat_as), data in results_cumulReg.items():
             stats = [
                 (i, np.mean(rgs), 1.96 * np.std(rgs)/np.sqrt(len(rgs)))
@@ -257,6 +255,9 @@ def main(cfg):
                 color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
             )
 
+            # Report final values on stdout
+            print(f"{TAB}{strat_fb}: {stats[-1][1]:.2f} \xB1 {stats[-1][2]:.2f}")
+
         # Plot curve
         ax.set_xlabel("# training episodes")
         ax.set_ylabel("cumulative regret")
@@ -276,85 +277,12 @@ def main(cfg):
         ax.set_title(f"Cumulative regret curve (N={len(all_seeds)} per config)")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulReg.png"))
 
-        # Also plot difference curves
-        results_cumulReg_diffs = {}
-        for (strat_combi, seed), data in results_cumulReg_with_seed.items():
-            strat_fb, strat_gn, strat_as = strat_combi
-            ref_combi = ("medHelp", strat_gn, strat_as)
-
-            if (ref_combi, seed) in results_cumulReg_with_seed:
-                ref_data = results_cumulReg_with_seed[(ref_combi, seed)]
-                diff_data = {
-                    ep_num: regret-ref_data[ep_num] for ep_num, regret in data.items()
-                }
-
-                if strat_combi in results_cumulReg_diffs:
-                    stats_agg = results_cumulReg_diffs[strat_combi]
-                    for ep_num, regret_diff in diff_data.items():
-                        if ep_num in stats_agg:
-                            stats_agg[ep_num].append(regret_diff)
-                        else:
-                            stats_agg[ep_num] = [regret_diff]
-                else:
-                    results_cumulReg_diffs[strat_combi] = {
-                        ep_num: [regret_diff]
-                        for ep_num, regret_diff in diff_data.items()
-                    }
-
-        _, ax = plt.subplots(figsize=(8, 6), dpi=80)
-        ymax = ymin = 0
-
-        config_lineStyles_diff = {
-            combi: "--" if "medHelp" in combi else style
-            for combi, style in config_lineStyles.items()
-        }       # Where reference is dashed line
-        for (strat_fb, strat_gn, strat_as), data in results_cumulReg_diffs.items():
-            stats = [
-                (i, np.mean(rgds), 1.96 * np.std(rgds)/np.sqrt(len(rgds)))
-                for i, rgds in data.items()
-            ]
-            ymax = max(ymax, max(mrgd+cl for _, mrgd, cl in stats))
-            ymin = min(ymin, min(mrgd-cl for _, mrgd, cl in stats))
-
-            # Plot mean curve
-            ax.plot(
-                [i+1 for i, _, _ in stats],
-                [mrgd for _, mrgd, _ in stats],
-                label=f"{strat_gn}_{strat_fb}_{strat_as}",
-                color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"],
-                linestyle=config_lineStyles_diff[f"{strat_gn}_{strat_fb}_{strat_as}"]
-            )
-            # Plot confidence intervals
-            ax.fill_between(
-                [i+1 for i, _, _ in stats],
-                [mrgd-cl for _, mrgd, cl in stats],
-                [mrgd+cl for _, mrgd, cl in stats],
-                color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
-            )
-
-        # Plot curve
-        ax.set_xlabel("# training episodes")
-        ax.set_ylabel("cumulative regret difference")
-        ax.set_ylim((ymin-1) * 1.1, (ymax+1) * 1.1)
-        ax.grid()
-
-        # Ordering legends according to the prespecified ordering above
-        handles, labels = ax.get_legend_handles_labels()
-        hls_sorted = sorted(
-            [(h, l) for h, l in zip(handles, labels)],
-            key=lambda x: config_ord.index(x[1])
-        )
-        handles = [hl[0] for hl in hls_sorted]
-        labels = [config_aliases.get(hl[1], hl[1]) for hl in hls_sorted]
-        ax.legend(handles, labels)
-        
-        ax.set_title(f"Cumulative regret difference curve vs. Vision-Only (N={len(all_seeds)} per config)")
-        plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulRegDiff.png"))
-
     # Aggregate and visualize: learning curve
     if len(results_learningCurve) > 0:
         _, ax = plt.subplots(figsize=(8, 6), dpi=80)
 
+        print("")
+        print(f"Endpoint accuracy CIs:")
         for (strat_fb, strat_gn, strat_as), data in results_learningCurve.items():
             data = sorted([entry for entry in data.items()], key=lambda x: x[0])
             stats = [
@@ -382,6 +310,9 @@ def main(cfg):
                 color=config_colors[f"{strat_gn}_{strat_fb}_{strat_as}"], alpha=0.2
             )
 
+            # Report final values on stdout
+            print(f"{TAB}{strat_fb}: {stats[-1][1]:.2%} \xB1 {stats[-1][2]:.2%}")
+
         # Plot curve
         ax.set_xlabel("# training examples")
         ax.set_ylabel("mean accuracy")
@@ -405,7 +336,7 @@ def main(cfg):
 
     # Aggregate and visualize: confusion matrices
     if len(results_confMat) > 0:
-        fig = plt.figure(figsize=(8, 6), dpi=80)
+        fig = plt.figure(figsize=(10, 7.5), dpi=80)
         gs = fig.add_gridspec(len(all_concs), len(all_concs), hspace=0, wspace=0)
         axs = gs.subplots(sharex='col', sharey='row')
 
@@ -425,6 +356,7 @@ def main(cfg):
                     ax.set_ylabel(gt_conc)
                     ax.set_ylim(0, 1)
                     ax.xaxis.set_label_position('top')
+                    ax.set_xticks([120])
                     ax.set_yticks([0.25, 0.5, 0.75, 1])
 
                     # Collect stats
@@ -463,7 +395,6 @@ def main(cfg):
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"confMat.png"))
 
     # Report reason type statistics
-    TAB = "\t"
     print("")
     for strat_combi, data in results_reasonTypes.items():
         print(f"Reason type statistics for {strat_combi}:")
