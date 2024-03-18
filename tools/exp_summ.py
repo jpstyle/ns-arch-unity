@@ -60,6 +60,7 @@ def main(cfg):
 
     # Collect results
     for res_dir in tqdm.tqdm(dirs_with_results, total=len(dirs_with_results)):
+        group_dir, run_dir = res_dir
         res_dir = os.path.join(outputs_root_dir, *res_dir, "results")
         dir_contents = list(os.listdir(res_dir))
 
@@ -68,6 +69,11 @@ def main(cfg):
             data_type = name_parse[0]
             strat_fb, strat_gn, strat_as = name_parse[1], name_parse[2], name_parse[3]
             seed = name_parse[4]
+
+            if strat_fb == "maxHelpExpl2": continue
+
+            # # Uncomment for controlling prior part model quality
+            # if strat_fb != "medHelp" and not group_dir.startswith("pr"): continue
 
             all_seeds.add(seed)
 
@@ -162,17 +168,19 @@ def main(cfg):
         # "semOnly_minHelp_doNotLearn": "minHelp_doNotLearn",
         # "semOnly_minHelp_threshold": "minHelp_threshold",
 
-        "semOnly_medHelp_doNotLearn": "Vision-Only",
-        "semOnly_medHelp_threshold": "Vision-Only",
+        "semOnly_medHelp_doNotLearn": "Vis-Only",
+        "semOnly_medHelp_threshold": "Vis-Only",
 
-        "semOnly_maxHelpNoexpl_doNotLearn": "Vision+Generic",
-        "semOnly_maxHelpNoexpl_threshold": "Vision+Generic",
+        "semOnly_maxHelpNoexpl_doNotLearn": "Vis+Genr",
+        "semOnly_maxHelpNoexpl_threshold": "Vis+Genr",
 
-        "semOnly_maxHelpExpl_doNotLearn": "Vision+Generic+ExplSuff",
-        "semOnly_maxHelpExpl_threshold": "Vision+Generic+ExplSuff",
+        "semOnly_maxHelpExpl_doNotLearn": "Vis+Genr+Expl",
+        "semOnly_maxHelpExpl_threshold": "Vis+Genr+Expl",
+        # "semOnly_maxHelpExpl_doNotLearn": "Vis+Genr+ExplSuff",
+        # "semOnly_maxHelpExpl_threshold": "Vis+Genr+ExplSuff",
 
-        "semOnly_maxHelpExpl2_doNotLearn": "Vision+Generic+ExplSuffCtfl",
-        "semOnly_maxHelpExpl2_threshold": "Vision+Generic+ExplSuffCtfl",
+        "semOnly_maxHelpExpl2_doNotLearn": "Vis+Genr+ExplSuffCtfl",
+        "semOnly_maxHelpExpl2_threshold": "Vis+Genr+ExplSuffCtfl",
 
         # "semNeg_maxHelp_doNotLearn": "maxHelp_semNeg_doNotLearn",
         # "semNeg_maxHelp_threshold": "maxHelp_semNeg_threshold",
@@ -225,9 +233,11 @@ def main(cfg):
         # "semNegScal_maxHelp_threshold": "-",
     }
 
+    plt.rcParams.update({'font.size': 22})
+
     # Aggregate and visualize: cumulative regret curve
     if len(results_cumulReg) > 0:
-        _, ax = plt.subplots(figsize=(8, 6), dpi=80)
+        _, ax = plt.subplots(figsize=(8, 6.5), dpi=80)
         ymax = 0
 
         print("")
@@ -260,6 +270,7 @@ def main(cfg):
 
         # Plot curve
         ax.set_xlabel("# training episodes")
+        ax.set_xticks([30, 60, 90, 120])
         ax.set_ylabel("cumulative regret")
         ax.set_ylim(0, (ymax+1) * 1.1)
         ax.grid()
@@ -272,14 +283,14 @@ def main(cfg):
         )
         handles = [hl[0] for hl in hls_sorted]
         labels = [config_aliases.get(hl[1], hl[1]) for hl in hls_sorted]
-        ax.legend(handles, labels)
+        ax.legend(handles, labels, loc='lower right')
         
-        ax.set_title(f"Cumulative regret curve (N={len(all_seeds)} per config)")
+        ax.set_title(f"Cumulative regret ({len(all_seeds)} seeds)")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"cumulReg.png"))
 
     # Aggregate and visualize: learning curve
     if len(results_learningCurve) > 0:
-        _, ax = plt.subplots(figsize=(8, 6), dpi=80)
+        _, ax = plt.subplots(figsize=(8, 6.5), dpi=80)
 
         print("")
         print(f"Endpoint accuracy CIs:")
@@ -315,9 +326,9 @@ def main(cfg):
 
         # Plot curve
         ax.set_xlabel("# training examples")
-        ax.set_ylabel("mean accuracy")
         ax.set_xlim(0, stats[-1][0])
         ax.set_xticks([30, 60, 90, 120])
+        ax.set_ylabel("mean accuracy")
         ax.set_ylim(0, 1)
         ax.grid()
 
@@ -329,9 +340,9 @@ def main(cfg):
         )
         handles = [hl[0] for hl in hls_sorted]
         labels = [config_aliases.get(hl[1], hl[1]) for hl in hls_sorted]
-        plt.legend(handles, labels)
+        plt.legend(handles, labels, loc='lower right')
         
-        plt.title(f"Learning curve (N={len(all_seeds)} per config)")
+        plt.title(f"Learning curve ({len(all_seeds)} seeds)")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"learningCurve.png"))
 
     # Aggregate and visualize: confusion matrices
@@ -389,7 +400,7 @@ def main(cfg):
         for ax in fig.get_axes():
             ax.label_outer()
         
-        fig.suptitle(f"Confusion plot matrix for (N={len(all_seeds)} per config)", fontsize=16)
+        fig.suptitle(f"Confusion plot matrix for ({len(all_seeds)} seeds)", fontsize=16)
         fig.supxlabel("# training examples")
         fig.supylabel("Response rate")
         plt.savefig(os.path.join(cfg.paths.outputs_dir, f"confMat.png"))
